@@ -81,7 +81,7 @@ export const updateUserPreferencesController = async (req: Request, res: Respons
         include: { 
           role: true,
           language: true,
-          devices: { where: { deviceId: deviceId || undefined } }
+          devices: deviceId ? { where: { deviceId } } : true
         }
       });
 
@@ -93,9 +93,9 @@ export const updateUserPreferencesController = async (req: Request, res: Respons
         });
       }
 
-      // Find or create device for this user
+      // Find or use existing device for this user
       if (deviceId) {
-        targetDevice = await prisma.device.findUnique({ where: { deviceId } });
+        targetDevice = targetUser.devices.find(d => d.deviceId === deviceId);
         if (!targetDevice) {
           targetDevice = await prisma.device.create({
             data: {
@@ -106,6 +106,24 @@ export const updateUserPreferencesController = async (req: Request, res: Respons
             }
           });
         }
+      } else if ((targetUser as any).devices.length > 0) {
+        // Use the most recently updated device if no deviceId specified
+        console.log(`[Update Preferences] Found ${(targetUser as any).devices.length} devices for user`);
+        targetDevice = (targetUser as any).devices.sort((a: any, b: any) => 
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        )[0];
+        console.log(`[Update Preferences] Selected device: ${targetDevice.deviceId}`);
+      } else {
+        // Create a new device for this user if none exists
+        const newDeviceId = `auto-device-${Date.now()}`;
+        targetDevice = await prisma.device.create({
+          data: {
+            deviceId: newDeviceId,
+            deviceModel: deviceModel || 'unknown',
+            userId: targetUser.id,
+            pushToken
+          }
+        });
       }
     } else if (deviceId) {
       // Guest user case - find device first
@@ -165,6 +183,8 @@ export const updateUserPreferencesController = async (req: Request, res: Respons
     }
 
     if (!targetUser || !targetDevice) {
+      console.error(`[Update Preferences] Resolution failed - User: ${!!targetUser}, Device: ${!!targetDevice}`);
+      console.error(`[Update Preferences] userId: ${userId}, deviceId: ${deviceId}`);
       return res.status(500).json({
         success: false,
         message: 'Failed to resolve user and device',
@@ -375,7 +395,7 @@ export const getUserPreferencesController = async (req: Request, res: Response) 
         include: {
           role: true,
           language: true,
-          devices: { where: { deviceId: deviceId || undefined } }
+          devices: deviceId ? { where: { deviceId } } : true
         }
       });
 
@@ -392,9 +412,14 @@ export const getUserPreferencesController = async (req: Request, res: Response) 
         where: { userId: targetUser.id }
       });
 
-      // Get device if deviceId provided
+      // Get device - either specific deviceId or first available device
       if (deviceId) {
-        targetDevice = targetUser.devices[0];
+        targetDevice = (targetUser as any).devices.find((d: any) => d.deviceId === deviceId) || null;
+      } else if ((targetUser as any).devices.length > 0) {
+        // Return the most recently updated device if no specific deviceId requested
+        targetDevice = (targetUser as any).devices.sort((a: any, b: any) => 
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        )[0];
       }
     } else if (deviceId) {
       // Guest user case
