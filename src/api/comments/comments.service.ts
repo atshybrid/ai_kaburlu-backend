@@ -4,7 +4,17 @@ import { CreateCommentDto, UpdateCommentDto } from './comments.dto';
 
 type RepliesInclude = {
   include: {
-    user: { select: { id: true } },
+    user: { 
+      select: { 
+        id: true,
+        profile: {
+          select: {
+            fullName: true,
+            profilePhotoUrl: true
+          }
+        }
+      } 
+    },
     replies?: RepliesInclude | boolean;
   };
   orderBy: { createdAt: 'asc' };
@@ -14,7 +24,17 @@ const recursiveReplies = (depth = 5): RepliesInclude => {
   if (depth === 0) return false;
   return {
     include: {
-      user: { select: { id: true } },
+      user: { 
+        select: { 
+          id: true,
+          profile: {
+            select: {
+              fullName: true,
+              profilePhotoUrl: true
+            }
+          }
+        } 
+      },
       replies: recursiveReplies(depth - 1)
     },
     orderBy: { createdAt: 'asc' }
@@ -58,7 +78,17 @@ export const getComments = async ({ articleId, shortNewsId, depth = 5 }: GetComm
   const comments = await prisma.comment.findMany({
     where,
     include: {
-      user: { select: { id: true } },
+      user: { 
+        select: { 
+          id: true,
+          profile: {
+            select: {
+              fullName: true,
+              profilePhotoUrl: true
+            }
+          }
+        } 
+      },
       replies: recursiveReplies(depth)
     },
     orderBy: { createdAt: 'desc' }
