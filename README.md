@@ -9,6 +9,44 @@ Server should run automatically when starting a workspace. To run manually, run:
 npm run dev
 ```
 
+## Database Seeding
+
+The project ships with an idempotent TypeScript seed script (`prisma/seed.ts`).
+
+Basic core lookup seed (roles, languages, country+states, categories+translations, prompts, core admin users):
+
+PowerShell / Windows
+```
+npm run seed
+```
+
+Full sample content (adds sample Articles, ShortNews, reactions, reads, comments, devices):
+
+```
+$env:FULL_SEED=1; npm run seed
+```
+
+Force wipe (destructive) then full seed:
+```
+$env:FORCE_WIPE=1; $env:FULL_SEED=1; npm run seed
+```
+
+Created Accounts (MPINs are hashed in DB):
+| Role | Mobile | MPIN | Notes |
+|------|--------|------|-------|
+| SUPER_ADMIN | 8282868389 | 1947 | Primary admin |
+| LANGUAGE_ADMIN | 9502337775 | 1234 | Telugu language admin |
+| REPORTER | 9000000001 | 1111 | Created only with FULL_SEED |
+
+Guest device (no user row) is also created with deviceId `dev-guest-demo` when FULL_SEED is enabled.
+
+Repeatable: Running the seed again updates/upsers without duplicating rows. Only when `FORCE_WIPE=1` are tables truncated (selected order) before reseeding.
+
+Summary counts are printed at the end (users, articles, short news, comments, devices, reactions) for quick verification.
+
+Legacy `prisma/seed.js` is deprecated (kept only for backward compatibility); always prefer `npm run seed` which executes the TypeScript version.
+
+
 ## Admin: Managing AI Prompt Templates
 
 The API uses DB-backed prompt templates for AI features (SEO, moderation, translations). Admins can view and update these via the Prompts API.
@@ -51,7 +89,7 @@ Response body (success):
 {
 	"success": true,
 	"data": {
-		"title": "Rain slows market traffic",        // <=35 chars (truncated if longer)
+		"title": "Rain slows market traffic downtown", // <=50 chars (truncated if longer)
 		"content": "... 58-60 words ...",            // AI enforced 58-60 words (retry logic if <58)
 		"languageCode": "en",
 		"suggestedCategoryName": "Weather",
@@ -68,7 +106,7 @@ Response body (success):
 ```
 
 Rules & Notes:
-- Title is trimmed to 35 characters if AI output longer.
+- Title is trimmed to 50 characters if AI output longer.
 - Content strictly capped to 60 words; generation retries up to 2 times if initial word count <58.
 - If AI provider fails (empty / invalid JSON for all attempts) a deterministic fallback draft is produced from the raw input (first 6 words headline + first 60 words body) and `fallback: true` is returned so the client can optionally flag it for manual review.
 - If the suggested category does not exist, a Category + CategoryTranslation (for user language) are created immediately; background job fills other languages.
@@ -258,7 +296,7 @@ Deprecation Path Notes:
 Why 58–60 words? Gives the AI slight flexibility while ensuring a visually balanced short news card. Retries are issued if the body is under 58 words; if after 3 attempts still short, current implementation returns the last attempt (future improvement: deterministic expansion step).
 
 Hard Caps:
-- Title forcibly truncated to 35 characters (post-trim) to avoid overflow.
+- Title forcibly truncated to 50 characters (post-trim) to avoid overflow.
 - Content truncated at 60 words (token safe for push notifications & preview snippets).
 
 Recommended Future Enhancements:
@@ -275,7 +313,7 @@ Because AI provider calls are external and non-deterministic, isolate logic:
 1. Extract word-count & retry loop into a pure helper (`generateShortNewsDraft(aiFn, rawText, languageCode)`).
 2. Inject a mock `aiFn` in unit tests to simulate: valid JSON, malformed JSON, too-short content, over-length title/content.
 3. Add contract tests ensuring:
-	 - Output always <=35 chars title, <=60 words content.
+	 - Output always <=50 chars title, <=60 words content.
 	 - Minimum word threshold behavior (retries invoked when <58 words on early attempts).
 	 - Category auto-creation path vs existing category path.
 

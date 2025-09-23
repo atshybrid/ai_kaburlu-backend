@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+// Use shared Prisma instance (avoid multiple clients & connection churn)
+import prisma from '../../lib/prisma';
 import { transliterate } from 'transliteration';
 import type { Language } from '@prisma/client';
 import { buildNewsArticleJsonLd } from '../../lib/seo';
@@ -9,8 +10,8 @@ import { aiEnabledFor } from '../../lib/aiConfig';
 import { getPrompt, renderPrompt } from '../../lib/prompts';
 import { aiGenerateText } from '../../lib/aiProvider';
 import { generateAiShortNewsFromPrompt } from './shortnews.ai';
-import { sendToTopic } from '../../lib/fcm';
-import prismaClient from '../../lib/prisma';
+import { sendToTopic } from '../../lib/fcm'; // retained for any legacy topic sends
+import { sendShortNewsApprovedNotification } from './shortnews.notifications';
 import { translateAndSaveCategoryInBackground } from '../categories/categories.service';
 
 // AI article generation (SHORTNEWS_AI_ARTICLE) - helper only, no DB write
@@ -27,7 +28,7 @@ export const aiGenerateShortNewsArticle = async (req: Request, res: Response) =>
     }
     const languageId = (req.user as any).languageId;
     if (!languageId) return res.status(400).json({ success: false, error: 'User language not set' });
-    const lang = await prismaClient.language.findUnique({ where: { id: languageId } });
+  const lang = await prisma.language.findUnique({ where: { id: languageId } });
     const languageCode = lang?.code || 'en';
     const tpl = await getPrompt('SHORTNEWS_AI_ARTICLE' as any);
     const prompt = renderPrompt(tpl, { languageCode, content: rawText });
@@ -40,12 +41,12 @@ export const aiGenerateShortNewsArticle = async (req: Request, res: Response) =>
   let categoryTranslationId: string | null = null;
   let localizedCategoryName: string | null = null;
     try {
-      const baseCats = await prismaClient.category.findMany({ select: { id: true, name: true, slug: true } });
+  const baseCats = await prisma.category.findMany({ select: { id: true, name: true, slug: true } });
       const lower = suggestedCategoryName.toLowerCase();
       matchedCategory = baseCats.find(c => c.name.toLowerCase() === lower) || null;
       if (!matchedCategory) {
         // try translations in this language (by language code)
-        const translations = await prismaClient.categoryTranslation.findMany({ where: { language: languageCode as any }, select: { categoryId: true, name: true } });
+  const translations = await prisma.categoryTranslation.findMany({ where: { language: languageCode as any }, select: { categoryId: true, name: true } });
         const matchT = translations.find(t => t.name.toLowerCase() === lower);
         if (matchT) {
           const cat = baseCats.find(c => c.id === matchT.categoryId);
@@ -65,14 +66,14 @@ export const aiGenerateShortNewsArticle = async (req: Request, res: Response) =>
         while (existingSlugs.has(slug) && attempt < 50) {
           slug = `${baseSlugRaw}-${attempt++}`;
         }
-        const newCat = await prismaClient.category.create({
+  const newCat = await prisma.category.create({
           data: { name: suggestedCategoryName, slug },
           select: { id: true, name: true }
         });
         matchedCategory = newCat;
         createdCategory = true;
         // Upsert translation for this language code
-        const tr = await prismaClient.categoryTranslation.upsert({
+  const tr = await prisma.categoryTranslation.upsert({
           where: { categoryId_language: { categoryId: newCat.id, language: languageCode as any } },
           update: { name: suggestedCategoryName },
           create: { categoryId: newCat.id, language: languageCode as any, name: suggestedCategoryName },
@@ -84,7 +85,7 @@ export const aiGenerateShortNewsArticle = async (req: Request, res: Response) =>
         translateAndSaveCategoryInBackground(newCat.id, suggestedCategoryName).catch(()=>{});
       } else {
         // Ensure a translation exists for this language; upsert with suggested name (does not change base name)
-        const tr = await prismaClient.categoryTranslation.upsert({
+  const tr = await prisma.categoryTranslation.upsert({
           where: { categoryId_language: { categoryId: matchedCategory.id, language: languageCode as any } },
           update: { name: suggestedCategoryName },
           create: { categoryId: matchedCategory.id, language: languageCode as any, name: suggestedCategoryName },
@@ -127,7 +128,7 @@ export const aiRewriteShortNews = async (req: Request, res: Response) => {
     // Determine language from user principal
     const languageId = (req.user as any).languageId;
     if (!languageId) return res.status(400).json({ success: false, error: 'User language not set' });
-    const lang = await prismaClient.language.findUnique({ where: { id: languageId } });
+  const lang = await prisma.language.findUnique({ where: { id: languageId } });
     const languageCode = lang?.code || 'en';
     const tpl = await getPrompt('SHORTNEWS_REWRITE' as any);
     const prompt = renderPrompt(tpl, { languageCode, title: title || '', content: rawText });
@@ -145,7 +146,8 @@ export const aiRewriteShortNews = async (req: Request, res: Response) => {
     }
     // Enforce limits after AI output
     const wordCount = parsed.content.trim().split(/\s+/).length;
-    if (parsed.title.length > 35) parsed.title = parsed.title.slice(0, 35).trim();
+  // Enforce new 50 char limit (was 35 previously)
+  if (parsed.title.length > 50) parsed.title = parsed.title.slice(0, 50).trim();
     if (wordCount > 60) {
       const trimmedWords = parsed.content.trim().split(/\s+/).slice(0, 60);
       parsed.content = trimmedWords.join(' ');
@@ -190,7 +192,9 @@ async function generateSeoWithAI(
   }
 }
 
-const prisma = new PrismaClient();
+// (Legacy note) previously a local PrismaClient was created here; refactored to shared instance.
+
+// (Legacy inline notification logic removed; using sendShortNewsApprovedNotification helper)
 
 export const createShortNews = async (req: Request, res: Response) => {
   try {
@@ -217,10 +221,40 @@ export const createShortNews = async (req: Request, res: Response) => {
     if (content.trim().split(/\s+/).length > 60) {
       return res.status(400).json({ success: false, error: 'Content must be 60 words or less.' });
     }
+    // Validate tags array early (optional)
+    if (tags && !Array.isArray(tags)) {
+      return res.status(400).json({ success: false, error: 'tags must be an array if provided' });
+    }
+    if (Array.isArray(tags) && tags.some(t => typeof t !== 'string')) {
+      return res.status(400).json({ success: false, error: 'All tag values must be strings' });
+    }
     const authorId = (req.user as { id: string }).id;
     const languageId = (req.user as { languageId?: string }).languageId;
     if (!languageId) {
       return res.status(400).json({ success: false, error: 'User language is not set' });
+    }
+
+    // Validate related rows early for clearer errors
+    // Quick migration / connectivity sanity probe (detect missing columns/tables early)
+    try {
+      await prisma.$queryRawUnsafe('SELECT 1');
+    } catch (e: any) {
+      console.error('DB connectivity issue', e);
+      return res.status(500).json({ success: false, error: 'Database unavailable' });
+    }
+
+    const [userRow, categoryRow] = await Promise.all([
+      prisma.user.findUnique({ where: { id: authorId }, select: { id: true, languageId: true } }),
+      prisma.category.findUnique({ where: { id: categoryId }, select: { id: true } })
+    ]).catch(err => {
+      console.error('Preload (user/category) failed, possible migration mismatch', err);
+      return [null, null] as any;
+    });
+    if (!userRow) {
+      return res.status(400).json({ success: false, error: 'Invalid author (user not found)' });
+    }
+    if (!categoryRow) {
+      return res.status(400).json({ success: false, error: 'Invalid categoryId (category not found)' });
     }
   // Slug: always auto-generate from title (ignore client-provided slug)
   const slugSource = String(title);
@@ -330,48 +364,86 @@ export const createShortNews = async (req: Request, res: Response) => {
       videoThumbnailUrl: imageCandidates[0],
     });
 
-    const shortNews = await prisma.shortNews.create({
-      data: {
-        title: titleToSave,
-        slug,
-        content,
-        authorId,
-        categoryId,
-        tags: combinedTags,
-        seo: { ...finalSeo, jsonLd },
-        mediaUrls: Array.isArray(mediaUrls) ? mediaUrls : [],
-        latitude: Number(latNum),
-        longitude: Number(lonNum),
-        address: address || null,
-        accuracyMeters: typeof accuracyMeters === 'number' ? accuracyMeters : (accuracyMeters != null ? Number(accuracyMeters) : null),
-        provider: provider || null,
-        timestampUtc: timestampUtc ? new Date(timestampUtc) : null,
-        placeId: placeId || null,
-        placeName: placeName || null,
-        source: source || null,
-        language: languageId,
-        status: initialStatus,
-        aiRemark,
-        aiPlagiarism,
-        aiSensitive,
-      },
-    });
-    // If AI directly approved, push notification immediately
-    try {
-      if (initialStatus === 'AI_APPROVED') {
-        const primaryImage = imageCandidates[0];
-        const titleText = titleToSave;
-        const bodyText = content.slice(0, 120);
-        const dataPayload = { type: 'shortnews', shortNewsId: shortNews.id, url: canonicalUrl } as Record<string, string>;
-        if (languageCode) {
-          await sendToTopic(`news-lang-${languageCode.toLowerCase()}`, { title: titleText, body: bodyText, image: primaryImage, data: dataPayload });
+    // Pre-validate numeric / date fields to avoid generic Prisma data errors (e.g., P2009)
+    let accuracyMetersValue: number | null = null;
+    if (accuracyMeters !== undefined) {
+      if (accuracyMeters === null || accuracyMeters === '') {
+        accuracyMetersValue = null;
+      } else {
+        const accNum = Number(accuracyMeters);
+        if (!Number.isFinite(accNum) || accNum < 0) {
+          return res.status(400).json({ success: false, error: 'accuracyMeters must be a positive number' });
         }
-        if (categoryId) {
-          await sendToTopic(`news-cat-${String(categoryId).toLowerCase()}`, { title: titleText, body: bodyText, image: primaryImage, data: dataPayload });
-        }
+        accuracyMetersValue = accNum;
       }
-    } catch (e) {
-      console.warn('FCM send failed on AI approval (non-fatal):', e);
+    }
+    let timestampUtcValue: Date | null = null;
+    if (timestampUtc !== undefined) {
+      if (!timestampUtc) {
+        timestampUtcValue = null;
+      } else {
+        const d = new Date(timestampUtc);
+        if (isNaN(d.getTime())) {
+          return res.status(400).json({ success: false, error: 'timestampUtc must be a valid ISO date-time string' });
+        }
+        timestampUtcValue = d;
+      }
+    }
+
+    let shortNews;
+    const debug = (req.query.debug === '1' || req.headers['x-debug'] === '1');
+    try {
+      shortNews = await prisma.shortNews.create({
+        data: {
+          title: titleToSave,
+          slug,
+          content,
+          authorId,
+          categoryId,
+          tags: combinedTags,
+          seo: { ...finalSeo, jsonLd },
+          mediaUrls: Array.isArray(mediaUrls) ? mediaUrls : [],
+          latitude: Number(latNum),
+          longitude: Number(lonNum),
+          address: address || null,
+          accuracyMeters: accuracyMetersValue,
+          provider: provider || null,
+          timestampUtc: timestampUtcValue,
+          placeId: placeId || null,
+          placeName: placeName || null,
+          source: source || null,
+          language: languageId,
+          status: initialStatus,
+          aiRemark,
+          aiPlagiarism,
+          aiSensitive,
+        },
+      });
+    } catch (err: any) {
+      // Prisma error diagnostics
+      const code = err?.code;
+      if (code === 'P2003') {
+        console.error('P2003 foreign key failure creating ShortNews', { categoryId, authorId, meta: err?.meta });
+        const devInfo = (process.env.NODE_ENV !== 'production' || debug) ? { prismaCode: code, meta: err?.meta } : {};
+        return res.status(400).json({ success: false, error: 'Foreign key constraint failed (check categoryId / authorId)', ...devInfo });
+      }
+      if (code === 'P2002') {
+        console.error('P2002 unique constraint (slug) collision', { slug, meta: err?.meta });
+        const devInfo = (process.env.NODE_ENV !== 'production' || debug) ? { prismaCode: code, meta: err?.meta } : {};
+        return res.status(400).json({ success: false, error: 'Unique constraint failed (slug collision)', ...devInfo });
+      }
+      if (code === 'P2009') {
+        console.error('P2009 invalid data error creating ShortNews', { message: err?.message, meta: err?.meta });
+        const devInfo = (process.env.NODE_ENV !== 'production' || debug) ? { prismaCode: code, meta: err?.meta, message: err?.message } : {};
+        return res.status(400).json({ success: false, error: 'Invalid data for one or more fields (P2009)', ...devInfo });
+      }
+      console.error('shortNews.create error', err);
+      const devInfo = (process.env.NODE_ENV !== 'production' || debug) ? { prismaCode: code, message: err?.message, meta: err?.meta } : {};
+      return res.status(400).json({ success: false, error: 'Failed to submit short news (create error)', ...devInfo });
+    }
+    // If AI directly approved, trigger notification (idempotent)
+    if (initialStatus === 'AI_APPROVED') {
+      await sendShortNewsApprovedNotification(shortNews.id);
     }
     res.status(201).json({
       success: true,
@@ -386,8 +458,9 @@ export const createShortNews = async (req: Request, res: Response) => {
         seo: shortNews.seo,
       },
     });
-  } catch (error) {
-    res.status(400).json({ success: false, error: 'Failed to submit short news' });
+  } catch (error: any) {
+    console.error('createShortNews unexpected error', error);
+    res.status(400).json({ success: false, error: 'Failed to submit short news (unexpected)' });
   }
 };
 
@@ -567,38 +640,10 @@ export const updateShortNewsStatus = async (req: Request, res: Response) => {
       where: { id },
       data: { status, aiRemark },
     });
-    // Push notification on approval transitions
-    try {
-      const approvedStatuses = new Set(['AI_APPROVED', 'DESK_APPROVED']);
-      if (approvedStatuses.has(String(status))) {
-        // Build notification payload
-        const mediaUrls = Array.isArray((updated as any).mediaUrls) ? (updated as any).mediaUrls : [];
-        const imageUrls = mediaUrls.filter((u: string) => /\.(webp|png|jpe?g|gif|avif)$/i.test(u));
-        const primaryImage = imageUrls[0];
-        // Resolve language code for topics and canonical URL
-        let languageCode = 'en';
-        if (updated.language) {
-          const lang = await prisma.language.findUnique({ where: { id: updated.language as any } });
-          if (lang?.code) languageCode = lang.code;
-        }
-        const canonicalUrl = buildCanonicalUrl(languageCode, updated.slug || updated.id, 'short');
-        const titleText = updated.title;
-        const bodyText = (updated.content || '').slice(0, 120);
-        const dataPayload = { type: 'shortnews', shortNewsId: updated.id, url: canonicalUrl } as Record<string, string>;
-        // Send to language topic and category topic (best-effort)
-        try {
-          if (languageCode) {
-            await sendToTopic(`news-lang-${languageCode.toLowerCase()}`, { title: titleText, body: bodyText, image: primaryImage, data: dataPayload });
-          }
-          if ((updated as any).categoryId) {
-            await sendToTopic(`news-cat-${String((updated as any).categoryId).toLowerCase()}`, { title: titleText, body: bodyText, image: primaryImage, data: dataPayload });
-          }
-        } catch (e) {
-          console.warn('FCM send failed (non-fatal):', e);
-        }
-      }
-    } catch (e) {
-      console.warn('Notification error (non-fatal):', e);
+    // Push notification (idempotent) on approval transitions
+    const approvedStatuses = new Set(['AI_APPROVED', 'DESK_APPROVED']);
+    if (approvedStatuses.has(String(status))) {
+      await sendShortNewsApprovedNotification(updated.id);
     }
     res.status(200).json({ success: true, data: updated });
   } catch (error) {

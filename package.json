@@ -10,6 +10,8 @@
     "start": "node dist/index.js",
     "start:dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "seed": "ts-node prisma/seed.ts",
+    "seed:full": "ts-node prisma/full-seed.ts",
+    "seed:force": "cross-env FORCE_WIPE=1 FULL_SEED=1 ts-node prisma/seed.ts",
     "ai:smoke": "ts-node scripts/aiDraftSmoke.ts",
     "postinstall": "prisma generate"
   },
@@ -62,6 +64,7 @@
     "@types/helmet": "^4.0.0",
     "@types/node": "^20.19.13",
     "@types/transliteration": "^1.6.1",
+    "cross-env": "^10.0.0",
     "nodemon": "^3.1.0",
     "prisma": "^6.16.1",
     "ts-node": "^10.9.2",

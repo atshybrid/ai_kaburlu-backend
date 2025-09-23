@@ -1,6 +1,83 @@
 
 import prisma from '../../lib/prisma';
 import { CreateArticleDto } from './articles.dto';
+import { sendToTokensEnhanced } from '../../lib/fcm-enhanced';
+
+// Helper to extract a short body for notification
+function buildArticleNotificationBody(article: { content?: string | null; contentJson?: any; title: string; }): string {
+  // prefer shortNews from contentJson if exists
+  const shortNews = article?.contentJson?.shortNews as string | undefined;
+  if (shortNews) return shortNews.slice(0, 140);
+  const raw = (article.content || '').replace(/\s+/g, ' ').trim();
+  return raw.length > 140 ? raw.slice(0, 137) + '...' : raw;
+}
+
+// Send push notification for a published article (idempotent)
+export async function sendArticlePublishedNotification(articleId: string) {
+  const article = await prisma.article.findUnique({
+    where: { id: articleId },
+    include: { language: true, categories: { take: 1 } }
+  });
+  if (!article) return;
+  if (article.status !== 'PUBLISHED') return;
+  if (article.notifiedAt) return; // already sent
+
+  // Idempotency: check if a log already exists for this article
+  const existing = await prisma.pushNotificationLog.findFirst({
+    where: {
+      sourceAction: 'article-publish',
+      data: { path: ['articleId'], equals: article.id } as any // JSON path filter (may be ignored if provider unsupported)
+    }
+  }).catch(() => null);
+  if (existing) return; // already notified
+
+  // Fetch device tokens for same language
+  const devices = await prisma.device.findMany({
+    where: { pushToken: { not: null }, languageId: article.languageId },
+    select: { pushToken: true }
+  });
+  const tokens = devices.map(d => d.pushToken!).filter(Boolean);
+  if (tokens.length === 0) {
+    return;
+  }
+
+  const contentJson: any = article.contentJson || {};
+  const firstImage = Array.isArray(contentJson.images) ? contentJson.images[0] : undefined;
+
+  await sendToTokensEnhanced(tokens, {
+    title: article.title,
+    body: buildArticleNotificationBody(article),
+    image: firstImage,
+    data: {
+      type: 'ARTICLE',
+      articleId: article.id,
+      languageCode: article.language?.code || '',
+      categoryId: article.categories[0]?.id || ''
+    }
+  }, {
+    sourceController: 'articles-service',
+    sourceAction: 'article-publish'
+  });
+
+  // Mark as notified
+  await prisma.article.update({ where: { id: article.id }, data: { notifiedAt: new Date() } });
+}
+
+// Publish an article and trigger notification (if not already published)
+export async function publishArticle(articleId: string, { notify = true }: { notify?: boolean } = {}) {
+  const article = await prisma.article.findUnique({ where: { id: articleId } });
+  if (!article) throw new Error('Article not found');
+  if (article.status === 'PUBLISHED') {
+    if (notify) await sendArticlePublishedNotification(article.id);
+    return article;
+  }
+  const updated = await prisma.article.update({
+    where: { id: articleId },
+    data: { status: 'PUBLISHED' }
+  });
+  if (notify) await sendArticlePublishedNotification(updated.id);
+  return updated;
+}
 
 export const createArticle = async (dto: CreateArticleDto, authorId: string) => {
   const {

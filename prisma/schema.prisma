@@ -5,39 +5,56 @@ model OtpLog {
   expiresAt    DateTime
   createdAt    DateTime @default(now())
 }
+
 model ShortNews {
-  id           String   @id @default(cuid())
-  title        String
-  slug         String?
-  summary      String?
-  content      String // ≤60 words
-  language     String?
-  author       User     @relation(fields: [authorId], references: [id])
-  authorId     String
-  categoryId   String
-  tags         String[]
-  featuredImage String?
-  publishDate  DateTime?
-  status       String   @default("PENDING") // PENDING, AI_APPROVED, DESK_PENDING, DESK_APPROVED, REJECTED
-  seo          Json?
-  allowComments Boolean @default(true)
-  mediaUrls    String[] // array of image/video URLs
-  latitude     Float?
-  longitude    Float?
-  address      String?
+  id             String    @id @default(cuid())
+  title          String
+  slug           String?
+  summary        String?
+  content        String
+  language       String?
+  author         User      @relation(fields: [authorId], references: [id])
+  authorId       String
+  categoryId     String
+  category       Category? @relation(fields: [categoryId], references: [id])
+  tags           String[]
+  featuredImage  String?
+  publishDate    DateTime?
+  publishedAt    DateTime?
+  status         String    @default("PENDING")
+  notifiedAt     DateTime?
+  seo            Json?
+  allowComments  Boolean   @default(true)
+  mediaUrls      String[]
+  latitude       Float?
+  longitude      Float?
+  address        String?
   accuracyMeters Float?
   provider       String?
   timestampUtc   DateTime?
   placeId        String?
   placeName      String?
   source         String?
-  aiRemark     String?
-  aiPlagiarism Json?
-  aiSensitive  Json?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  reads        ShortNewsRead[]
-  comments     Comment[]
+  aiRemark       String?
+  aiPlagiarism   Json?
+  aiSensitive    Json?
+  readCount      Int       @default(0)
+  commentCount   Int       @default(0)
+  likeCount      Int       @default(0)
+  dislikeCount   Int       @default(0)
+  isPinned       Boolean   @default(false)
+  priority       Int       @default(0)
+  isDeleted      Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  reads          ShortNewsRead[]
+  comments       Comment[]
+
+  @@index([status, publishedAt])
+  @@index([authorId])
+  @@index([categoryId, status])
+  @@index([language])
+  @@index([isPinned, priority, publishedAt])
 }
 
 datasource db {
@@ -51,41 +68,42 @@ generator client {
 }
 
 model User {
-  id           String        @id @default(cuid())
-  mobileNumber String?       @unique
-  mpin         String?
-  firebaseUid  String?
-  email        String?       @unique
-  role         Role          @relation(fields: [roleId], references: [id])
-  roleId       String
-  language     Language      @relation(fields: [languageId], references: [id])
-  languageId   String
-  status       String        @default("PENDING") // PENDING, ACTIVE, INACTIVE, SUSPENDED
-  upgradedAt   DateTime?     // Set when guest is upgraded
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  devices      Device[]
-  articles     Article[]
-  likes        Like[]
-  comments     Comment[]
-  location     UserLocation?
-  profile      UserProfile?
-  articleViews ArticleView[]
-  shortNews    ShortNews[]
-  shortNewsReads ShortNewsRead[]
-  dislikes Dislike[]
-  articleReads ArticleRead[]
-  media        Media[]
-  contentReads ContentRead[]
-  contentReactions ContentReaction[]
+  id                   String                @id @default(cuid())
+  mobileNumber         String?               @unique
+  mpin                 String?
+  firebaseUid          String?
+  email                String?               @unique
+  role                 Role                  @relation(fields: [roleId], references: [id])
+  roleId               String
+  language             Language              @relation(fields: [languageId], references: [id])
+  languageId           String
+  status               String                @default("PENDING") // PENDING, ACTIVE, INACTIVE, SUSPENDED
+  upgradedAt           DateTime? // Set when guest is upgraded
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  devices              Device[]
+  articles             Article[]
+  likes                Like[]
+  comments             Comment[]
+  location             UserLocation?
+  profile              UserProfile?
+  articleViews         ArticleView[]
+  shortNews            ShortNews[]
+  shortNewsReads       ShortNewsRead[]
+  dislikes             Dislike[]
+  articleReads         ArticleRead[]
+  media                Media[]
+  contentReads         ContentRead[]
+  contentReactions     ContentReaction[]
+  pushNotificationLogs PushNotificationLog[]
 }
 
 /// Stores editable AI prompts by key. Allows changing prompts without code changes.
 model Prompt {
   id          String   @id @default(cuid())
   key         String   @unique // e.g., SEO_GENERATION, MODERATION, CATEGORY_TRANSLATION
-  content     String   // the prompt template content; supports {{placeholders}}
-  description String?  // optional human-friendly description
+  content     String // the prompt template content; supports {{placeholders}}
+  description String? // optional human-friendly description
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 }
@@ -101,48 +119,48 @@ model Role {
 }
 
 model Language {
-  id         String   @id @default(cuid())
-  name       String   @unique
-  code       String   @unique
+  id         String    @id @default(cuid())
+  name       String    @unique
+  code       String    @unique
   nativeName String
-  direction  String   @default("ltr")
-  isDeleted  Boolean  @default(false)
+  direction  String    @default("ltr")
+  isDeleted  Boolean   @default(false)
   users      User[]
   articles   Article[]
   devices    Device[]
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 }
 
 model Device {
-  id          String   @id @default(cuid())
-  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  userId      String?
-  deviceId    String   @unique
-  deviceModel String
-  pushToken   String?
-  latitude    Float?
-  longitude   Float?
+  id             String    @id @default(cuid())
+  user           User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId         String?
+  deviceId       String    @unique
+  deviceModel    String
+  pushToken      String?
+  latitude       Float?
+  longitude      Float?
   accuracyMeters Float?
-  placeId     String?
-  placeName   String?
-  address     String?
-  source      String?
+  placeId        String?
+  placeName      String?
+  address        String?
+  source         String?
   // When a device operates as a guest (no User row) we store role & language here.
-  role        Role?    @relation(fields: [roleId], references: [id])
-  roleId      String?
-  language    Language? @relation(fields: [languageId], references: [id])
-  languageId  String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  role           Role?     @relation(fields: [roleId], references: [id])
+  roleId         String?
+  language       Language? @relation(fields: [languageId], references: [id])
+  languageId     String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
 model UserLocation {
-  id        String   @id @default(cuid())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId    String   @unique
-  latitude  Float
-  longitude Float
+  id             String    @id @default(cuid())
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId         String    @unique
+  latitude       Float
+  longitude      Float
   accuracyMeters Float?
   provider       String?
   timestampUtc   DateTime?
@@ -150,8 +168,8 @@ model UserLocation {
   placeName      String?
   address        String?
   source         String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
 model Country {
@@ -164,41 +182,41 @@ model Country {
 }
 
 model State {
-  id        String     @id @default(cuid())
-  name      String     @unique
-  country   Country    @relation(fields: [countryId], references: [id])
-  countryId String
-  isDeleted Boolean    @default(false)
-  districts District[]
+  id           String        @id @default(cuid())
+  name         String        @unique
+  country      Country       @relation(fields: [countryId], references: [id])
+  countryId    String
+  isDeleted    Boolean       @default(false)
+  districts    District[]
   userProfiles UserProfile[] @relation("UserProfile_state")
   contentReads ContentRead[] @relation("ContentRead_state")
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 }
 
 model District {
-  id        String   @id @default(cuid())
-  name      String
-  state     State    @relation(fields: [stateId], references: [id])
-  stateId   String
-  isDeleted Boolean  @default(false)
-  mandals   Mandal[]
+  id           String        @id @default(cuid())
+  name         String
+  state        State         @relation(fields: [stateId], references: [id])
+  stateId      String
+  isDeleted    Boolean       @default(false)
+  mandals      Mandal[]
   userProfiles UserProfile[] @relation("UserProfile_district")
   contentReads ContentRead[] @relation("ContentRead_district")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 }
 
 model Mandal {
-  id         String   @id @default(cuid())
-  name       String
-  district   District @relation(fields: [districtId], references: [id])
-  districtId String
-  isDeleted  Boolean  @default(false)
+  id           String        @id @default(cuid())
+  name         String
+  district     District      @relation(fields: [districtId], references: [id])
+  districtId   String
+  isDeleted    Boolean       @default(false)
   userProfiles UserProfile[] @relation("UserProfile_mandal")
   contentReads ContentRead[] @relation("ContentRead_mandal")
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 }
 
 model Category {
@@ -212,6 +230,7 @@ model Category {
   children     Category[]            @relation("SubCategories")
   translations CategoryTranslation[]
   articles     Article[]
+  shortNews    ShortNews[]
   createdAt    DateTime              @default(now())
   updatedAt    DateTime              @updatedAt
 }
@@ -242,6 +261,7 @@ model Article {
   language          Language?     @relation(fields: [languageId], references: [id])
   languageId        String?
   status            String        @default("DRAFT") // DRAFT, PUBLISHED, ARCHIVED
+  notifiedAt        DateTime?
   categories        Category[]
   tags              String[]
   images            String[]
@@ -272,18 +292,18 @@ model ArticleView {
 }
 
 model ArticleRead {
-  id        String   @id @default(cuid())
-  user      User     @relation(fields: [userId], references: [id])
-  userId    String
-  article   Article  @relation(fields: [articleId], references: [id])
-  articleId String
-  readAt    DateTime @default(now())
-  totalTimeMs      Int      @default(0)
-  maxScrollPercent Float    @default(0)
-  completed        Boolean  @default(false)
+  id               String    @id @default(cuid())
+  user             User      @relation(fields: [userId], references: [id])
+  userId           String
+  article          Article   @relation(fields: [articleId], references: [id])
+  articleId        String
+  readAt           DateTime  @default(now())
+  totalTimeMs      Int       @default(0)
+  maxScrollPercent Float     @default(0)
+  completed        Boolean   @default(false)
   lastEventAt      DateTime?
   completedAt      DateTime?
-  sessionsCount    Int      @default(0)
+  sessionsCount    Int       @default(0)
 
   @@unique([userId, articleId])
 }
@@ -311,19 +331,19 @@ model Dislike {
 }
 
 model ShortNewsRead {
-  id          String    @id @default(cuid())
-  user        User      @relation(fields: [userId], references: [id])
-  userId      String
-  shortNews   ShortNews @relation(fields: [shortNewsId], references: [id])
-  shortNewsId String
-  readAt      DateTime  @default(now())
+  id               String    @id @default(cuid())
+  user             User      @relation(fields: [userId], references: [id])
+  userId           String
+  shortNews        ShortNews @relation(fields: [shortNewsId], references: [id])
+  shortNewsId      String
+  readAt           DateTime  @default(now())
   // Added metrics similar to ArticleRead for unified simple tracking
-  totalTimeMs      Int      @default(0)
-  maxScrollPercent Float    @default(0)
-  completed        Boolean  @default(false)
+  totalTimeMs      Int       @default(0)
+  maxScrollPercent Float     @default(0)
+  completed        Boolean   @default(false)
   lastEventAt      DateTime?
   completedAt      DateTime?
-  sessionsCount    Int      @default(0)
+  sessionsCount    Int       @default(0)
 
   @@unique([userId, shortNewsId])
 }
@@ -341,33 +361,33 @@ enum ReactionValue {
 }
 
 model ContentRead {
-  id              String       @id @default(cuid())
-  user            User         @relation(fields: [userId], references: [id])
-  userId          String
-  contentId       String       // references Article.id or ShortNews.id depending on contentType
-  contentType     ContentType
-  readAt          DateTime     @default(now())
-  totalTimeMs     Int          @default(0)
+  id               String      @id @default(cuid())
+  user             User        @relation(fields: [userId], references: [id])
+  userId           String
+  contentId        String // references Article.id or ShortNews.id depending on contentType
+  contentType      ContentType
+  readAt           DateTime    @default(now())
+  totalTimeMs      Int         @default(0)
   maxScrollPercent Float       @default(0)
-  completed       Boolean      @default(false)
-  lastEventAt     DateTime?
-  completedAt     DateTime?
-  sessionsCount   Int          @default(0)
+  completed        Boolean     @default(false)
+  lastEventAt      DateTime?
+  completedAt      DateTime?
+  sessionsCount    Int         @default(0)
   // Snapshot location & geo context at FIRST record creation
-  latitude        Float?
-  longitude       Float?
-  accuracyMeters  Float?
-  placeId         String?
-  placeName       String?
-  address         String?
-  stateId         String?
-  districtId      String?
-  mandalId        String?
-  state           State?       @relation("ContentRead_state", fields: [stateId], references: [id])
-  district        District?    @relation("ContentRead_district", fields: [districtId], references: [id])
-  mandal          Mandal?      @relation("ContentRead_mandal", fields: [mandalId], references: [id])
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  latitude         Float?
+  longitude        Float?
+  accuracyMeters   Float?
+  placeId          String?
+  placeName        String?
+  address          String?
+  stateId          String?
+  districtId       String?
+  mandalId         String?
+  state            State?      @relation("ContentRead_state", fields: [stateId], references: [id])
+  district         District?   @relation("ContentRead_district", fields: [districtId], references: [id])
+  mandal           Mandal?     @relation("ContentRead_mandal", fields: [mandalId], references: [id])
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
   @@unique([userId, contentType, contentId])
   @@index([contentType, contentId])
@@ -381,7 +401,7 @@ model ContentReaction {
   id          String        @id @default(cuid())
   user        User          @relation(fields: [userId], references: [id])
   userId      String
-  contentId   String        // references Article.id or ShortNews.id depending on contentType (no FK for polymorphism)
+  contentId   String // references Article.id or ShortNews.id depending on contentType (no FK for polymorphism)
   contentType ContentType
   reaction    ReactionValue
   createdAt   DateTime      @default(now())
@@ -413,47 +433,105 @@ model Comment {
 }
 
 model Media {
-  id          String   @id @default(cuid())
-  key         String   @unique
-  url         String
-  name        String
-  contentType String
-  size        Int
-  kind        String   // image | video | other
-  folder      String?
-  owner       User?    @relation(fields: [ownerId], references: [id])
-  ownerId     String?
+  id            String        @id @default(cuid())
+  key           String        @unique
+  url           String
+  name          String
+  contentType   String
+  size          Int
+  kind          String // image | video | other
+  folder        String?
+  owner         User?         @relation(fields: [ownerId], references: [id])
+  ownerId       String?
   profilePhotos UserProfile[] @relation("UserProfile_profilePhotoMedia")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 }
 
 /// User profile details separated from the core User
 model UserProfile {
-  id                    String   @id @default(cuid())
-  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId                String   @unique
-  fullName              String?
-  gender                String?
-  dob                   DateTime?
-  maritalStatus         String?
-  bio                   String?
-  profilePhotoUrl       String?
-  profilePhotoMedia     Media?   @relation("UserProfile_profilePhotoMedia", fields: [profilePhotoMediaId], references: [id])
-  profilePhotoMediaId   String?
+  id                     String    @id @default(cuid())
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId                 String    @unique
+  fullName               String?
+  gender                 String?
+  dob                    DateTime?
+  maritalStatus          String?
+  bio                    String?
+  profilePhotoUrl        String?
+  profilePhotoMedia      Media?    @relation("UserProfile_profilePhotoMedia", fields: [profilePhotoMediaId], references: [id])
+  profilePhotoMediaId    String?
   emergencyContactNumber String?
-  address               Json?
-  state                 State?   @relation("UserProfile_state", fields: [stateId], references: [id])
-  stateId               String?
-  district              District? @relation("UserProfile_district", fields: [districtId], references: [id])
-  districtId            String?
-  mandal                Mandal?  @relation("UserProfile_mandal", fields: [mandalId], references: [id])
-  mandalId              String?
-  assemblyId            String?
-  villageId             String?
-  occupation            String?
-  education             String?
-  socialLinks           Json?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  address                Json?
+  state                  State?    @relation("UserProfile_state", fields: [stateId], references: [id])
+  stateId                String?
+  district               District? @relation("UserProfile_district", fields: [districtId], references: [id])
+  districtId             String?
+  mandal                 Mandal?   @relation("UserProfile_mandal", fields: [mandalId], references: [id])
+  mandalId               String?
+  assemblyId             String?
+  villageId              String?
+  occupation             String?
+  education              String?
+  socialLinks            Json?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+}
+
+/// Push notification delivery log for tracking and analytics
+model PushNotificationLog {
+  id String @id @default(cuid())
+
+  // Notification details
+  title    String
+  body     String
+  imageUrl String?
+  data     Json?
+
+  // Delivery configuration
+  deliveryType String // 'TOKEN' | 'USER' | 'TOPIC' | 'BULK'
+  targetTokens String[] // FCM tokens if TOKEN delivery
+  targetUserId String? // User ID if USER delivery
+  targetTopic  String? // Topic name if TOPIC delivery
+  batchId      String? // For bulk operations
+
+  // Delivery results
+  status       String @default("PENDING") // PENDING | SENDING | SUCCESS | PARTIAL_SUCCESS | FAILED | RETRY
+  totalTargets Int    @default(0)
+  successCount Int    @default(0)
+  failureCount Int    @default(0)
+
+  // Error handling
+  errors      Json? // Array of error details
+  retryCount  Int       @default(0)
+  maxRetries  Int       @default(3)
+  nextRetryAt DateTime?
+
+  // FCM response details
+  fcmMessageId String? // FCM message ID for single sends
+  fcmResponse  Json? // Full FCM response
+
+  // Metadata
+  priority         String  @default("NORMAL") // NORMAL | HIGH
+  environment      String? // dev | staging | production
+  sourceController String? // Which controller/service sent this
+  sourceAction     String? // What action triggered this
+
+  // Timestamps
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  user User? @relation(fields: [targetUserId], references: [id])
+
+  @@index([status])
+  @@index([deliveryType])
+  @@index([targetUserId])
+  @@index([targetTopic])
+  @@index([batchId])
+  @@index([createdAt])
+  @@index([nextRetryAt])
 }

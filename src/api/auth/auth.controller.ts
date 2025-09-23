@@ -153,6 +153,7 @@ export const createCitizenReporterByMobileController = async (req: Request, res:
     if (typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
       return res.status(400).json({ success: false, message: 'location.latitude and location.longitude are required numbers' });
     }
+    // Strict: only accept a valid language row ID (no code fallback)
     const lang = await prisma.language.findUnique({ where: { id: languageId } });
     if (!lang) {
       return res.status(400).json({ success: false, message: 'Invalid languageId' });
@@ -177,7 +178,7 @@ export const createCitizenReporterByMobileController = async (req: Request, res:
           mobileNumber,
           mpin: hashedMpin,
           roleId: citizenRole.id,
-          languageId: languageId,
+          languageId: lang.id,
           status: 'ACTIVE',
           upgradedAt: new Date(),
         },
@@ -188,7 +189,7 @@ export const createCitizenReporterByMobileController = async (req: Request, res:
           mobileNumber,
           mpin: hashedMpin,
           roleId: citizenRole.id,
-          languageId: languageId,
+          languageId: lang.id,
           status: 'ACTIVE',
           upgradedAt: new Date(),
         },
@@ -276,7 +277,7 @@ export const createCitizenReporterByMobileController = async (req: Request, res:
       jwt: jwtToken,
       refreshToken,
       expiresIn: 86400,
-      user: { userId: user.id, role: role?.name, languageId: user.languageId },
+  user: { userId: user.id, role: role?.name, languageId: user.languageId },
       location: {
         latitude: location.latitude,
         longitude: location.longitude,
