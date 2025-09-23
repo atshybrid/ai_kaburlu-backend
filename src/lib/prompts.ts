@@ -30,7 +30,7 @@ Category: {{text}}`,
 
   SHORTNEWS_REWRITE: `You are a professional short news assistant. Rewrite the provided raw user text into a concise, factual short news draft in the SAME language as the input (language code: {{languageCode}}).
 Constraints:
-- Title: <= 35 characters, punchy, no clickbait, no ALL CAPS, no emojis.
+- Title: <= 50 characters, punchy, no clickbait, no ALL CAPS, no emojis.
 - Content: <= 60 words. Neutral, factual tone. No repetition. No speculation beyond given facts.
 - Remove greetings, personal opinions, promotional lines, and unrelated chatter.
 - Preserve key facts: who, what, where, when. If missing, do NOT invent.
@@ -50,7 +50,7 @@ QUALITY GOALS:
 • Remove repetition, filler, self‑reference, thanks lines, lists of honorifics unless essential.
 
 HEADLINE RULES:
-• <= 35 characters (hard cap after trimming). Specific & meaningful.
+• <= 50 characters (hard cap after trimming). Specific & meaningful.
 • Must contain concrete subject (e.g., "School", "Rain", "Police", a place name) + action/result.
 • No vague adjectives ("big", "shocking"), no clickbait, no exclamation, no question mark, no ALL CAPS (except established acronyms ≤5 letters).
 • If event is ongoing, present tense; if completed, past tense.

@@ -72,16 +72,16 @@ export async function generateAiShortNewsFromPrompt(
     const words = rawText.trim().split(/\s+/).filter(Boolean);
     const contentWords = words.slice(0, maxWords);
     const content = contentWords.join(' ');
-    // Title: first 6 words (or fewer) joined, then truncated to 35 chars
+  // Title: first 6 words (or fewer) joined, then truncated to 50 chars
     const titleSeed = words.slice(0, 6).join(' ');
     let title = titleSeed.replace(/(^.|\s+.)/g, m => m.toUpperCase());
-    if (title.length > 35) title = title.slice(0, 35).trim();
+  if (title.length > 50) title = title.slice(0, 50).trim();
     parsed = { title, content, suggestedCategoryName: 'Community' };
     fallbackUsed = true;
   }
 
-  // Enforce final caps (title <= 35 chars, content <= maxWords)
-  if (parsed.title.length > 35) parsed.title = parsed.title.slice(0, 35).trim();
+  // Enforce final caps (title <= 50 chars, content <= maxWords)
+  if (parsed.title.length > 50) parsed.title = parsed.title.slice(0, 50).trim();
   const finalWords = parsed.content.trim().split(/\s+/);
   if (finalWords.length > maxWords) parsed.content = finalWords.slice(0, maxWords).join(' ');
   if (typeof parsed.suggestedCategoryName !== 'string' || !parsed.suggestedCategoryName.trim()) {

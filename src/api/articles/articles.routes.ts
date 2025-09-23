@@ -1,12 +1,75 @@
 
 import { Router } from 'express';
 import passport from 'passport';
-import { createArticleController } from './articles.controller';
+import { createArticleController, publishArticleController, updateArticleStatusController } from './articles.controller';
 import prisma from '../../lib/prisma';
 
 const router = Router();
 
 router.post('/', passport.authenticate('jwt', { session: false }), createArticleController);
+
+/**
+ * @swagger
+ * /articles/{id}/publish:
+ *   post:
+ *     summary: Publish an article (triggers push notification once)
+ *     tags: [Articles]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Article published
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Article not found
+ */
+router.post('/:id/publish', passport.authenticate('jwt', { session: false }), publishArticleController);
+
+/**
+ * @swagger
+ * /articles/{id}/status:
+ *   patch:
+ *     summary: Update article status (auto-sends push notification when approved)
+ *     tags: [Articles]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [DRAFT, PUBLISHED, ARCHIVED, DESK_APPROVED, AI_APPROVED]
+ *                 example: "DESK_APPROVED"
+ *     responses:
+ *       200:
+ *         description: Article status updated, notification sent if approved
+ *       400:
+ *         description: Invalid status
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Article not found
+ */
+router.patch('/:id/status', passport.authenticate('jwt', { session: false }), updateArticleStatusController);
 
 
 

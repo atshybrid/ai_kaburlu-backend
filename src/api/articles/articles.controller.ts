@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../../lib/prisma';
 import { buildCanonicalUrl } from '../../lib/domains';
+import { sendToTokensEnhanced } from '../../lib/fcm-enhanced';
 
 // Paginated article fetch for swipe UI
 export const getPaginatedArticleController = async (req: Request, res: Response) => {
@@ -48,7 +49,7 @@ export const getSingleArticleController = async (req: Request, res: Response) =>
 
 import { validate } from 'class-validator';
 import { CreateArticleDto } from './articles.dto';
-import { createArticle } from './articles.service';
+import { createArticle, publishArticle } from './articles.service';
 import { aiGenerateSEO } from './articles.service';
 import { sendToTopic, sendToUser } from '../../lib/fcm';
 
@@ -148,5 +149,152 @@ export const createArticleController = async (req: Request, res: Response) => {
     }
     console.error('Error creating short news:', error);
     res.status(500).json({ error: 'Failed to create short news article.' });
+  }
+};
+
+// Publish (or re-trigger notification if not sent) for an article
+export const publishArticleController = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    // Basic auth guard (ensure route is secured via middleware in routes file)
+    // @ts-ignore
+    if (!(req as any).user) return res.status(401).json({ error: 'Unauthorized' });
+
+    const updated = await publishArticle(id, { notify: true });
+    return res.json({ success: true, article: updated });
+  } catch (error: any) {
+    if (error.message === 'Article not found') return res.status(404).json({ error: 'Article not found' });
+    console.error('Publish article error:', error);
+    return res.status(500).json({ error: 'Failed to publish article' });
+  }
+};
+
+// Update article status and trigger notifications for approvals
+export const updateArticleStatusController = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    // @ts-ignore
+    if (!(req as any).user) return res.status(401).json({ error: 'Unauthorized' });
+
+    if (!status) {
+      return res.status(400).json({ error: 'Status is required' });
+    }
+
+    // Valid statuses (adjust based on your schema)
+    const validStatuses = ['DRAFT', 'PUBLISHED', 'ARCHIVED', 'DESK_APPROVED', 'AI_APPROVED'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    // Get current article
+    const currentArticle = await prisma.article.findUnique({
+      where: { id },
+      include: {
+        author: {
+          include: { language: true }
+        }
+      }
+    });
+
+    if (!currentArticle) {
+      return res.status(404).json({ error: 'Article not found' });
+    }
+
+    const previousStatus = currentArticle.status;
+
+    // Update article status
+    const updatedArticle = await prisma.article.update({
+      where: { id },
+      data: { status },
+      include: {
+        author: {
+          include: { language: true }
+        }
+      }
+    });
+
+    // Trigger push notification only when status changes TO approved states
+    const shouldNotify = (
+      (status === 'DESK_APPROVED' || status === 'AI_APPROVED') &&
+      previousStatus !== status &&
+      !(currentArticle as any).notifiedAt // Don't send duplicate notifications
+    );
+
+    if (shouldNotify) {
+      console.log(`[Articles] Triggering notification for article ${id} - status changed to ${status}`);
+      
+      try {
+        // Get all devices with push tokens for notification
+        const devices = await prisma.device.findMany({
+          where: {
+            pushToken: { not: null },
+            // Optional: filter by language if needed
+            // OR: [
+            //   { user: { languageId: updatedArticle.author.languageId } },
+            //   { userId: null, languageId: updatedArticle.author.languageId }
+            // ]
+          },
+          select: { pushToken: true }
+        });
+
+        const tokens = devices.map(d => d.pushToken!).filter(Boolean);
+
+        if (tokens.length > 0) {
+          const languageCode = currentArticle.author.language?.code || 'en';
+          const canonicalUrl = buildCanonicalUrl(languageCode, updatedArticle.id, 'article');
+          
+          // Prepare notification content
+          const title = updatedArticle.title;
+          const body = updatedArticle.content.slice(0, 120) + (updatedArticle.content.length > 120 ? '...' : '');
+          
+          const result = await sendToTokensEnhanced(tokens, {
+            title,
+            body,
+            data: {
+              type: 'article_approved',
+              articleId: updatedArticle.id,
+              status,
+              url: canonicalUrl
+            }
+          }, {
+            sourceController: 'articles-controller',
+            sourceAction: 'status-approved',
+            priority: 'high'
+          });
+
+          // Mark article as notified (cast to any to bypass TypeScript for custom field)
+          await prisma.article.update({
+            where: { id },
+            data: { notifiedAt: new Date() } as any
+          });
+
+          console.log(`[Articles] Notification sent for article ${id}:`, {
+            success: result.success,
+            totalTargets: result.totalTargets,
+            successCount: result.successCount,
+            failureCount: result.failureCount
+          });
+        } else {
+          console.warn(`[Articles] No push tokens available for notification - article ${id}`);
+        }
+      } catch (notificationError) {
+        console.error(`[Articles] Failed to send notification for article ${id}:`, notificationError);
+        // Don't fail the status update if notification fails
+      }
+    }
+
+    res.json({
+      success: true,
+      article: updatedArticle,
+      notificationSent: shouldNotify,
+      previousStatus,
+      newStatus: status
+    });
+
+  } catch (error: any) {
+    console.error('Update article status error:', error);
+    return res.status(500).json({ error: 'Failed to update article status' });
   }
 };

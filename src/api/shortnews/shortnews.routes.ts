@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import passport from 'passport';
 import * as shortNewsController from './shortnews.controller';
+import { sendShortNewsApprovedNotification } from './shortnews.notifications';
 
 const router = Router();
 
@@ -9,7 +10,7 @@ const router = Router();
  * /shortnews/AIarticle:
  *   post:
  *     summary: AI generate short news draft (helper only, no save)
- *     description: Accept raw field note text (<=500 words) and returns optimized short news draft (title <=35 chars, content <=60 words) plus optional category suggestion. If the suggested category doesn't exist, the server will auto-create a Category and a CategoryTranslation for the user's language and return their IDs.
+*     description: Accept raw field note text (<=500 words) and returns optimized short news draft (title <=50 chars, content <=60 words) plus optional category suggestion. If the suggested category doesn't exist, the server will auto-create a Category and a CategoryTranslation for the user's language and return their IDs.
  *     tags: [ShortNews]
  *     security:
  *       - bearerAuth: []
@@ -37,7 +38,7 @@ const router = Router();
  *                 data:
  *                   type: object
  *                   properties:
- *                     title: { type: string, description: "<=35 chars" }
+*                     title: { type: string, description: "<=50 chars" }
  *                     content: { type: string, description: "<=60 words" }
  *                     languageCode: { type: string }
  *                     suggestedCategoryName: { type: string }
@@ -90,7 +91,7 @@ router.post('/AIarticle', passport.authenticate('jwt', { session: false }), shor
  *                 data:
  *                   type: object
  *                   properties:
- *                     title: { type: string, description: "<=35 chars optimized title" }
+*                     title: { type: string, description: "<=50 chars optimized title" }
  *                     content: { type: string, description: "<=60 words rewritten content" }
  *                     languageCode: { type: string }
  *       401:
@@ -633,5 +634,54 @@ router.get('/public/:id', shortNewsController.getApprovedShortNewsById);
  *         description: Items by status for current user/desk enriched with categoryName, authorName, place/address, lat/lon
  */
 router.get('/moderation', passport.authenticate('jwt', { session: false }), shortNewsController.listShortNewsByStatus);
+
+/**
+ * @swagger
+ * /shortnews/{id}/notify:
+ *   post:
+ *     summary: Manually trigger (or dry-run) push notification for an approved ShortNews
+ *     description: Sends (or previews) the push notification for a ShortNews item if it is in AI_APPROVED or DESK_APPROVED status. Use force=true to resend even if previously sent. Use dryRun=true to only preview tokens/payload.
+ *     tags: [ShortNews]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: force
+ *         schema: { type: boolean }
+ *         description: Resend even if already notified.
+ *       - in: query
+ *         name: dryRun
+ *         schema: { type: boolean }
+ *         description: If true, do not send; just return tokens count and payload.
+ *       - in: query
+ *         name: topics
+ *         schema: { type: boolean }
+ *         description: If false, skip topic broadcast.
+ *     responses:
+ *       200:
+ *         description: Notification result or dry-run preview.
+ *       404:
+ *         description: Not found / status not approved.
+ */
+router.post('/:id/notify', passport.authenticate('jwt', { session: false }), async (req, res) => {
+	try {
+		const { id } = req.params;
+		const force = String(req.query.force).toLowerCase() === 'true';
+		const dryRun = String(req.query.dryRun).toLowerCase() === 'true';
+		const useTopics = req.query.topics === undefined ? true : String(req.query.topics).toLowerCase() === 'true';
+		const result = await sendShortNewsApprovedNotification(id, { force, dryRun, useTopics });
+		if (result.skipped && result.reason === 'status') {
+			return res.status(404).json({ success: false, error: 'ShortNews not approved', reason: result.reason });
+		}
+		return res.json({ success: true, result });
+	} catch (e: any) {
+		console.error('Manual notify error', e);
+		return res.status(500).json({ success: false, error: e.message || 'Internal error' });
+	}
+});
 
 export default router;

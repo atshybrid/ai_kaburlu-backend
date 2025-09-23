@@ -1,3 +1,5 @@
+// DEPRECATED: Prefer running TypeScript seed (prisma/seed.ts) via `npm run seed`.
+// This legacy JS seed only inserts basic categories and is kept for backward compatibility.
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 

@@ -30,6 +30,8 @@ import devicesRoutes from './api/devices/devices.routes';
 import notificationsRoutes from './api/notifications/notifications.routes';
 import promptsRoutes from './api/prompts/prompts.routes';
 import preferencesRoutes from './api/preferences/preferences.routes';
+import prisma from './lib/prisma';
+import { Request, Response } from 'express';
 import { Router } from 'express';
 
 const app = express();
@@ -142,6 +144,27 @@ app.use('/devices', devicesRoutes);
 app.use('/notifications', notificationsRoutes);
 app.use('/prompts', promptsRoutes);
 app.use('/preferences', preferencesRoutes);
+// Lightweight schema drift health check (checks presence of key ShortNews columns)
+app.get('/health/schema', async (_req: Request, res: Response) => {
+  try {
+    // Expected columns for ShortNews that previously drifted
+    const expected = ['readCount','commentCount','likeCount','dislikeCount','notifiedAt'];
+    // information_schema query (case-insensitive handling)
+    const rows: any = await prisma.$queryRawUnsafe(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name ILIKE 'shortnews'
+    `);
+    const existing = new Set(rows.map((r: any) => r.column_name.toLowerCase()));
+    const missing = expected.filter(c => !existing.has(c.toLowerCase()));
+    const drift = missing.length > 0;
+    // Also attempt a simple select to surface engine-level issues
+    let selectOk = true; let selectError: string | undefined;
+    try { await prisma.shortNews.findFirst({ select: { id: true } }); } catch (e: any) { selectOk = false; selectError = e?.message; }
+    return res.json({ success: true, drift, missing, selectOk, selectError });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'Schema health check failed', message: e?.message });
+  }
+});
 
 // API Routes mounted under /api/v1 (preferred)
 const apiV1: Router = Router();
@@ -172,6 +195,22 @@ apiV1.use('/devices', devicesRoutes);
 apiV1.use('/notifications', notificationsRoutes);
 apiV1.use('/prompts', promptsRoutes);
 apiV1.use('/preferences', preferencesRoutes);
+// Internal-only routes (enabled with ENABLE_INTERNAL_TEST_ROUTES=1)
+if (String(process.env.ENABLE_INTERNAL_TEST_ROUTES) === '1') {
+  apiV1.get('/internal/push-logs/shortnews/:id', async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const logs = await prisma.pushNotificationLog.findMany({
+        where: { sourceAction: 'shortnews-approve', data: { path: ['shortNewsId'], equals: id } as any },
+        orderBy: { createdAt: 'asc' },
+        take: 50
+      });
+      return res.json({ success: true, count: logs.length, data: logs });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: 'Failed to fetch logs', message: e?.message });
+    }
+  });
+}
 app.use('/api/v1', apiV1);
 
 // Protected sample route
