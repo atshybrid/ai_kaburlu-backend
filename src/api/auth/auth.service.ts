@@ -71,33 +71,43 @@ export const login = async (loginDto: MpinLoginDto) => {
   const accessToken = jwt.sign(payload, process.env.JWT_SECRET || 'your-default-secret', { expiresIn: '1d' });
   const refreshToken = jwt.sign({ sub: user.id }, process.env.JWT_REFRESH_SECRET || 'your-default-refresh-secret', { expiresIn: '30d' });
 
+  // Fetch user profile and device data for enhanced response
+  const userProfile = await prisma.userProfile.findUnique({ where: { userId: user.id } });
+  const userLocation = await prisma.userLocation.findUnique({ where: { userId: user.id } });
+  const device = await prisma.device.findFirst({ 
+    where: { userId: user.id }, 
+    orderBy: { updatedAt: 'desc' } 
+  }); // Get most recent device
+
   const result =  {
     jwt: accessToken,
     refreshToken: refreshToken,
-  expiresIn: 86400, // seconds (1 day)
+    expiresIn: 86400, // seconds (1 day)
     user: {
       userId: user.id,
       role: role?.name,
       languageId: user.languageId,
+      fullName: userProfile?.fullName || null,
+      profilePhotoUrl: userProfile?.profilePhotoUrl || null
     },
+    device: device ? {
+      deviceId: device.deviceId,
+      deviceModel: device.deviceModel,
+      pushToken: device.pushToken,
+      hasPushToken: Boolean(device.pushToken)
+    } : null,
+    location: userLocation ? {
+      latitude: userLocation.latitude,
+      longitude: userLocation.longitude,
+      accuracyMeters: userLocation.accuracyMeters,
+      provider: userLocation.provider,
+      timestampUtc: userLocation.timestampUtc?.toISOString(),
+      placeId: userLocation.placeId,
+      placeName: userLocation.placeName,
+      address: userLocation.address,
+      source: userLocation.source
+    } : null,
   };
-  // Attach last known user location if available
-  try {
-    const loc = await prisma.userLocation.findUnique({ where: { userId: user.id } });
-    if (loc) {
-      (result as any).location = {
-        latitude: loc.latitude,
-        longitude: loc.longitude,
-        accuracyMeters: (loc as any).accuracyMeters ?? undefined,
-        provider: (loc as any).provider ?? undefined,
-        timestampUtc: (loc as any).timestampUtc ? new Date((loc as any).timestampUtc as any).toISOString() : undefined,
-        placeId: (loc as any).placeId ?? undefined,
-        placeName: (loc as any).placeName ?? undefined,
-        address: (loc as any).address ?? undefined,
-        source: (loc as any).source ?? undefined,
-      };
-    }
-  } catch {}
   console.log("result", result)
   return result
 };

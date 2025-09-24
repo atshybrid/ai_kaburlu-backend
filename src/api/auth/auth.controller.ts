@@ -268,6 +268,11 @@ export const createCitizenReporterByMobileController = async (req: Request, res:
       }
     }
 
+    // Fetch user profile and device data for enhanced response
+    const userProfile = await prisma.userProfile.findUnique({ where: { userId: user.id } });
+    const userLocation = await prisma.userLocation.findUnique({ where: { userId: user.id } });
+    const device = deviceId ? await prisma.device.findUnique({ where: { deviceId } }) : null;
+
     // Build login-style response
     const role = await prisma.role.findUnique({ where: { id: user.roleId } });
     const payload = { sub: user.id, role: role?.name, permissions: role?.permissions } as any;
@@ -277,8 +282,30 @@ export const createCitizenReporterByMobileController = async (req: Request, res:
       jwt: jwtToken,
       refreshToken,
       expiresIn: 86400,
-  user: { userId: user.id, role: role?.name, languageId: user.languageId },
-      location: {
+      user: { 
+        userId: user.id, 
+        role: role?.name, 
+        languageId: user.languageId,
+        fullName: userProfile?.fullName || null,
+        profilePhotoUrl: userProfile?.profilePhotoUrl || null
+      },
+      device: device ? {
+        deviceId: device.deviceId,
+        deviceModel: device.deviceModel,
+        pushToken: device.pushToken,
+        hasPushToken: Boolean(device.pushToken)
+      } : null,
+      location: userLocation ? {
+        latitude: userLocation.latitude,
+        longitude: userLocation.longitude,
+        accuracyMeters: userLocation.accuracyMeters,
+        provider: userLocation.provider,
+        timestampUtc: userLocation.timestampUtc,
+        placeId: userLocation.placeId,
+        placeName: userLocation.placeName,
+        address: userLocation.address,
+        source: userLocation.source
+      } : {
         latitude: location.latitude,
         longitude: location.longitude,
         accuracyMeters: (location as any).accuracyMeters,
@@ -405,6 +432,12 @@ export const loginWithGoogleController = async (req: Request, res: Response) => 
       });
     }
 
+    // Fetch user profile and device data for enhanced response
+    const userProfile = await prisma.userProfile.findUnique({ where: { userId: user.id } });
+    const userLocation = await prisma.userLocation.findUnique({ where: { userId: user.id } });
+    const device = deviceId ? await prisma.device.findUnique({ where: { deviceId } }) : 
+                  await prisma.device.findFirst({ where: { userId: user.id }, orderBy: { updatedAt: 'desc' } });
+
     const role = await prisma.role.findUnique({ where: { id: user.roleId } });
     const payload = { sub: user.id, role: role?.name, permissions: role?.permissions };
     const jwtToken = require('jsonwebtoken').sign(payload, process.env.JWT_SECRET || 'your-default-secret', { expiresIn: '1d' });
@@ -413,24 +446,31 @@ export const loginWithGoogleController = async (req: Request, res: Response) => 
       jwt: jwtToken,
       refreshToken,
       expiresIn: 86400,
-      user: { userId: user.id, role: role?.name, languageId: user.languageId },
+      user: { 
+        userId: user.id, 
+        role: role?.name, 
+        languageId: user.languageId,
+        fullName: userProfile?.fullName || null,
+        profilePhotoUrl: userProfile?.profilePhotoUrl || null
+      },
+      device: device ? {
+        deviceId: device.deviceId,
+        deviceModel: device.deviceModel,
+        pushToken: device.pushToken,
+        hasPushToken: Boolean(device.pushToken)
+      } : null,
+      location: userLocation ? {
+        latitude: userLocation.latitude,
+        longitude: userLocation.longitude,
+        accuracyMeters: userLocation.accuracyMeters,
+        provider: userLocation.provider,
+        timestampUtc: userLocation.timestampUtc?.toISOString(),
+        placeId: userLocation.placeId,
+        placeName: userLocation.placeName,
+        address: userLocation.address,
+        source: userLocation.source
+      } : null,
     };
-    try {
-      const loc = await prisma.userLocation.findUnique({ where: { userId: user.id } });
-      if (loc) {
-        result.location = {
-          latitude: loc.latitude,
-          longitude: loc.longitude,
-          accuracyMeters: (loc as any).accuracyMeters ?? undefined,
-          provider: (loc as any).provider ?? undefined,
-          timestampUtc: (loc as any).timestampUtc ? new Date((loc as any).timestampUtc as any).toISOString() : undefined,
-          placeId: (loc as any).placeId ?? undefined,
-          placeName: (loc as any).placeName ?? undefined,
-          address: (loc as any).address ?? undefined,
-          source: (loc as any).source ?? undefined,
-        };
-      }
-    } catch {}
     return res.json({ success: true, message: 'Operation successful', data: result });
   } catch (e: any) {
     return res.status(400).json({ success: false, message: e.message });
@@ -548,6 +588,10 @@ export const upgradeCitizenReporterGoogleController = async (req: Request, res: 
         },
       });
       // Note: pushToken is optional and not stored here without a deviceId. Use /auth/device to upsert a device with pushToken.
+      // Fetch user profile and device data for enhanced response
+      const userProfile = await prisma.userProfile.findUnique({ where: { userId: existing.id } });
+      const userLocation = await prisma.userLocation.findUnique({ where: { userId: existing.id } });
+      
       // Issue tokens like login for existing user
       const role = await prisma.role.findUnique({ where: { id: existing.roleId } });
       const payload = { sub: existing.id, role: role?.name, permissions: role?.permissions } as any;
@@ -557,8 +601,25 @@ export const upgradeCitizenReporterGoogleController = async (req: Request, res: 
         jwt: jwtToken,
         refreshToken,
         expiresIn: 86400,
-        user: { userId: existing.id, role: role?.name, languageId: languageId },
-        location: {
+        user: { 
+          userId: existing.id, 
+          role: role?.name, 
+          languageId: languageId,
+          fullName: userProfile?.fullName || null,
+          profilePhotoUrl: userProfile?.profilePhotoUrl || null
+        },
+        device: null, // Google auth doesn't provide deviceId, but pushToken could be handled separately
+        location: userLocation ? {
+          latitude: userLocation.latitude,
+          longitude: userLocation.longitude,
+          accuracyMeters: userLocation.accuracyMeters,
+          provider: userLocation.provider,
+          timestampUtc: userLocation.timestampUtc,
+          placeId: userLocation.placeId,
+          placeName: userLocation.placeName,
+          address: userLocation.address,
+          source: userLocation.source
+        } : {
           latitude: location.latitude,
           longitude: location.longitude,
           accuracyMeters: (location as any).accuracyMeters,
@@ -606,6 +667,10 @@ export const upgradeCitizenReporterGoogleController = async (req: Request, res: 
     });
 
     // Note: pushToken is optional and not stored here without a deviceId. Use /auth/device to upsert a device with pushToken.
+    // Fetch user profile and location data for enhanced response (newly created user)
+    const userProfile = await prisma.userProfile.findUnique({ where: { userId: user.id } });
+    const userLocation = await prisma.userLocation.findUnique({ where: { userId: user.id } });
+
     // Issue tokens and return login-style response
     const role = await prisma.role.findUnique({ where: { id: user.roleId } });
     const payload = { sub: user.id, role: role?.name, permissions: role?.permissions } as any;
@@ -615,8 +680,25 @@ export const upgradeCitizenReporterGoogleController = async (req: Request, res: 
       jwt: jwtToken,
       refreshToken,
       expiresIn: 86400,
-      user: { userId: user.id, role: role?.name, languageId: user.languageId },
-      location: {
+      user: { 
+        userId: user.id, 
+        role: role?.name, 
+        languageId: user.languageId,
+        fullName: userProfile?.fullName || null,
+        profilePhotoUrl: userProfile?.profilePhotoUrl || null
+      },
+      device: null, // Google auth doesn't provide deviceId, use /preferences/update to link device later
+      location: userLocation ? {
+        latitude: userLocation.latitude,
+        longitude: userLocation.longitude,
+        accuracyMeters: userLocation.accuracyMeters,
+        provider: userLocation.provider,
+        timestampUtc: userLocation.timestampUtc,
+        placeId: userLocation.placeId,
+        placeName: userLocation.placeName,
+        address: userLocation.address,
+        source: userLocation.source
+      } : {
         latitude: location.latitude,
         longitude: location.longitude,
         accuracyMeters: (location as any).accuracyMeters,
