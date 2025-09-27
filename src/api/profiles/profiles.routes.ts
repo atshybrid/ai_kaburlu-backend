@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import passport from 'passport';
 import { validationMiddleware } from '../middlewares/validation.middleware';
-import { getProfileByUserId, createProfile, updateProfile, deleteProfile, listProfiles } from './profiles.service';
+import { getProfileByUserId, createProfile, upsertProfile, updateProfile, deleteProfile, listProfiles } from './profiles.service';
 import { CreateProfileDto, UpdateProfileDto } from './profiles.dto';
 
 const router = Router();
@@ -51,7 +51,7 @@ router.get('/me', passport.authenticate('jwt', { session: false }), async (req: 
  * @swagger
  * /profiles/me:
  *   post:
- *     summary: Create a profile for the authenticated user
+ *     summary: Create or update a profile for the authenticated user (upsert)
  *     tags: [Profiles]
  *     security:
  *       - bearerAuth: []
@@ -61,24 +61,28 @@ router.get('/me', passport.authenticate('jwt', { session: false }), async (req: 
  *         application/json:
  *           schema:
  *             $ref: '#/components/schemas/UserProfileDto'
+ *           example:
+ *             fullName: "John Doe"
+ *             profilePhotoUrl: "https://example.com/photo.jpg"
+ *             bio: "Software Engineer"
  *     responses:
- *       201:
- *         description: Your profile was created successfully.
+ *       200:
+ *         description: Your profile was created or updated successfully.
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/UserProfile'
  *       400:
- *         description: Invalid input or profile already exists.
+ *         description: Invalid input.
  *       401:
  *         description: Unauthorized.
  */
 router.post('/me', passport.authenticate('jwt', { session: false }), validationMiddleware(CreateProfileDto), async (req: any, res) => {
   try {
-    const newProfile = await createProfile(req.user.id, req.body);
-    res.status(201).json(newProfile);
+    const profile = await upsertProfile(req.user.id, req.body);
+    res.status(200).json({ success: true, message: 'Profile updated successfully', data: profile });
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ success: false, error: error.message });
   }
 });
 

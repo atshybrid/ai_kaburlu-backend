@@ -26,64 +26,137 @@ export async function getProfileByUserId(userId: string) {
   return profile;
 }
 
-export async function createProfile(userId: string, data: CreateProfileDto) {
+export async function upsertProfile(userId: string, data: CreateProfileDto) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw new Error('User not found.');
-  // ensure not exists
-  const existing = await prisma.userProfile.findUnique({ where: { userId } });
-  if (existing) throw new Error('Profile already exists.');
-  const dob = data.dob ? parseDate(data.dob) : null;
-  const payload: any = {
-    userId,
+  
+  const dob = data.dob ? parseDate(data.dob) : undefined;
+  
+  // Handle profile photo logic: if one is set, clear the other
+  let profilePhotoUrl: string | null | undefined = data.profilePhotoUrl;
+  let profilePhotoMediaId: string | null | undefined = data.profilePhotoMediaId;
+  
+  if (data.profilePhotoUrl && data.profilePhotoMediaId) {
+    // If both provided, prioritize profilePhotoUrl and clear profilePhotoMediaId
+    profilePhotoMediaId = null;
+  } else if (data.profilePhotoUrl) {
+    // If profilePhotoUrl is set, clear profilePhotoMediaId
+    profilePhotoMediaId = null;
+  } else if (data.profilePhotoMediaId) {
+    // If profilePhotoMediaId is set, clear profilePhotoUrl
+    profilePhotoUrl = null;
+  }
+  
+  // Build update payload - replace all fields (complete update)
+  const updatePayload: any = {
     fullName: data.fullName ?? null,
     gender: data.gender ?? null,
-    dob,
+    dob: dob ?? null,
     maritalStatus: data.maritalStatus ?? null,
     bio: data.bio ?? null,
-    profilePhotoUrl: data.profilePhotoUrl ?? null,
-    profilePhotoMediaId: data.profilePhotoMediaId ?? null,
+    profilePhotoUrl: profilePhotoUrl ?? null,
+    profilePhotoMediaId: profilePhotoMediaId ?? null,
     emergencyContactNumber: data.emergencyContactNumber ?? null,
     address: data.address ?? null,
-    stateId: data.stateId || null,
-    districtId: data.districtId || null,
-    mandalId: data.mandalId || null,
-    assemblyId: data.assemblyId || null,
-    villageId: data.villageId || null,
+    stateId: data.stateId === '' ? null : (data.stateId ?? null),
+    districtId: data.districtId === '' ? null : (data.districtId ?? null),
+    mandalId: data.mandalId === '' ? null : (data.mandalId ?? null),
+    assemblyId: data.assemblyId === '' ? null : (data.assemblyId ?? null),
+    villageId: data.villageId === '' ? null : (data.villageId ?? null),
     occupation: data.occupation ?? null,
     education: data.education ?? null,
     socialLinks: data.socialLinks ?? null,
   };
-  for (const key of ['stateId', 'districtId', 'assemblyId', 'mandalId', 'villageId']) {
-    if (payload[key] === '') payload[key] = null;
-  }
-  return prisma.userProfile.create({ data: payload });
+  
+  // Create payload for new profile creation
+  const createPayload = {
+    userId,
+    fullName: data.fullName ?? null,
+    gender: data.gender ?? null,
+    dob: dob ?? null,
+    maritalStatus: data.maritalStatus ?? null,
+    bio: data.bio ?? null,
+    profilePhotoUrl: profilePhotoUrl ?? null,
+    profilePhotoMediaId: profilePhotoMediaId ?? null,
+    emergencyContactNumber: data.emergencyContactNumber ?? null,
+    address: data.address ?? null,
+    stateId: (data.stateId === '' ? null : data.stateId) ?? null,
+    districtId: (data.districtId === '' ? null : data.districtId) ?? null,
+    mandalId: (data.mandalId === '' ? null : data.mandalId) ?? null,
+    assemblyId: (data.assemblyId === '' ? null : data.assemblyId) ?? null,
+    villageId: (data.villageId === '' ? null : data.villageId) ?? null,
+    occupation: data.occupation ?? null,
+    education: data.education ?? null,
+    socialLinks: data.socialLinks ?? null,
+  };
+  
+  return prisma.userProfile.upsert({
+    where: { userId },
+    update: updatePayload,
+    create: createPayload,
+    include: {
+      state: true,
+      district: true,
+      mandal: true,
+      profilePhotoMedia: true,
+    },
+  });
+}
+
+// Keep createProfile for backward compatibility
+export async function createProfile(userId: string, data: CreateProfileDto) {
+  return upsertProfile(userId, data);
 }
 
 export async function updateProfile(userId: string, data: UpdateProfileDto) {
   const dob = data.dob ? parseDate(data.dob) : undefined;
+  
+  // Handle profile photo logic: if one is set, clear the other
+  let profilePhotoUrl: string | null | undefined = data.profilePhotoUrl;
+  let profilePhotoMediaId: string | null | undefined = data.profilePhotoMediaId;
+  
+  if (data.profilePhotoUrl && data.profilePhotoMediaId) {
+    // If both provided, prioritize profilePhotoUrl and clear profilePhotoMediaId
+    profilePhotoMediaId = null;
+  } else if (data.profilePhotoUrl) {
+    // If profilePhotoUrl is set, clear profilePhotoMediaId
+    profilePhotoMediaId = null;
+  } else if (data.profilePhotoMediaId) {
+    // If profilePhotoMediaId is set, clear profilePhotoUrl
+    profilePhotoUrl = null;
+  }
+  
+  // Build update payload - replace all fields (complete update)
   const updateData: any = {
-    fullName: data.fullName,
-    gender: data.gender,
-    dob,
-    maritalStatus: data.maritalStatus,
-    bio: data.bio,
-    profilePhotoUrl: data.profilePhotoUrl,
-    profilePhotoMediaId: data.profilePhotoMediaId,
-    emergencyContactNumber: data.emergencyContactNumber,
-    address: data.address,
-    stateId: data.stateId === '' ? null : data.stateId,
-    districtId: data.districtId === '' ? null : data.districtId,
-    mandalId: data.mandalId === '' ? null : data.mandalId,
-    assemblyId: data.assemblyId === '' ? null : data.assemblyId,
-    villageId: data.villageId === '' ? null : data.villageId,
-    occupation: data.occupation,
-    education: data.education,
-    socialLinks: data.socialLinks,
+    fullName: data.fullName ?? null,
+    gender: data.gender ?? null,
+    dob: dob ?? null,
+    maritalStatus: data.maritalStatus ?? null,
+    bio: data.bio ?? null,
+    profilePhotoUrl: profilePhotoUrl ?? null,
+    profilePhotoMediaId: profilePhotoMediaId ?? null,
+    emergencyContactNumber: data.emergencyContactNumber ?? null,
+    address: data.address ?? null,
+    stateId: data.stateId === '' ? null : (data.stateId ?? null),
+    districtId: data.districtId === '' ? null : (data.districtId ?? null),
+    mandalId: data.mandalId === '' ? null : (data.mandalId ?? null),
+    assemblyId: data.assemblyId === '' ? null : (data.assemblyId ?? null),
+    villageId: data.villageId === '' ? null : (data.villageId ?? null),
+    occupation: data.occupation ?? null,
+    education: data.education ?? null,
+    socialLinks: data.socialLinks ?? null,
   };
+  
   try {
     return await prisma.userProfile.update({
       where: { userId },
       data: updateData,
+      include: {
+        state: true,
+        district: true,
+        mandal: true,
+        profilePhotoMedia: true,
+      },
     });
   } catch (error) {
     throw new Error('Profile not found for the specified user.');
