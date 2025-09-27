@@ -54,6 +54,35 @@ export const createComment = async (commentDto: CreateCommentDto) => {
     if (shortNewsId && (parent as any).shortNewsId !== shortNewsId) {
       throw new Error('Parent comment belongs to different short news');
     }
+  } else {
+    // Direct comment (parentId = null): Check if user already has a direct comment
+    if (shortNewsId) {
+      const existingDirectComment = await prisma.comment.findFirst({
+        where: {
+          userId,
+          shortNewsId,
+          parentId: null // Direct comment only
+        }
+      });
+      
+      if (existingDirectComment) {
+        throw new Error('You have already posted a direct comment on this short news. You can only reply to existing comments.');
+      }
+    }
+    
+    if (articleId) {
+      const existingDirectComment = await prisma.comment.findFirst({
+        where: {
+          userId,
+          articleId,
+          parentId: null // Direct comment only
+        }
+      });
+      
+      if (existingDirectComment) {
+        throw new Error('You have already posted a direct comment on this article. You can only reply to existing comments.');
+      }
+    }
   }
 
   const data: any = { content, userId };
@@ -61,7 +90,22 @@ export const createComment = async (commentDto: CreateCommentDto) => {
   if (shortNewsId) data.shortNewsId = shortNewsId;
   if (parentId) data.parentId = parentId;
 
-  return prisma.comment.create({ data });
+  return prisma.comment.create({ 
+    data,
+    include: {
+      user: { 
+        select: { 
+          id: true,
+          profile: {
+            select: {
+              fullName: true,
+              profilePhotoUrl: true
+            }
+          }
+        } 
+      }
+    }
+  });
 };
 
 export interface GetCommentsParams {

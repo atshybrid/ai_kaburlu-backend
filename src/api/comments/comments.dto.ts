@@ -6,9 +6,9 @@ export class CreateCommentDto {
   @IsString()
   content!: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  userId!: string;
+  userId?: string; // Set automatically from JWT token
 
   // Polymorphic target (exactly one required at runtime)
   @IsOptional()

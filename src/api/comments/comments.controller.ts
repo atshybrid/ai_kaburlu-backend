@@ -7,21 +7,46 @@ import { createComment, getComments, updateComment, deleteComment } from './comm
 
 export const createCommentController = async (req: Request, res: Response) => {
   try {
-    const createCommentDto = plainToClass(CreateCommentDto, req.body);
+    // Automatically set userId from JWT token
+    const commentData = { ...req.body, userId: (req as any).user.id };
+    const createCommentDto = plainToClass(CreateCommentDto, commentData);
+    
     const errors = await validate(createCommentDto);
     if (errors.length > 0) {
-      return res.status(400).json({ errors });
+      return res.status(400).json({ success: false, errors });
     }
+    
     const polymorphicError = validatePolymorphicTarget(createCommentDto);
     if (polymorphicError) {
       return res.status(400).json({ success: false, message: polymorphicError });
     }
 
     const comment = await createComment(createCommentDto);
-    res.status(201).json({ success: true, message: 'Comment created successfully', data: comment });
+    
+    // Determine comment type for response message
+    const isReply = !!createCommentDto.parentId;
+    const messageType = isReply ? 'Reply posted successfully' : 'Comment posted successfully';
+    
+    res.status(201).json({ 
+      success: true, 
+      message: messageType, 
+      data: comment,
+      meta: {
+        isDirectComment: !isReply,
+        isReply: isReply
+      }
+    });
   } catch (error) {
     if (error instanceof Error) {
-        return res.status(500).json({ success: false, message: error.message });
+      // Handle specific validation errors
+      if (error.message.includes('already posted a direct comment')) {
+        return res.status(409).json({ 
+          success: false, 
+          message: error.message,
+          code: 'DIRECT_COMMENT_EXISTS'
+        });
+      }
+      return res.status(400).json({ success: false, message: error.message });
     }
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
