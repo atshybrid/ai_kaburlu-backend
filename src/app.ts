@@ -30,6 +30,7 @@ import devicesRoutes from './api/devices/devices.routes';
 import notificationsRoutes from './api/notifications/notifications.routes';
 import promptsRoutes from './api/prompts/prompts.routes';
 import preferencesRoutes from './api/preferences/preferences.routes';
+import legalRoutes from './api/legal/legal.routes';
 import prisma from './lib/prisma';
 import { Request, Response } from 'express';
 import { Router } from 'express';
@@ -195,6 +196,7 @@ apiV1.use('/devices', devicesRoutes);
 apiV1.use('/notifications', notificationsRoutes);
 apiV1.use('/prompts', promptsRoutes);
 apiV1.use('/preferences', preferencesRoutes);
+apiV1.use('/legal', legalRoutes);
 // Internal-only routes (enabled with ENABLE_INTERNAL_TEST_ROUTES=1)
 if (String(process.env.ENABLE_INTERNAL_TEST_ROUTES) === '1') {
   apiV1.get('/internal/push-logs/shortnews/:id', async (req: Request, res: Response) => {

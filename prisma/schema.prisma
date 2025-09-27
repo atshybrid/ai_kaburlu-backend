@@ -535,3 +535,39 @@ model PushNotificationLog {
   @@index([createdAt])
   @@index([nextRetryAt])
 }
+
+/// Terms and Conditions management
+model TermsAndConditions {
+  id          String   @id @default(cuid())
+  title       String
+  content     String   @db.Text // HTML content
+  version     String   @default("1.0")
+  isActive    Boolean  @default(false)
+  language    String   @default("en") // Language code (en, te, hi, etc.)
+  effectiveAt DateTime?
+  createdBy   String?  // Admin user ID
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([language])
+  @@index([version])
+}
+
+/// Privacy Policy management  
+model PrivacyPolicy {
+  id          String   @id @default(cuid())
+  title       String
+  content     String   @db.Text // HTML content
+  version     String   @default("1.0")
+  isActive    Boolean  @default(false)
+  language    String   @default("en") // Language code (en, te, hi, etc.)
+  effectiveAt DateTime?
+  createdBy   String?  // Admin user ID
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([language])
+  @@index([version])
+}
