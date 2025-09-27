@@ -244,7 +244,7 @@ export const createShortNews = async (req: Request, res: Response) => {
     }
 
     const [userRow, categoryRow] = await Promise.all([
-      prisma.user.findUnique({ where: { id: authorId }, select: { id: true, languageId: true } }),
+      prisma.user.findUnique({ where: { id: authorId }, select: { id: true, languageId: true, role: { select: { name: true } } } }),
       prisma.category.findUnique({ where: { id: categoryId }, select: { id: true } })
     ]).catch(err => {
       console.error('Preload (user/category) failed, possible migration mismatch', err);
@@ -255,6 +255,21 @@ export const createShortNews = async (req: Request, res: Response) => {
     }
     if (!categoryRow) {
       return res.status(400).json({ success: false, error: 'Invalid categoryId (category not found)' });
+    }
+    // If author is a CITIZEN_REPORTER, ensure category has a translation entry in the user's language.
+    if (userRow?.role?.name === 'CITIZEN_REPORTER') {
+      const lang = await prisma.language.findUnique({ where: { id: languageId }, select: { code: true } });
+      const langCode = lang?.code;
+      if (!langCode) {
+        return res.status(400).json({ success: false, error: 'User language code not found' });
+      }
+      const catTr = await prisma.categoryTranslation.findUnique({
+        where: { categoryId_language: { categoryId, language: langCode as any } },
+        select: { id: true }
+      });
+      if (!catTr) {
+        return res.status(400).json({ success: false, error: 'Selected category is not available in your language', details: { categoryId, language: langCode } });
+      }
     }
   // Slug: always auto-generate from title (ignore client-provided slug)
   const slugSource = String(title);

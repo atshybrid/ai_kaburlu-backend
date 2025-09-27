@@ -48,12 +48,19 @@ export async function sendShortNewsApprovedNotification(
   const image = mediaUrls.find(u => /(webp|png|jpe?g|gif|avif)$/i.test(u));
   const body = (sn.content || '').replace(/\s+/g, ' ').trim().slice(0, 120);
 
-  // Collect tokens for same language (device.languageId -> matches Language.id) if available
+  // Collect tokens for same language.
+  // Important: include both device.languageId and the related user.languageId (many devices may not store language on device row).
   const langRow = await prisma.language.findFirst({ where: { code: languageCode } });
   let tokens: string[] = [];
   if (langRow) {
     const devices = await prisma.device.findMany({
-      where: { pushToken: { not: null }, languageId: langRow.id },
+      where: {
+        pushToken: { not: null },
+        OR: [
+          { languageId: langRow.id }, // guest devices with language set on device
+          { user: { languageId: langRow.id } } // signed-in devices derive language from user profile
+        ]
+      },
       select: { pushToken: true }
     });
     tokens = devices.map(d => d.pushToken!).filter(Boolean);
@@ -85,6 +92,13 @@ export async function sendShortNewsApprovedNotification(
     tokenResult = await sendToTokensEnhanced(tokens, payload, {
       sourceController: 'shortnews-service',
       sourceAction: 'shortnews-approve'
+    });
+  } else {
+    // Helpful debug when frontend reports not receiving but campaigns do
+    console.warn('[ShortNews] No FCM tokens found for language; falling back to topics only', {
+      shortNewsId: sn.id,
+      languageCode,
+      mediaImagePresent: !!image
     });
   }
 
