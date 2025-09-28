@@ -73,11 +73,12 @@ export async function updateTerms(id: string, data: UpdateTermsDto) {
     throw new Error('Terms and Conditions not found');
   }
 
-  // If setting as active, deactivate all other terms for this language
+  // If setting as active, deactivate all other terms for this language (use target language if provided, else existing)
   if (data.isActive) {
+    const targetLanguage = data.language ?? existing.language;
     await prisma.termsAndConditions.updateMany({
       where: { 
-        language: existing.language,
+        language: targetLanguage,
         isActive: true,
         id: { not: id }
       },
@@ -92,6 +93,10 @@ export async function updateTerms(id: string, data: UpdateTermsDto) {
   if (data.isActive !== undefined) updateData.isActive = data.isActive;
   if (data.language !== undefined) updateData.language = data.language;
   if (data.effectiveAt !== undefined) updateData.effectiveAt = data.effectiveAt ? new Date(data.effectiveAt) : null;
+  // When activating and effectiveAt not supplied, set to now (mirrors activate endpoint)
+  if (data.isActive && data.effectiveAt === undefined) {
+    updateData.effectiveAt = new Date();
+  }
 
   return await prisma.termsAndConditions.update({
     where: { id },

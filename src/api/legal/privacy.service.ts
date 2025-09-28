@@ -73,11 +73,12 @@ export async function updatePrivacy(id: string, data: UpdatePrivacyDto) {
     throw new Error('Privacy Policy not found');
   }
 
-  // If setting as active, deactivate all other policies for this language
+  // If setting as active, deactivate all other policies for this language (use target language if provided, else existing)
   if (data.isActive) {
+    const targetLanguage = data.language ?? existing.language;
     await prisma.privacyPolicy.updateMany({
       where: { 
-        language: existing.language,
+        language: targetLanguage,
         isActive: true,
         id: { not: id }
       },
@@ -92,6 +93,10 @@ export async function updatePrivacy(id: string, data: UpdatePrivacyDto) {
   if (data.isActive !== undefined) updateData.isActive = data.isActive;
   if (data.language !== undefined) updateData.language = data.language;
   if (data.effectiveAt !== undefined) updateData.effectiveAt = data.effectiveAt ? new Date(data.effectiveAt) : null;
+  // When activating and effectiveAt not supplied, set to now (mirrors activate endpoint)
+  if (data.isActive && data.effectiveAt === undefined) {
+    updateData.effectiveAt = new Date();
+  }
 
   return await prisma.privacyPolicy.update({
     where: { id },

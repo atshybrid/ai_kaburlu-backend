@@ -177,7 +177,7 @@ export const updateTermsController = async (req: Request, res: Response) => {
 
 // Detects and transforms a structured terms document JSON into
 // the shape expected by our DTOs: { title, content (HTML), language?, effectiveAt?, version? }
-function transformStructuredTermsPayload(body: any): { title: string; content: string; language?: string; effectiveAt?: string; version?: string } | null {
+function transformStructuredTermsPayload(body: any): { title: string; content: string; language?: string; effectiveAt?: string; version?: string; isActive?: boolean } | null {
   try {
     if (!body || typeof body !== 'object') return null;
     // Heuristic: if client sends appName or sections array, treat as structured
@@ -191,6 +191,7 @@ function transformStructuredTermsPayload(body: any): { title: string; content: s
   const effectiveCandidate: string | undefined = body.effectiveDate || body.effectiveAt || undefined;
   const effectiveAt: string | undefined = normalizeIsoDateOrUndefined(effectiveCandidate);
     const version: string | undefined = body.version || undefined;
+  const isActive: boolean | undefined = typeof body.isActive === 'boolean' ? body.isActive : undefined;
 
     const html = renderTermsHtmlFromStructured({
       appName,
@@ -201,7 +202,7 @@ function transformStructuredTermsPayload(body: any): { title: string; content: s
       styling: body.styling,
     });
 
-    return { title, content: html, language, effectiveAt, version };
+  return { title, content: html, language, effectiveAt, version, isActive };
   } catch {
     return null;
   }
