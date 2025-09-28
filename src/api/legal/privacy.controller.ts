@@ -208,29 +208,74 @@ export const activatePrivacyController = async (req: Request, res: Response) => 
 function transformStructuredPrivacyPayload(body: any): { title: string; content: string; language?: string; effectiveAt?: string; version?: string; isActive?: boolean } | null {
   try {
     if (!body || typeof body !== 'object') return null;
-    // Heuristic: if client sends appName or sections array, treat as structured
-    const isStructured = !!(body.appName || body.sections || body.policyType || body.styling);
-    if (!isStructured) return null;
+    // Accept two shapes:
+    // A) Flat structured: { appName, policyType, sections, language, version, isActive, effectiveDate }
+    // B) Nested structured: { privacyPolicy: { appName, ... many fields ... } }
+    const nested = body.privacyPolicy && typeof body.privacyPolicy === 'object' ? body.privacyPolicy : null;
+    const src: any = nested || body;
+    const isStructured = !!(src.appName || src.sections || src.policyType || src.styling);
+    if (!isStructured && !nested) return null;
 
-    const appName: string = body.appName || 'App';
-    const policyType: string = body.policyType || 'Privacy Policy';
-    const title = body.title || `${appName} - ${policyType}`;
-  const language: string | undefined = body.language || undefined;
-  const effectiveCandidate: string | undefined = body.effectiveDate || body.effectiveAt || undefined;
+    const appName: string = src.appName || 'App';
+    const policyType: string = src.policyType || 'Privacy Policy';
+    const title = src.title || `${appName} - ${policyType}`;
+  const language: string | undefined = src.language || body.language || undefined;
+  const effectiveCandidate: string | undefined = src.effectiveDate || src.effectiveAt || body.effectiveDate || body.effectiveAt || undefined;
   const effectiveAt: string | undefined = normalizeIsoDateOrUndefined(effectiveCandidate);
-    const version: string | undefined = body.version || undefined;
-  const isActive: boolean | undefined = typeof body.isActive === 'boolean' ? body.isActive : undefined;
+    const version: string | undefined = src.version || body.version || undefined;
+  const isActive: boolean | undefined = typeof src.isActive === 'boolean' ? src.isActive : (typeof body.isActive === 'boolean' ? body.isActive : undefined);
+
+    // If nested payload provided without explicit sections, synthesize sections from known keys
+    let sections = Array.isArray(src.sections) ? src.sections : [];
+    if (!sections.length && nested) {
+      const pp = nested;
+      const sec = [] as any[];
+      const add = (title: string, content?: string | object) => {
+        if (content === undefined || content === null) return;
+        if (typeof content === 'string') sec.push({ title, content });
+        else if (typeof content === 'object') {
+          // flatten simple key->string pairs into bullet points
+          const points = Object.entries(content as Record<string, any>)
+            .filter(([, v]) => typeof v === 'string')
+            .map(([k, v]) => `${k}: ${v as string}`);
+          if (points.length) sec.push({ title, points });
+        }
+      };
+      add('Introduction', pp.introduction);
+      add('Data Controller', (pp.dataController && typeof pp.dataController === 'object') ? `Name: ${pp.dataController.name || ''}; Email: ${pp.dataController.contactEmail || ''}; Address: ${pp.dataController.address || ''}`.trim() : undefined);
+      add('Data Collected', pp.dataCollected);
+      add('How We Use Data', pp.howWeUseData);
+      add('Legal Bases for Processing', pp.legalBasesForProcessing);
+      add('Sharing and Third Parties', pp.sharingAndThirdParties);
+      add('Data Retention', pp.dataRetention);
+      add('User Rights and Choices', pp.userRightsAndChoices);
+      add('Security', pp.security);
+      add('Children', pp.children);
+      add('International Transfers', pp.internationalTransfers);
+      add('Cookies and Tracking', pp.cookiesAndTracking);
+      add('Advertising', pp.advertising);
+      add('Permissions Explanation', pp.permissionsExplanation);
+      add('Uploads, Transcription & Moderation', pp.policyForUploadsTranscriptionModeration);
+      add('Links To Other Sites', pp.linksToOtherSites);
+      add('Changes To Policy', pp.changesToPolicy);
+      // Contact information block
+      if (pp.contactInformation && typeof pp.contactInformation === 'object') {
+        const ci = pp.contactInformation;
+        sec.push({ title: 'Contact Information', points: Object.entries(ci).map(([k, v]) => `${k}: ${String(v)}`) });
+      }
+      sections = sec;
+    }
 
     const html = renderPrivacyHtmlFromStructured({
       appName,
       policyType,
       effectiveDate: effectiveAt,
-      sections: Array.isArray(body.sections) ? body.sections : [],
-      meta: body.meta,
-      styling: body.styling,
+      sections,
+      meta: src.meta || body.meta,
+      styling: src.styling || body.styling,
     });
 
-  return { title, content: html, language, effectiveAt, version, isActive };
+    return { title, content: html, language, effectiveAt, version, isActive };
   } catch {
     return null;
   }
