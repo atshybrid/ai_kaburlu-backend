@@ -15,8 +15,15 @@ import {
 // Public endpoint - Get active privacy policy
 export const getActivePrivacyController = async (req: Request, res: Response) => {
   try {
-    const { language = 'en' } = req.query as { language?: string };
-    const privacy = await getActivePrivacy(language);
+    const { language = 'en', fallback, fallbackLang } = req.query as { language?: string; fallback?: string; fallbackLang?: string };
+    let privacy = await getActivePrivacy(language);
+    const tryFallback = String(fallback ?? '').toLowerCase() === 'true' || !!fallbackLang;
+    if (!privacy && tryFallback) {
+      const fbLang = (fallbackLang || 'en').toString();
+      if (fbLang && fbLang !== language) {
+        privacy = await getActivePrivacy(fbLang);
+      }
+    }
     
     if (!privacy) {
       return res.status(404).json({ 
@@ -40,8 +47,15 @@ export const getActivePrivacyController = async (req: Request, res: Response) =>
 // Public endpoint - Get active privacy policy as HTML
 export const getActivePrivacyHtmlController = async (req: Request, res: Response) => {
   try {
-    const { language = 'en' } = req.query as { language?: string };
-    const privacy = await getActivePrivacy(language);
+    const { language = 'en', fallback, fallbackLang } = req.query as { language?: string; fallback?: string; fallbackLang?: string };
+    let privacy = await getActivePrivacy(language);
+    const tryFallback = String(fallback ?? '').toLowerCase() === 'true' || !!fallbackLang;
+    if (!privacy && tryFallback) {
+      const fbLang = (fallbackLang || 'en').toString();
+      if (fbLang && fbLang !== language) {
+        privacy = await getActivePrivacy(fbLang);
+      }
+    }
     
     if (!privacy) {
       return res.status(404).send(`
@@ -57,7 +71,7 @@ export const getActivePrivacyHtmlController = async (req: Request, res: Response
 
     const html = `
       <!DOCTYPE html>
-      <html lang="${language}">
+  <html lang="${language}">
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">

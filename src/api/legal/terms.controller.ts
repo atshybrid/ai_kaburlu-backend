@@ -15,8 +15,15 @@ import {
 // Public endpoint - Get active terms
 export const getActiveTermsController = async (req: Request, res: Response) => {
   try {
-    const { language = 'en' } = req.query as { language?: string };
-    const terms = await getActiveTerms(language);
+    const { language = 'en', fallback, fallbackLang } = req.query as { language?: string; fallback?: string; fallbackLang?: string };
+    let terms = await getActiveTerms(language);
+    const tryFallback = String(fallback ?? '').toLowerCase() === 'true' || !!fallbackLang;
+    if (!terms && tryFallback) {
+      const fbLang = (fallbackLang || 'en').toString();
+      if (fbLang && fbLang !== language) {
+        terms = await getActiveTerms(fbLang);
+      }
+    }
     
     if (!terms) {
       return res.status(404).json({ 
@@ -40,8 +47,15 @@ export const getActiveTermsController = async (req: Request, res: Response) => {
 // Public endpoint - Get active terms as HTML
 export const getActiveTermsHtmlController = async (req: Request, res: Response) => {
   try {
-    const { language = 'en' } = req.query as { language?: string };
-    const terms = await getActiveTerms(language);
+    const { language = 'en', fallback, fallbackLang } = req.query as { language?: string; fallback?: string; fallbackLang?: string };
+    let terms = await getActiveTerms(language);
+    const tryFallback = String(fallback ?? '').toLowerCase() === 'true' || !!fallbackLang;
+    if (!terms && tryFallback) {
+      const fbLang = (fallbackLang || 'en').toString();
+      if (fbLang && fbLang !== language) {
+        terms = await getActiveTerms(fbLang);
+      }
+    }
     
     if (!terms) {
       return res.status(404).send(`
