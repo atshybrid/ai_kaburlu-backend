@@ -108,7 +108,66 @@ router.get('/html', getActiveTermsHtmlController);
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/CreateTermsDto'
+ *             oneOf:
+ *               - $ref: '#/components/schemas/CreateTermsDto'
+ *               - type: object
+ *                 description: Structured flat payload (auto-renders HTML content)
+ *                 properties:
+ *                   appName:
+ *                     type: string
+ *                     example: Kaburlu
+ *                   policyType:
+ *                     type: string
+ *                     example: Terms and Conditions
+ *                   sections:
+ *                     type: array
+ *                     items:
+ *                       type: object
+ *                       properties:
+ *                         title:
+ *                           type: string
+ *                         content:
+ *                           type: string
+ *                         points:
+ *                           type: array
+ *                           items:
+ *                             type: string
+ *                   language:
+ *                     type: string
+ *                     example: en
+ *                   version:
+ *                     type: string
+ *                     example: '1.0'
+ *                   isActive:
+ *                     type: boolean
+ *                     example: true
+ *                   effectiveDate:
+ *                     type: string
+ *                     format: date
+ *           examples:
+ *             simple:
+ *               summary: Simple title/content payload
+ *               value:
+ *                 title: Kaburlu - Terms & Conditions
+ *                 content: "<p>These are the terms...</p>"
+ *                 language: en
+ *                 version: '1.0'
+ *                 isActive: true
+ *                 effectiveAt: '2025-09-28'
+ *             structuredFlat:
+ *               summary: Structured flat payload
+ *               value:
+ *                 appName: Kaburlu
+ *                 policyType: Terms and Conditions
+ *                 sections:
+ *                   - title: Acceptance
+ *                     content: By using the app...
+ *                   - title: Usage
+ *                     points: ["Don’t misuse","Follow laws"]
+ *                 language: en
+ *                 version: '1.0'
+ *                 isActive: true
+ *                 effectiveDate: '2025-09-28'
  *     responses:
  *       201:
  *         description: Terms and Conditions created successfully
@@ -153,7 +212,53 @@ router.route('/admin')
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/UpdateTermsDto'
+ *             oneOf:
+ *               - $ref: '#/components/schemas/UpdateTermsDto'
+ *               - type: object
+ *                 description: Structured flat payload (auto-renders HTML content)
+ *                 properties:
+ *                   appName:
+ *                     type: string
+ *                   policyType:
+ *                     type: string
+ *                   sections:
+ *                     type: array
+ *                     items:
+ *                       type: object
+ *                       properties:
+ *                         title:
+ *                           type: string
+ *                         content:
+ *                           type: string
+ *                         points:
+ *                           type: array
+ *                           items:
+ *                             type: string
+ *                   language:
+ *                     type: string
+ *                   version:
+ *                     type: string
+ *                   isActive:
+ *                     type: boolean
+ *                   effectiveDate:
+ *                     type: string
+ *                     format: date
+ *           examples:
+ *             simple:
+ *               summary: Simple update (title/content)
+ *               value:
+ *                 title: Updated Terms
+ *                 content: "<p>Updated content...</p>"
+ *                 isActive: true
+ *             structuredFlat:
+ *               summary: Structured flat update
+ *               value:
+ *                 appName: Kaburlu
+ *                 policyType: Terms and Conditions
+ *                 sections:
+ *                   - title: Changes
+ *                     content: We updated this section
+ *                 isActive: true
  *     responses:
  *       200:
  *         description: Terms and Conditions updated successfully

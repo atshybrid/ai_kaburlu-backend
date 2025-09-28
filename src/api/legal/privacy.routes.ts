@@ -110,7 +110,114 @@ router.get('/html', getActivePrivacyHtmlController);
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/CreatePrivacyDto'
+ *             oneOf:
+ *               - $ref: '#/components/schemas/CreatePrivacyDto'
+ *               - type: object
+ *                 description: Structured flat payload (auto-renders HTML content)
+ *                 properties:
+ *                   appName:
+ *                     type: string
+ *                     example: Kaburlu
+ *                   policyType:
+ *                     type: string
+ *                     example: Privacy Policy
+ *                   sections:
+ *                     type: array
+ *                     items:
+ *                       type: object
+ *                       properties:
+ *                         title:
+ *                           type: string
+ *                         content:
+ *                           type: string
+ *                         points:
+ *                           type: array
+ *                           items:
+ *                             type: string
+ *                   language:
+ *                     type: string
+ *                     example: en
+ *                   version:
+ *                     type: string
+ *                     example: '1.0'
+ *                   isActive:
+ *                     type: boolean
+ *                     example: true
+ *                   effectiveDate:
+ *                     type: string
+ *                     format: date
+ *               - type: object
+ *                 description: Nested structured payload under privacyPolicy (auto-renders HTML content)
+ *                 properties:
+ *                   privacyPolicy:
+ *                     type: object
+ *                     properties:
+ *                       appName:
+ *                         type: string
+ *                         example: Kaburlu
+ *                       introduction:
+ *                         type: string
+ *                       dataCollected:
+ *                         type: string
+ *                       howWeUseData:
+ *                         type: string
+ *                       contactInformation:
+ *                         type: object
+ *                         properties:
+ *                           email:
+ *                             type: string
+ *                           address:
+ *                             type: string
+ *                   language:
+ *                     type: string
+ *                     example: en
+ *                   version:
+ *                     type: string
+ *                     example: '1.0'
+ *                   isActive:
+ *                     type: boolean
+ *                     example: true
+ *                   effectiveDate:
+ *                     type: string
+ *                     format: date
+ *           examples:
+ *             simple:
+ *               summary: Simple title/content payload
+ *               value:
+ *                 title: Kaburlu - Privacy Policy
+ *                 content: "<p>We value your privacy...</p>"
+ *                 language: en
+ *                 version: '1.0'
+ *                 isActive: true
+ *                 effectiveAt: '2025-09-28'
+ *             structuredFlat:
+ *               summary: Structured flat payload
+ *               value:
+ *                 appName: Kaburlu
+ *                 policyType: Privacy Policy
+ *                 sections:
+ *                   - title: Introduction
+ *                     content: Welcome to Kaburlu...
+ *                   - title: Data Collected
+ *                     points: [Name, Email]
+ *                 language: en
+ *                 version: '1.0'
+ *                 isActive: true
+ *                 effectiveDate: '2025-09-28'
+ *             structuredNested:
+ *               summary: Nested privacyPolicy payload
+ *               value:
+ *                 privacyPolicy:
+ *                   appName: Kaburlu
+ *                   introduction: Welcome...
+ *                   dataCollected: We collect A, B, C...
+ *                   howWeUseData: We use your data to...
+ *                   contactInformation:
+ *                     email: support@example.com
+ *                 language: en
+ *                 version: '1.0'
+ *                 isActive: true
+ *                 effectiveDate: '2025-09-28'
  *     responses:
  *       201:
  *         description: Privacy Policy created successfully
@@ -155,7 +262,89 @@ router.route('/admin')
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/UpdatePrivacyDto'
+ *             oneOf:
+ *               - $ref: '#/components/schemas/UpdatePrivacyDto'
+ *               - type: object
+ *                 description: Structured flat payload (auto-renders HTML content)
+ *                 properties:
+ *                   appName:
+ *                     type: string
+ *                   policyType:
+ *                     type: string
+ *                   sections:
+ *                     type: array
+ *                     items:
+ *                       type: object
+ *                       properties:
+ *                         title:
+ *                           type: string
+ *                         content:
+ *                           type: string
+ *                         points:
+ *                           type: array
+ *                           items:
+ *                             type: string
+ *                   language:
+ *                     type: string
+ *                   version:
+ *                     type: string
+ *                   isActive:
+ *                     type: boolean
+ *                   effectiveDate:
+ *                     type: string
+ *                     format: date
+ *               - type: object
+ *                 description: Nested structured payload under privacyPolicy (auto-renders HTML content)
+ *                 properties:
+ *                   privacyPolicy:
+ *                     type: object
+ *                     properties:
+ *                       appName:
+ *                         type: string
+ *                       introduction:
+ *                         type: string
+ *                       dataCollected:
+ *                         type: string
+ *                       howWeUseData:
+ *                         type: string
+ *                       contactInformation:
+ *                         type: object
+ *                         properties:
+ *                           email:
+ *                             type: string
+ *                           address:
+ *                             type: string
+ *                   language:
+ *                     type: string
+ *                   version:
+ *                     type: string
+ *                   isActive:
+ *                     type: boolean
+ *                   effectiveDate:
+ *                     type: string
+ *                     format: date
+ *           examples:
+ *             simple:
+ *               summary: Simple update (title/content)
+ *               value:
+ *                 title: Updated Privacy Policy
+ *                 content: "<p>Updated content</p>"
+ *                 isActive: true
+ *             structuredFlat:
+ *               summary: Structured flat update
+ *               value:
+ *                 appName: Kaburlu
+ *                 policyType: Privacy Policy
+ *                 sections:
+ *                   - title: Changes
+ *                     content: We updated this section
+ *                 isActive: true
+ *             structuredNested:
+ *               summary: Nested privacyPolicy update
+ *               value:
+ *                 privacyPolicy:
+ *                   introduction: Updated intro
+ *                 isActive: true
  *     responses:
  *       200:
  *         description: Privacy Policy updated successfully
