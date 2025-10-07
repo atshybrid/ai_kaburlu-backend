@@ -10,6 +10,6 @@ const prisma = new PrismaClient();
 // Helper type to force TS to evaluate the delegate; accessing it here helps some LS versions.
 // (No runtime effect; if it doesn't exist, this file would error during build.)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-type __PushNotificationLogDelegate = typeof prisma.pushNotificationLog;
+type __PushNotificationLogDelegate = typeof prisma.pushNotificationLog; // keep at least one reference
 
 export default prisma;

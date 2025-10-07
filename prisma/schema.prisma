@@ -634,6 +634,13 @@ enum IdCardStatus {
   REVOKED
 }
 
+/// Role of a volunteer within a specific HRC team (scoped role, not global platform role)
+enum HrcTeamMemberRole {
+  MEMBER
+  COORDINATOR
+  ADMIN
+}
+
 model HrcTeam {
   id          String          @id @default(cuid())
   name        String
@@ -690,7 +697,7 @@ model HrcTeamMember {
   volunteerId String
   team        HrcTeam            @relation(fields: [teamId], references: [id])
   volunteer   HrcVolunteerProfile @relation(fields: [volunteerId], references: [id])
-  role        String?
+  membershipRole HrcTeamMemberRole @default(MEMBER)
   joinedAt    DateTime           @default(now())
   active      Boolean            @default(true)
   createdBy   String?
@@ -729,8 +736,8 @@ model HrcCase {
   description      String
   priority         CasePriority        @default(MEDIUM)
   status           CaseStatus          @default(NEW)
-  reporterId       String?
-  reporter         HrcVolunteerProfile? @relation("CaseReporter", fields: [reporterId], references: [id])
+  reporterId       String
+  reporter         HrcVolunteerProfile @relation("CaseReporter", fields: [reporterId], references: [id])
   teamId           String?
   team             HrcTeam?            @relation(fields: [teamId], references: [id])
   assignedToId     String?
