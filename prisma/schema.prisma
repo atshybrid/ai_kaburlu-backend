@@ -649,6 +649,17 @@ enum HrcCellType {
   AWARENESS_EDUCATION
 }
 
+/// Catalog table holding extended metadata for each HRC cell type
+model HrcCellCatalog {
+  id          String      @id @default(cuid())
+  code        HrcCellType @unique
+  title       String
+  description String?
+  active      Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
 /// Plan catalog for issuing/renewing HRCI ID cards with hierarchical applicability constraints
 model HrcIdCardPlan {
   id            String          @id @default(cuid())

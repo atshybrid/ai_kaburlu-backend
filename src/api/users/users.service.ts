@@ -26,11 +26,14 @@ export const getLocation = async (userId: string) => {
     return prisma.userLocation.findUnique({ where: { userId } });
 };
 import prisma from '../../lib/prisma';
+import { hashMpin } from '../../lib/mpin';
 
 export const createUser = async (data: any) => {
-    return prisma.user.create({
-        data,
-    });
+    const toCreate = { ...data };
+    if (toCreate.mpin && !toCreate.mpin.startsWith('$2')) {
+        toCreate.mpin = await hashMpin(toCreate.mpin);
+    }
+    return prisma.user.create({ data: toCreate });
 };
 
 export const findAllUsers = async () => {
@@ -48,6 +51,9 @@ export const findUserByMobileNumber = async (mobileNumber: string) => {
 export const updateUser = async (id: string, data: any) => {
     const { roleId, languageId, ...rest } = data;
     const updateData: any = { ...rest };
+    if (updateData.mpin && !updateData.mpin.startsWith('$2')) {
+        updateData.mpin = await hashMpin(updateData.mpin);
+    }
 
     if (roleId) {
         updateData.role = {
@@ -92,11 +98,13 @@ export const upgradeGuest = async (data: any) => {
 
     if (user) {
         // If device already exists, just update user and mark guest as upgraded
-        return prisma.user.update({
+    let hashed = mpin;
+    if (hashed && !hashed.startsWith('$2')) hashed = await hashMpin(hashed);
+    return prisma.user.update({
             where: { id: user.id },
             data: {
                 mobileNumber,
-                mpin,
+        mpin: hashed,
                 email,
                 roleId: citizenReporterRole.id,
                 status: 'ACTIVE',
@@ -119,10 +127,12 @@ export const upgradeGuest = async (data: any) => {
         });
     } else {
         // Create user and device together
-        return prisma.user.create({
+    let hashed = mpin;
+    if (hashed && !hashed.startsWith('$2')) hashed = await hashMpin(hashed);
+    return prisma.user.create({
             data: {
                 mobileNumber,
-                mpin,
+        mpin: hashed,
                 email,
                 roleId: citizenReporterRole.id,
                 languageId,
