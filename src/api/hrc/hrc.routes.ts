@@ -7,7 +7,7 @@ function ensureSuperAdminOrManager(req: any, res: any, next: any) {
   return res.status(403).json({ error: 'Forbidden: insufficient role' });
 }
 import { validationMiddleware } from '../middlewares/validation.middleware';
-import { PaymentOrderRequestDto, VolunteerOnboardDto, IdCardIssueDto, CreateCaseDto, ListCasesQueryDto, CaseUpdateDto, CaseAssignDto, CaseStatusChangeDto, CaseAttachmentDto } from './hrc.dto';
+import { PaymentOrderRequestDto, VolunteerOnboardDto, VolunteerOnboardDtoExtended, IdCardIssueDto, CreateCaseDto, ListCasesQueryDto, CaseUpdateDto, CaseAssignDto, CaseStatusChangeDto, CaseAttachmentDto } from './hrc.dto';
 import { verifyRazorpaySignature } from './hrc.razorpay';
 import prisma from '../../lib/prisma';
 import { resolveFee } from './hrc.fees.service';
@@ -71,6 +71,25 @@ const router = Router();
  *           type: string
  *         aadhaarNumber:
  *           type: string
+ *     VolunteerOnboardDtoExtended:
+ *       type: object
+ *       allOf:
+ *         - $ref: '#/components/schemas/VolunteerOnboardDto'
+ *         - type: object
+ *           properties:
+ *             hierarchyLevel:
+ *               type: string
+ *               enum: [NHRC, SHRC, DISTRICT, MANDAL, VILLAGE]
+ *             countryCode:
+ *               type: string
+ *             stateId:
+ *               type: string
+ *             districtId:
+ *               type: string
+ *             mandalId:
+ *               type: string
+ *             villageName:
+ *               type: string
  *     IdCardIssueDto:
  *       type: object
  *       required: [paymentTransactionId]
@@ -134,10 +153,20 @@ router.get('/teams', passport.authenticate('jwt', { session: false }), (_req, re
 });
 
 // --- VOLUNTEERS ---
-router.post('/volunteers/onboard', passport.authenticate('jwt', { session: false }), validationMiddleware(VolunteerOnboardDto), async (req: any, res) => {
+router.post('/volunteers/onboard', passport.authenticate('jwt', { session: false }), validationMiddleware(VolunteerOnboardDtoExtended), async (req: any, res) => {
   try {
     const userId = req.body.userId || req.user?.id;
     if (!userId) return res.status(400).json({ error: 'Missing userId' });
+
+    // Validate hierarchy requirements if provided
+    const { hierarchyLevel, countryCode, stateId, districtId, mandalId, villageName } = req.body as VolunteerOnboardDtoExtended;
+    if (hierarchyLevel) {
+      if (!countryCode) return res.status(400).json({ error: 'countryCode required for hierarchyLevel' });
+      if (['SHRC','DISTRICT','MANDAL','VILLAGE'].includes(hierarchyLevel) && !stateId) return res.status(400).json({ error: 'stateId required for this hierarchyLevel' });
+      if (['DISTRICT','MANDAL','VILLAGE'].includes(hierarchyLevel) && !districtId) return res.status(400).json({ error: 'districtId required for this hierarchyLevel' });
+      if (['MANDAL','VILLAGE'].includes(hierarchyLevel) && !mandalId) return res.status(400).json({ error: 'mandalId required for this hierarchyLevel' });
+      if (hierarchyLevel === 'VILLAGE' && !villageName) return res.status(400).json({ error: 'villageName required for VILLAGE hierarchyLevel' });
+    }
 
     // Ensure user exists
     const user = await (prisma as any).user.findUnique({ where: { id: userId }, include: { hrcVolunteerProfile: true } });
@@ -170,11 +199,49 @@ router.post('/volunteers/onboard', passport.authenticate('jwt', { session: false
       });
     }
 
-    const teamIds: string[] = req.body.teamIds || [];
+    // Determine or create team by hierarchyLevel
+    const autoTeams: string[] = [];
+    if (hierarchyLevel) {
+      let teamName = '';
+      let scopeLevel = 'GLOBAL';
+      const teamData: any = { active: true };
+      switch (hierarchyLevel) {
+        case 'NHRC':
+          teamName = 'NHRC Country Cell';
+          scopeLevel = 'COUNTRY';
+          teamData.countryCode = countryCode;
+          break;
+        case 'SHRC':
+          teamName = `SHRC State Cell ${stateId}`;
+          scopeLevel = 'STATE';
+          teamData.stateId = stateId; break;
+        case 'DISTRICT':
+          teamName = `District Human Rights Volunteer ${districtId}`;
+          scopeLevel = 'DISTRICT';
+          teamData.districtId = districtId; break;
+        case 'MANDAL':
+          teamName = `Mandal Human Rights Volunteer ${mandalId}`;
+          scopeLevel = 'MANDAL';
+          teamData.mandalId = mandalId; break;
+        case 'VILLAGE':
+          teamName = `Village Committee ${villageName}`;
+          scopeLevel = 'MANDAL'; // no VILLAGE enum; attach to mandal scope
+          teamData.mandalId = mandalId; break;
+      }
+      const team = await (prisma as any).hrcTeam.upsert({
+        where: { name: teamName },
+        update: {},
+        create: { name: teamName, scopeLevel, ...teamData, description: `Auto-created for ${hierarchyLevel}` }
+      });
+      autoTeams.push(team.id);
+    }
+
+    // Provided teamIds
+    const teamIds: string[] = [...(req.body.teamIds || []), ...autoTeams];
     const memberships: any[] = [];
     for (const tId of teamIds) {
       const team = await (prisma as any).hrcTeam.findUnique({ where: { id: tId } });
-      if (!team) continue; // skip invalid
+      if (!team) continue;
       const member = await (prisma as any).hrcTeamMember.upsert({
         where: { teamId_volunteerId: { teamId: tId, volunteerId: volunteer.id } },
         update: { active: true },
@@ -183,7 +250,7 @@ router.post('/volunteers/onboard', passport.authenticate('jwt', { session: false
       memberships.push(member);
     }
 
-    res.json({ success: true, volunteer, membershipsCount: memberships.length });
+    res.json({ success: true, volunteer, membershipsCount: memberships.length, autoTeamsCreated: autoTeams.length });
   } catch (e: any) {
     console.error('Volunteer onboard error', e);
     res.status(500).json({ error: 'Failed to onboard volunteer', message: e?.message });

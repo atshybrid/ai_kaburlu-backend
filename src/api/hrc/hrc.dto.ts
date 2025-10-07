@@ -32,6 +32,9 @@ export class CreateHrcTeamDto {
 }
 
 // Volunteer onboarding
+export const VolunteerHierarchyLevelValues = ['NHRC','SHRC','DISTRICT','MANDAL','VILLAGE'] as const;
+export type VolunteerHierarchyLevel = typeof VolunteerHierarchyLevelValues[number];
+
 export class VolunteerOnboardDto {
   // If omitted we'll derive from auth user
   @IsOptional() @IsString() userId?: string;
@@ -44,6 +47,23 @@ export class VolunteerOnboardDto {
   @IsOptional() @IsString() addressLine1?: string;
   @IsOptional() @IsString() addressLine2?: string;
   @IsOptional() @IsString() pincode?: string;
+}
+
+export class VolunteerOnboardDtoExtended {
+  @IsOptional() @IsString() userId?: string;
+  @IsOptional() @IsArray() @ArrayNotEmpty() teamIds?: string[];
+  @IsOptional() @IsString() bio?: string;
+  @IsOptional() @IsString() aadhaarNumber?: string;
+  @IsOptional() @IsString() addressLine1?: string;
+  @IsOptional() @IsString() addressLine2?: string;
+  @IsOptional() @IsString() pincode?: string;
+  // Hierarchy additions
+  @IsOptional() @IsIn(VolunteerHierarchyLevelValues) hierarchyLevel?: VolunteerHierarchyLevel;
+  @IsOptional() @IsString() countryCode?: string; // required when hierarchyLevel provided
+  @IsOptional() @IsString() stateId?: string;     // required for SHRC and below
+  @IsOptional() @IsString() districtId?: string;  // required for DISTRICT and below
+  @IsOptional() @IsString() mandalId?: string;    // required for MANDAL and VILLAGE
+  @IsOptional() @IsString() villageName?: string; // only for VILLAGE (no dedicated model yet)
 }
 
 // Payment order (for ID card or donation)
