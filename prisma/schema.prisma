@@ -96,6 +96,7 @@ model User {
   contentReads         ContentRead[]
   contentReactions     ContentReaction[]
   pushNotificationLogs PushNotificationLog[]
+  hrcVolunteerProfile  HrcVolunteerProfile?
 }
 
 /// Stores editable AI prompts by key. Allows changing prompts without code changes.
@@ -190,6 +191,9 @@ model State {
   districts    District[]
   userProfiles UserProfile[] @relation("UserProfile_state")
   contentReads ContentRead[] @relation("ContentRead_state")
+  hrcTeams     HrcTeam[]
+  hrcCases     HrcCase[]     @relation("CaseState")
+  feeConfigs   PaymentFeeConfig[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 }
@@ -203,6 +207,9 @@ model District {
   mandals      Mandal[]
   userProfiles UserProfile[] @relation("UserProfile_district")
   contentReads ContentRead[] @relation("ContentRead_district")
+  hrcTeams     HrcTeam[]
+  hrcCases     HrcCase[]     @relation("CaseDistrict")
+  feeConfigs   PaymentFeeConfig[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 }
@@ -215,6 +222,9 @@ model Mandal {
   isDeleted    Boolean       @default(false)
   userProfiles UserProfile[] @relation("UserProfile_mandal")
   contentReads ContentRead[] @relation("ContentRead_mandal")
+  hrcTeams     HrcTeam[]
+  hrcCases     HrcCase[]     @relation("CaseMandal")
+  feeConfigs   PaymentFeeConfig[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 }
@@ -570,4 +580,297 @@ model PrivacyPolicy {
   @@index([isActive])
   @@index([language])
   @@index([version])
+}
+
+/// ------------------------------
+/// HRCI (Human Rights) Module
+/// ------------------------------
+
+enum CaseStatus {
+  NEW
+  UNDER_REVIEW
+  IN_PROGRESS
+  ESCALATED
+  RESOLVED
+  CLOSED
+  REJECTED
+}
+
+enum CasePriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum PaymentPurpose {
+  ID_CARD_ISSUE
+  ID_CARD_RENEW
+  DONATION
+  OTHER
+}
+
+enum PaymentStatus {
+  CREATED
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIAL_REFUND
+}
+
+enum TeamScopeLevel {
+  GLOBAL
+  COUNTRY
+  STATE
+  DISTRICT
+  MANDAL
+}
+
+enum IdCardStatus {
+  PENDING_PAYMENT
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+model HrcTeam {
+  id          String          @id @default(cuid())
+  name        String
+  description String?
+  scopeLevel  TeamScopeLevel
+  countryCode String?
+  stateId     String?
+  districtId  String?
+  mandalId    String?
+  state       State?          @relation(fields: [stateId], references: [id])
+  district    District?       @relation(fields: [districtId], references: [id])
+  mandal      Mandal?         @relation(fields: [mandalId], references: [id])
+  members     HrcTeamMember[]
+  cases       HrcCase[]
+  feeConfigs  PaymentFeeConfig[]
+  active      Boolean         @default(true)
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([scopeLevel])
+  @@index([stateId])
+  @@index([districtId])
+  @@index([mandalId])
+}
+
+model HrcVolunteerProfile {
+  id              String             @id @default(cuid())
+  userId          String             @unique
+  user            User               @relation(fields: [userId], references: [id])
+  bio             String?
+  phoneVerified   Boolean            @default(false)
+  aadhaarNumber   String?            @unique
+  addressLine1    String?
+  addressLine2    String?
+  pincode         String?
+  idCards         HrcIdCard[]
+  teamMemberships HrcTeamMember[]
+  reportedCases   HrcCase[]          @relation("CaseReporter")
+  assignedCases   HrcCase[]          @relation("CaseAssignee")
+  caseUpdates     HrcCaseUpdate[]
+  caseAttachments HrcCaseAttachment[] @relation("AttachmentUploader")
+  active          Boolean            @default(false)
+  createdBy       String?
+  updatedBy       String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+}
+
+model HrcTeamMember {
+  id          String             @id @default(cuid())
+  teamId      String
+  volunteerId String
+  team        HrcTeam            @relation(fields: [teamId], references: [id])
+  volunteer   HrcVolunteerProfile @relation(fields: [volunteerId], references: [id])
+  role        String?
+  joinedAt    DateTime           @default(now())
+  active      Boolean            @default(true)
+  createdBy   String?
+  updatedBy   String?
+
+  @@unique([teamId, volunteerId])
+  @@index([volunteerId])
+}
+
+model HrcIdCard {
+  id                    String              @id @default(cuid())
+  volunteerId           String
+  volunteer             HrcVolunteerProfile @relation(fields: [volunteerId], references: [id])
+  issueDate             DateTime            @default(now())
+  expiryDate            DateTime
+  renewalIntervalMonths Int
+  feeAmountMinor        Int
+  currency              String              @default("INR")
+  status                IdCardStatus        @default(PENDING_PAYMENT)
+  paymentTxnId          String?
+  paymentTxn            PaymentTransaction? @relation(fields: [paymentTxnId], references: [id])
+  revokedReason         String?
+  createdBy             String?
+  updatedBy             String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  @@index([volunteerId])
+  @@index([status])
+}
+
+model HrcCase {
+  id               String              @id @default(cuid())
+  referenceCode    String              @unique
+  title            String
+  description      String
+  priority         CasePriority        @default(MEDIUM)
+  status           CaseStatus          @default(NEW)
+  reporterId       String?
+  reporter         HrcVolunteerProfile? @relation("CaseReporter", fields: [reporterId], references: [id])
+  teamId           String?
+  team             HrcTeam?            @relation(fields: [teamId], references: [id])
+  assignedToId     String?
+  assignedTo       HrcVolunteerProfile? @relation("CaseAssignee", fields: [assignedToId], references: [id])
+  locationStateId  String?
+  locationDistrictId String?
+  locationMandalId String?
+  state            State?              @relation("CaseState", fields: [locationStateId], references: [id])
+  district         District?           @relation("CaseDistrict", fields: [locationDistrictId], references: [id])
+  mandal           Mandal?             @relation("CaseMandal", fields: [locationMandalId], references: [id])
+  attachments      HrcCaseAttachment[]
+  updates          HrcCaseUpdate[]
+  closedAt         DateTime?
+  createdBy        String?
+  updatedBy        String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([status])
+  @@index([teamId])
+  @@index([assignedToId])
+  @@index([priority])
+}
+
+model HrcCaseUpdate {
+  id         String              @id @default(cuid())
+  caseId     String
+  case       HrcCase              @relation(fields: [caseId], references: [id])
+  authorId   String?
+  author     HrcVolunteerProfile? @relation(fields: [authorId], references: [id])
+  statusFrom CaseStatus?
+  statusTo   CaseStatus?
+  note       String?
+  createdBy  String?
+  createdAt  DateTime             @default(now())
+
+  @@index([caseId])
+}
+
+model HrcCaseAttachment {
+  id           String              @id @default(cuid())
+  caseId       String
+  case         HrcCase              @relation(fields: [caseId], references: [id])
+  url          String
+  mimeType     String?
+  uploadedById String?
+  uploadedBy   HrcVolunteerProfile? @relation("AttachmentUploader", fields: [uploadedById], references: [id])
+  createdBy    String?
+  createdAt    DateTime            @default(now())
+
+  @@index([caseId])
+}
+
+model HrcDonation {
+  id            String             @id @default(cuid())
+  donorUserId   String?
+  donorName     String?
+  donorEmail    String?
+  donorPhone    String?
+  amountMinor   Int
+  currency      String             @default("INR")
+  purpose       String?
+  paymentTxnId  String?
+  paymentTxn    PaymentTransaction? @relation(fields: [paymentTxnId], references: [id])
+  status        PaymentStatus       @default(PENDING)
+  refundedMinor Int?
+  recurring     Boolean             @default(false) // placeholder for future recurring donations
+  createdBy     String?
+  updatedBy     String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([donorUserId])
+  @@index([status])
+}
+
+model PaymentFeeConfig {
+  id                    String           @id @default(cuid())
+  purpose               PaymentPurpose
+  scopeLevel            TeamScopeLevel?
+  teamId                String?
+  team                  HrcTeam?         @relation(fields: [teamId], references: [id])
+  stateId               String?
+  state                 State?           @relation(fields: [stateId], references: [id])
+  districtId            String?
+  district              District?        @relation(fields: [districtId], references: [id])
+  mandalId              String?
+  mandal                Mandal?          @relation(fields: [mandalId], references: [id])
+  amountMinor           Int
+  currency              String           @default("INR")
+  renewalIntervalMonths Int?
+  active                Boolean          @default(true)
+  createdBy             String?
+  updatedBy             String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  @@index([purpose, active])
+}
+
+model PaymentTransaction {
+  id                String         @id @default(cuid())
+  purpose           PaymentPurpose
+  amountMinor       Int
+  currency          String         @default("INR")
+  status            PaymentStatus  @default(CREATED)
+  provider          String         @default("RAZORPAY")
+  providerOrderId   String?        @unique
+  providerPaymentId String?
+  providerSignature String?
+  refundIds         String[]
+  meta              Json?
+  failureReason     String?
+  paidAt            DateTime?
+  refundedAt        DateTime?
+  createdBy         String?
+  updatedBy         String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  // Relations (optional backrefs)
+  idCards           HrcIdCard[]
+  donations         HrcDonation[]
+
+  @@index([purpose])
+  @@index([status])
+}
+
+model RazorpayWebhookEvent {
+  id              String    @id @default(cuid())
+  eventType       String
+  payload         Json
+  processed       Boolean   @default(false)
+  signature       String?
+  relatedOrderId  String?
+  relatedPaymentId String?
+  receivedAt      DateTime  @default(now())
+  processedAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([processed])
+  @@index([relatedOrderId])
+  @@index([relatedPaymentId])
 }
