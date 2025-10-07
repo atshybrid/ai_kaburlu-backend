@@ -3,7 +3,7 @@
     "target": "es2017",
     "module": "commonjs",
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": "./",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -15,6 +15,7 @@
   "typeRoots": ["./src/types", "./node_modules/@types"]
   },
   "include": [
-    "src/**/*"
+    "src/**/*",
+    "scripts/**/*"
   ]
 }

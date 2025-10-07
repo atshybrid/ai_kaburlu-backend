@@ -7,7 +7,8 @@ function ensureSuperAdminOrManager(req: any, res: any, next: any) {
   return res.status(403).json({ error: 'Forbidden: insufficient role' });
 }
 import { validationMiddleware } from '../middlewares/validation.middleware';
-import { PaymentOrderRequestDto, VolunteerOnboardDto, VolunteerOnboardDtoExtended, IdCardIssueDto, CreateCaseDto, ListCasesQueryDto, CaseUpdateDto, CaseAssignDto, CaseStatusChangeDto, CaseAttachmentDto } from './hrc.dto';
+import { PaymentOrderRequestDto, VolunteerOnboardDto, VolunteerOnboardDtoExtended, IdCardIssueDto, CreateCaseDto, ListCasesQueryDto, CaseUpdateDto, CaseAssignDto, CaseStatusChangeDto, CaseAttachmentDto, CreateIdCardPlanDto, ListIdCardPlansQueryDto } from './hrc.dto';
+import { validatePlanApplicability } from './hrc.plan.util';
 import { verifyRazorpaySignature } from './hrc.razorpay';
 import prisma from '../../lib/prisma';
 import { resolveFee } from './hrc.fees.service';
@@ -90,6 +91,36 @@ const router = Router();
  *               type: string
  *             villageName:
  *               type: string
+ *             fullName:
+ *               type: string
+ *             cellId:
+ *               type: string
+ *             idCardPlanId:
+ *               type: string
+ *     CreateIdCardPlanDto:
+ *       type: object
+ *       required: [name, amountMinor]
+ *       properties:
+ *         name: { type: string }
+ *         description: { type: string }
+ *         amountMinor: { type: integer }
+ *         currency: { type: string, example: INR }
+ *         renewalDays: { type: integer, example: 365 }
+ *         allowedHierarchyLevels: { type: array, items: { type: string, enum: [NHRC, SHRC, DISTRICT, MANDAL, VILLAGE] } }
+ *         stateId: { type: string }
+ *         districtId: { type: string }
+ *         mandalId: { type: string }
+ *         isActive: { type: boolean }
+ *     ListIdCardPlansQueryDto:
+ *       type: object
+ *       properties:
+ *         active: { type: boolean }
+ *         hierarchyLevel: { type: string, enum: [NHRC, SHRC, DISTRICT, MANDAL, VILLAGE] }
+ *         stateId: { type: string }
+ *         districtId: { type: string }
+ *         mandalId: { type: string }
+ *         skip: { type: integer }
+ *         take: { type: integer }
  *     IdCardIssueDto:
  *       type: object
  *       required: [paymentTransactionId]
@@ -143,6 +174,105 @@ router.get('/health', (_req, res) => {
   res.json({ success: true, module: 'HRCI', status: 'scaffold', version: 1 });
 });
 
+// --- ID CARD PLANS ---
+/**
+ * @swagger
+ * /api/v1/hrc/idcard-plans:
+ *   post:
+ *     summary: Create ID card subscription plan
+ *     tags: [HRCI]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/CreateIdCardPlanDto'
+ *     responses:
+ *       200:
+ *         description: Plan created
+ *   get:
+ *     summary: List ID card subscription plans
+ *     tags: [HRCI]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: active
+ *         schema: { type: boolean }
+ *       - in: query
+ *         name: hierarchyLevel
+ *         schema: { type: string, enum: [NHRC, SHRC, DISTRICT, MANDAL, VILLAGE] }
+ *       - in: query
+ *         name: stateId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: districtId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: mandalId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: skip
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: take
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Plans list
+ */
+router.post('/idcard-plans', passport.authenticate('jwt', { session: false }), ensureSuperAdminOrManager, validationMiddleware(CreateIdCardPlanDto), async (req: any, res) => {
+  try {
+    const body = req.body as CreateIdCardPlanDto;
+    const plan = await (prisma as any).hrcIdCardPlan.create({
+      data: {
+        planName: body.name,
+        amountMinor: body.amountMinor,
+        currency: body.currency || 'INR',
+        renewalDays: body.renewalDays || 365,
+        hierarchyLevel: undefined, // mapping allowedHierarchyLevels -> if single level; multi-level left null (global logic handled in applicability util)
+        stateId: body.stateId,
+        districtId: body.districtId,
+        mandalId: body.mandalId,
+        active: body.isActive ?? true,
+        createdBy: req.user?.id
+      }
+    });
+    // store allowedHierarchyLevels in meta via separate table later; for now ignore multi-level nuance
+    res.json({ success: true, plan });
+  } catch (e: any) {
+    console.error('Create plan error', e);
+    res.status(500).json({ error: 'Failed to create plan', message: e?.message });
+  }
+});
+
+router.get('/idcard-plans', passport.authenticate('jwt', { session: false }), async (req: any, res) => {
+  try {
+    const filters: ListIdCardPlansQueryDto = {
+      active: req.query.active !== undefined ? ['true','1','yes'].includes(String(req.query.active).toLowerCase()) : undefined,
+      hierarchyLevel: req.query.hierarchyLevel,
+      stateId: req.query.stateId,
+      districtId: req.query.districtId,
+      mandalId: req.query.mandalId,
+      skip: req.query.skip ? parseInt(req.query.skip,10) : undefined,
+      take: req.query.take ? parseInt(req.query.take,10) : undefined
+    } as any;
+    const where: any = {};
+    if (filters.active !== undefined) where.active = filters.active;
+    if (filters.hierarchyLevel) where.hierarchyLevel = filters.hierarchyLevel; // may be null for global
+    if (filters.stateId) where.stateId = filters.stateId;
+    if (filters.districtId) where.districtId = filters.districtId;
+    if (filters.mandalId) where.mandalId = filters.mandalId;
+    const plans = await (prisma as any).hrcIdCardPlan.findMany({ where, skip: filters.skip, take: filters.take, orderBy: { createdAt: 'desc' } });
+    res.json({ success: true, plans });
+  } catch (e: any) {
+    console.error('List plan error', e);
+    res.status(500).json({ error: 'Failed to list plans', message: e?.message });
+  }
+});
+
 // --- TEAMS (phase 1 minimal placeholders) ---
 router.post('/teams', passport.authenticate('jwt', { session: false }), ensureSuperAdminOrManager, (_req, res) => {
   res.status(501).json({ error: 'Not implemented yet' });
@@ -157,8 +287,7 @@ router.post('/volunteers/onboard', passport.authenticate('jwt', { session: false
   try {
     const userId = req.body.userId || req.user?.id;
     if (!userId) return res.status(400).json({ error: 'Missing userId' });
-
-    const { hierarchyLevel, countryCode, stateId, districtId, mandalId, villageName, cellTypes } = req.body as any;
+    const { hierarchyLevel, countryCode, stateId, districtId, mandalId, villageName, cellTypes, fullName, cellId, idCardPlanId } = req.body as any;
     if (hierarchyLevel) {
       if (!countryCode) return res.status(400).json({ error: 'countryCode required for hierarchyLevel' });
       if (['SHRC','DISTRICT','MANDAL','VILLAGE'].includes(hierarchyLevel) && !stateId) return res.status(400).json({ error: 'stateId required' });
@@ -169,6 +298,17 @@ router.post('/volunteers/onboard', passport.authenticate('jwt', { session: false
 
     const user = await (prisma as any).user.findUnique({ where: { id: userId }, include: { hrcVolunteerProfile: true } });
     if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Upsert fullName into profile (assuming user has profile or we store in user.name fallback)
+    if (fullName) {
+      // try userProfile
+      try {
+        await (prisma as any).userProfile.upsert({ where: { userId }, update: { fullName }, create: { userId, fullName } });
+      } catch (_) {
+        // fallback: update user name if column exists
+        try { await (prisma as any).user.update({ where: { id: userId }, data: { name: fullName } }); } catch (_) { /* ignore */ }
+      }
+    }
 
     let volunteer = user.hrcVolunteerProfile;
     if (!volunteer) {
@@ -211,6 +351,12 @@ router.post('/volunteers/onboard', passport.authenticate('jwt', { session: false
     }
 
     const teamIds: string[] = [...(req.body.teamIds || []), ...autoTeams];
+    // attach explicit cellId if provided (must reference a team with cellType)
+    if (cellId) {
+      const cellTeam = await (prisma as any).hrcTeam.findUnique({ where: { id: cellId } });
+      if (!cellTeam || !cellTeam.cellType) return res.status(400).json({ error: 'cellId invalid or not a cell team' });
+      if (!teamIds.includes(cellId)) teamIds.push(cellId);
+    }
     const memberships: any[] = [];
     for (const tId of teamIds) {
       const team = await (prisma as any).hrcTeam.findUnique({ where: { id: tId } });
@@ -219,7 +365,26 @@ router.post('/volunteers/onboard', passport.authenticate('jwt', { session: false
       memberships.push(member);
     }
 
-    res.json({ success: true, volunteer, membershipsCount: memberships.length, autoTeamsCreated: autoTeams.length });
+    // If plan specified attempt immediate ID card creation (free issuance path - no payment here)
+    let issuedIdCard: any = null;
+    if (idCardPlanId) {
+      const vContext = { planId: idCardPlanId, hierarchyLevel, stateId, districtId, mandalId };
+      const validation = await validatePlanApplicability(vContext);
+      if (!validation.ok) return res.status(400).json({ error: 'Plan not applicable', reason: validation.reason });
+      const plan = validation.plan as any;
+      const expiry = new Date();
+      expiry.setDate(expiry.getDate() + (plan.renewalDays || 365));
+      issuedIdCard = await (prisma as any).hrcIdCard.create({ data: {
+        volunteerId: volunteer.id,
+        planId: plan.id,
+        expiryDate: expiry,
+        renewalIntervalMonths: Math.round((plan.renewalDays || 365)/30),
+        feeAmountMinor: plan.amountMinor,
+        currency: plan.currency,
+        status: 'ACTIVE'
+      }});
+    }
+    res.json({ success: true, volunteer, membershipsCount: memberships.length, autoTeamsCreated: autoTeams.length, idCardIssued: !!issuedIdCard, idCard: issuedIdCard });
   } catch (e: any) {
     console.error('Volunteer onboard error', e);
     res.status(500).json({ error: 'Failed to onboard volunteer', message: e?.message });

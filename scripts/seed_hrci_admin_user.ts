@@ -1,4 +1,5 @@
 import prisma from '../src/lib/prisma';
+import { hashMpin } from '../src/lib/mpin';
 
 /**
  * Seeds a default HRCI admin user with provided mobile + mpin.
@@ -8,7 +9,7 @@ import prisma from '../src/lib/prisma';
 async function main() {
   console.log('Seeding default HRCI admin user...');
   const mobileNumber = '9118191991';
-  const mpin = '1947';
+  const rawMpin = '1947';
 
   // Ensure language
   let language = await (prisma as any).language.findFirst();
@@ -34,10 +35,16 @@ async function main() {
   });
 
   // Upsert user
+  // Check existing user to avoid double hashing
+  const existing = await (prisma as any).user.findUnique({ where: { mobileNumber } });
+  let hashed = existing?.mpin;
+  if (!hashed || !hashed.startsWith('$2')) {
+    hashed = await hashMpin(rawMpin);
+  }
   const user = await (prisma as any).user.upsert({
     where: { mobileNumber },
-    update: { mpin, roleId: role.id, languageId: language.id, status: 'ACTIVE' },
-    create: { mobileNumber, mpin, roleId: role.id, languageId: language.id, status: 'ACTIVE' }
+    update: { mpin: hashed, roleId: role.id, languageId: language.id, status: 'ACTIVE' },
+    create: { mobileNumber, mpin: hashed, roleId: role.id, languageId: language.id, status: 'ACTIVE' }
   });
 
   console.log('Default HRCI admin user ready:', { userId: user.id, mobileNumber });

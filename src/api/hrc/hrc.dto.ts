@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEnum, IsArray, ArrayNotEmpty, IsInt, Min, IsIn, IsUUID } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsArray, ArrayNotEmpty, IsInt, Min, IsIn, IsUUID, IsBoolean, IsDateString } from 'class-validator';
 
 // Prisma enums are not imported directly (codegen naming may differ in runtime build). Use string unions for DTO validation.
 export const TeamScopeLevelValues = ['GLOBAL','COUNTRY','STATE','DISTRICT','MANDAL'] as const;
@@ -67,6 +67,40 @@ export class VolunteerOnboardDtoExtended {
   @IsOptional() @IsString() mandalId?: string;    // required for MANDAL and VILLAGE
   @IsOptional() @IsString() villageName?: string; // only for VILLAGE (no dedicated model yet)
   @IsOptional() @IsArray() @ArrayNotEmpty() @IsIn(HrcCellTypeValues, { each: true }) cellTypes?: HrcCellType[];
+  // New extended onboarding fields
+  @IsOptional() @IsString() fullName?: string; // store into user profile
+  @IsOptional() @IsString() cellId?: string;   // link to a cell team (HrcTeam with cellType)
+  @IsOptional() @IsString() idCardPlanId?: string; // optional immediate ID card plan subscription
+}
+
+// ---------------------------
+// ID CARD PLAN DTOs
+// ---------------------------
+export class CreateIdCardPlanDto {
+  @IsString() name!: string;
+  @IsOptional() @IsString() description?: string;
+  @IsInt() @Min(1) amountMinor!: number; // amount in minor units (e.g. paise)
+  @IsOptional() @IsString() currency?: string; // default INR
+  @IsOptional() @IsInt() @Min(1) renewalDays?: number; // e.g. 365
+  // Applicability scoping
+  @IsOptional() @IsArray() @ArrayNotEmpty() @IsIn(VolunteerHierarchyLevelValues, { each: true }) allowedHierarchyLevels?: VolunteerHierarchyLevel[]; // if omitted assume all
+  @IsOptional() @IsString() stateId?: string;    // restrict to a state
+  @IsOptional() @IsString() districtId?: string; // restrict to a district
+  @IsOptional() @IsString() mandalId?: string;   // restrict to a mandal
+  // Active window
+  @IsOptional() @IsDateString() activeFrom?: string;
+  @IsOptional() @IsDateString() activeTo?: string;
+  @IsOptional() @IsBoolean() isActive?: boolean; // default true
+}
+
+export class ListIdCardPlansQueryDto {
+  @IsOptional() @IsBoolean() active?: boolean;
+  @IsOptional() @IsIn(VolunteerHierarchyLevelValues) hierarchyLevel?: VolunteerHierarchyLevel;
+  @IsOptional() @IsString() stateId?: string;
+  @IsOptional() @IsString() districtId?: string;
+  @IsOptional() @IsString() mandalId?: string;
+  @IsOptional() @IsInt() @Min(0) skip?: number;
+  @IsOptional() @IsInt() @Min(1) take?: number;
 }
 
 // Payment order (for ID card or donation)

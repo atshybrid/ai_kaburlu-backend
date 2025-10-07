@@ -649,6 +649,31 @@ enum HrcCellType {
   AWARENESS_EDUCATION
 }
 
+/// Plan catalog for issuing/renewing HRCI ID cards with hierarchical applicability constraints
+model HrcIdCardPlan {
+  id            String          @id @default(cuid())
+  planName      String
+  amountMinor   Int
+  currency      String          @default("INR")
+  renewalDays   Int              // validity period in days
+  hierarchyLevel TeamScopeLevel? // if null -> global plan
+  stateId       String?
+  districtId    String?
+  mandalId      String?
+  active        Boolean         @default(true)
+  createdBy     String?
+  updatedBy     String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  idCards       HrcIdCard[]
+
+  @@index([hierarchyLevel])
+  @@index([stateId])
+  @@index([districtId])
+  @@index([mandalId])
+  @@index([active])
+}
+
 model HrcTeam {
   id          String          @id @default(cuid())
   name        String
@@ -729,6 +754,8 @@ model HrcIdCard {
   status                IdCardStatus        @default(PENDING_PAYMENT)
   paymentTxnId          String?
   paymentTxn            PaymentTransaction? @relation(fields: [paymentTxnId], references: [id])
+  planId                String?
+  plan                  HrcIdCardPlan?      @relation(fields: [planId], references: [id])
   revokedReason         String?
   createdBy             String?
   updatedBy             String?
@@ -737,6 +764,7 @@ model HrcIdCard {
 
   @@index([volunteerId])
   @@index([status])
+  @@index([planId])
 }
 
 model HrcCase {
