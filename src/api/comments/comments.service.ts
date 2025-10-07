@@ -15,7 +15,7 @@ type RepliesInclude = {
         }
       } 
     },
-    replies?: RepliesInclude | boolean;
+    children?: RepliesInclude | boolean;
   };
   orderBy: { createdAt: 'asc' };
 } | boolean;
@@ -35,7 +35,7 @@ const recursiveReplies = (depth = 5): RepliesInclude => {
           }
         } 
       },
-      replies: recursiveReplies(depth - 1)
+      children: recursiveReplies(depth - 1)
     },
     orderBy: { createdAt: 'asc' }
   };
@@ -133,7 +133,7 @@ export const getComments = async ({ articleId, shortNewsId, depth = 5 }: GetComm
           }
         } 
       },
-      replies: recursiveReplies(depth)
+      children: recursiveReplies(depth)
     },
     orderBy: { createdAt: 'desc' }
   });

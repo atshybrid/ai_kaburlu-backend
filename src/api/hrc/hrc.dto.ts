@@ -67,6 +67,7 @@ export class VolunteerOnboardDtoExtended {
   @IsOptional() @IsString() mandalId?: string;    // required for MANDAL and VILLAGE
   @IsOptional() @IsString() villageName?: string; // only for VILLAGE (no dedicated model yet)
   @IsOptional() @IsArray() @ArrayNotEmpty() @IsIn(HrcCellTypeValues, { each: true }) cellTypes?: HrcCellType[];
+  @IsOptional() @IsArray() @ArrayNotEmpty() cellCatalogIds?: string[]; // preferred over cellTypes when provided
   // New extended onboarding fields
   @IsOptional() @IsString() fullName?: string; // store into user profile
   @IsOptional() @IsString() cellId?: string;   // link to a cell team (HrcTeam with cellType)

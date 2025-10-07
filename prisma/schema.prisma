@@ -433,7 +433,7 @@ model Comment {
   content     String
   parent      Comment?   @relation("Replies", fields: [parentId], references: [id])
   parentId    String?
-  replies     Comment[]  @relation("Replies")
+  children    Comment[]  @relation("Replies")
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
@@ -658,6 +658,7 @@ model HrcCellCatalog {
   active      Boolean     @default(true)
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
+  teams       HrcTeam[]
 }
 
 /// Plan catalog for issuing/renewing HRCI ID cards with hierarchical applicability constraints
@@ -691,6 +692,8 @@ model HrcTeam {
   description String?
   scopeLevel  TeamScopeLevel
   cellType    HrcCellType?
+  cellCatalog   HrcCellCatalog? @relation(fields: [cellCatalogId], references: [id])
+  cellCatalogId String?
   countryCode String?
   stateId     String?
   districtId  String?
@@ -712,6 +715,7 @@ model HrcTeam {
   @@index([stateId])
   @@index([districtId])
   @@index([mandalId])
+  @@index([cellCatalogId])
 }
 
 model HrcVolunteerProfile {

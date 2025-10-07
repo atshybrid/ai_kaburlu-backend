@@ -287,7 +287,7 @@ router.post('/volunteers/onboard', passport.authenticate('jwt', { session: false
   try {
     const userId = req.body.userId || req.user?.id;
     if (!userId) return res.status(400).json({ error: 'Missing userId' });
-    const { hierarchyLevel, countryCode, stateId, districtId, mandalId, villageName, cellTypes, fullName, cellId, idCardPlanId } = req.body as any;
+  const { hierarchyLevel, countryCode, stateId, districtId, mandalId, villageName, cellTypes, cellCatalogIds, fullName, cellId, idCardPlanId } = req.body as any;
     if (hierarchyLevel) {
       if (!countryCode) return res.status(400).json({ error: 'countryCode required for hierarchyLevel' });
       if (['SHRC','DISTRICT','MANDAL','VILLAGE'].includes(hierarchyLevel) && !stateId) return res.status(400).json({ error: 'stateId required' });
@@ -333,8 +333,16 @@ router.post('/volunteers/onboard', passport.authenticate('jwt', { session: false
       const baseTeam = await (prisma as any).hrcTeam.upsert({ where: { name: baseName }, update: {}, create: { name: baseName, scopeLevel, ...baseData, description: `Auto-created base team for ${hierarchyLevel}` } });
       autoTeams.push(baseTeam.id);
 
-      // Cell teams
-      if (Array.isArray(cellTypes) && cellTypes.length) {
+      // Cell teams - prefer catalog IDs over raw cellTypes
+      if (Array.isArray(cellCatalogIds) && cellCatalogIds.length) {
+        for (const catalogId of cellCatalogIds) {
+          const cat = await (prisma as any).hrcCellCatalog.findUnique({ where: { id: catalogId } });
+          if (!cat) continue;
+          const cellName = `${baseName} - ${cat.title}`;
+          const cellTeam = await (prisma as any).hrcTeam.upsert({ where: { name: cellName }, update: { cellCatalogId: cat.id }, create: { name: cellName, scopeLevel, ...baseData, description: cat.description || `Auto-created cell team ${cat.code}`, cellCatalogId: cat.id, cellType: cat.code } });
+          autoTeams.push(cellTeam.id);
+        }
+      } else if (Array.isArray(cellTypes) && cellTypes.length) {
         for (const cellType of cellTypes) {
           let cellName = '';
           switch (cellType) {
