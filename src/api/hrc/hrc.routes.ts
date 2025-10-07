@@ -7,11 +7,12 @@ function ensureSuperAdminOrManager(req: any, res: any, next: any) {
   return res.status(403).json({ error: 'Forbidden: insufficient role' });
 }
 import { validationMiddleware } from '../middlewares/validation.middleware';
-import { PaymentOrderRequestDto, VolunteerOnboardDto, IdCardIssueDto } from './hrc.dto';
+import { PaymentOrderRequestDto, VolunteerOnboardDto, IdCardIssueDto, CreateCaseDto, ListCasesQueryDto, CaseUpdateDto, CaseAssignDto, CaseStatusChangeDto, CaseAttachmentDto } from './hrc.dto';
 import { verifyRazorpaySignature } from './hrc.razorpay';
 import prisma from '../../lib/prisma';
 import { resolveFee } from './hrc.fees.service';
 import { createRazorpayOrder } from './hrc.razorpay';
+import { createCase, listCases, getCaseById, addCaseUpdate, assignCase, changeCaseStatus, addAttachment } from './hrc.cases.service';
 
 const router = Router();
 
@@ -82,6 +83,40 @@ const router = Router();
  *           type: string
  *         renewalIntervalMonths:
  *           type: integer
+ *     CreateCaseDto:
+ *       type: object
+ *       required: [title, description]
+ *       properties:
+ *         title: { type: string }
+ *         description: { type: string }
+ *         priority: { type: string, enum: [LOW, MEDIUM, HIGH, URGENT] }
+ *         teamId: { type: string }
+ *         assignedToVolunteerId: { type: string }
+ *         locationStateId: { type: string }
+ *         locationDistrictId: { type: string }
+ *         locationMandalId: { type: string }
+ *     CaseUpdateDto:
+ *       type: object
+ *       properties:
+ *         note: { type: string }
+ *         newStatus: { type: string, enum: [NEW, UNDER_REVIEW, IN_PROGRESS, ESCALATED, RESOLVED, CLOSED, REJECTED] }
+ *     CaseAssignDto:
+ *       type: object
+ *       properties:
+ *         teamId: { type: string }
+ *         assignedToVolunteerId: { type: string }
+ *     CaseStatusChangeDto:
+ *       type: object
+ *       required: [status]
+ *       properties:
+ *         status: { type: string, enum: [NEW, UNDER_REVIEW, IN_PROGRESS, ESCALATED, RESOLVED, CLOSED, REJECTED] }
+ *         note: { type: string }
+ *     CaseAttachmentDto:
+ *       type: object
+ *       required: [url]
+ *       properties:
+ *         url: { type: string }
+ *         mimeType: { type: string }
  */
 
 // HEALTH / VERSION
@@ -233,17 +268,115 @@ router.post('/idcards/issue', passport.authenticate('jwt', { session: false }), 
 });
 
 // --- CASES ---
-router.post('/cases', passport.authenticate('jwt', { session: false }), (_req, res) => {
-  res.status(501).json({ error: 'Not implemented yet' });
+router.post('/cases', passport.authenticate('jwt', { session: false }), validationMiddleware(CreateCaseDto), async (req: any, res) => {
+  try {
+    // Ensure user has volunteer profile
+    let volunteer = await (prisma as any).hrcVolunteerProfile.findUnique({ where: { userId: req.user.id } });
+    if (!volunteer) {
+      return res.status(400).json({ error: 'User is not a volunteer' });
+    }
+    const body = req.body as CreateCaseDto;
+    const created = await createCase({
+      title: body.title,
+      description: body.description,
+      priority: body.priority,
+      reporterVolunteerId: volunteer.id,
+      teamId: body.teamId,
+      assignedToVolunteerId: body.assignedToVolunteerId,
+      locationStateId: body.locationStateId,
+      locationDistrictId: body.locationDistrictId,
+      locationMandalId: body.locationMandalId
+    });
+    res.json({ success: true, case: created });
+  } catch (e: any) {
+    console.error('Create case error', e);
+    res.status(500).json({ error: 'Failed to create case', message: e?.message });
+  }
 });
 
-// --- DONATIONS ---
-router.post('/donations', (_req, res) => {
-  // public / anonymous allowed for initiating donation intent
-  res.status(501).json({ error: 'Not implemented yet' });
+// List cases
+router.get('/cases', passport.authenticate('jwt', { session: false }), async (req: any, res) => {
+  try {
+    const filters: ListCasesQueryDto = {
+      status: req.query.status,
+      priority: req.query.priority,
+      teamId: req.query.teamId,
+      reporterId: req.query.reporterId,
+      assignedToId: req.query.assignedToId,
+      skip: req.query.skip ? parseInt(req.query.skip, 10) : undefined,
+      take: req.query.take ? parseInt(req.query.take, 10) : undefined
+    };
+    const results = await listCases(filters);
+    res.json({ success: true, cases: results });
+  } catch (e: any) {
+    console.error('List cases error', e);
+    res.status(500).json({ error: 'Failed to list cases', message: e?.message });
+  }
 });
 
-// --- PAYMENTS (Razorpay) ---
+// Get case detail
+router.get('/cases/:id', passport.authenticate('jwt', { session: false }), async (req: any, res) => {
+  try {
+    const c = await getCaseById(req.params.id);
+    if (!c) return res.status(404).json({ error: 'Case not found' });
+    res.json({ success: true, case: c });
+  } catch (e: any) {
+    console.error('Get case error', e);
+    res.status(500).json({ error: 'Failed to load case', message: e?.message });
+  }
+});
+
+// Add update to case
+router.post('/cases/:id/updates', passport.authenticate('jwt', { session: false }), validationMiddleware(CaseUpdateDto), async (req: any, res) => {
+  try {
+    const caseId = req.params.id;
+    const volunteer = await (prisma as any).hrcVolunteerProfile.findUnique({ where: { userId: req.user.id } });
+    const upd = await addCaseUpdate({ caseId, authorVolunteerId: volunteer?.id, note: req.body.note, newStatus: req.body.newStatus });
+    res.json({ success: true, update: upd });
+  } catch (e: any) {
+    console.error('Add case update error', e);
+    res.status(500).json({ error: 'Failed to add case update', message: e?.message });
+  }
+});
+
+// Assign case
+router.patch('/cases/:id/assign', passport.authenticate('jwt', { session: false }), validationMiddleware(CaseAssignDto), async (req: any, res) => {
+  try {
+    // TODO: permission check for assignment (admin / coordinator)
+    const c = await assignCase({ caseId: req.params.id, teamId: req.body.teamId, assignedToVolunteerId: req.body.assignedToVolunteerId });
+    res.json({ success: true, case: c });
+  } catch (e: any) {
+    console.error('Assign case error', e);
+    res.status(500).json({ error: 'Failed to assign case', message: e?.message });
+  }
+});
+
+// Change status
+router.patch('/cases/:id/status', passport.authenticate('jwt', { session: false }), validationMiddleware(CaseStatusChangeDto), async (req: any, res) => {
+  try {
+    // TODO: permission check
+    const volunteer = await (prisma as any).hrcVolunteerProfile.findUnique({ where: { userId: req.user.id } });
+    const upd = await changeCaseStatus({ caseId: req.params.id, status: req.body.status, note: req.body.note, authorVolunteerId: volunteer?.id });
+    res.json({ success: true, update: upd });
+  } catch (e: any) {
+    console.error('Status change error', e);
+    res.status(500).json({ error: 'Failed to change status', message: e?.message });
+  }
+});
+
+// Add attachment
+router.post('/cases/:id/attachments', passport.authenticate('jwt', { session: false }), validationMiddleware(CaseAttachmentDto), async (req: any, res) => {
+  try {
+    const volunteer = await (prisma as any).hrcVolunteerProfile.findUnique({ where: { userId: req.user.id } });
+    const att = await addAttachment({ caseId: req.params.id, url: req.body.url, mimeType: req.body.mimeType, uploadedByVolunteerId: volunteer?.id });
+    res.json({ success: true, attachment: att });
+  } catch (e: any) {
+    console.error('Add attachment error', e);
+    res.status(500).json({ error: 'Failed to add attachment', message: e?.message });
+  }
+});
+
+
 router.post('/payments/order', passport.authenticate('jwt', { session: false }), validationMiddleware(PaymentOrderRequestDto), async (req: any, res) => {
   try {
     const { purpose, teamId, mandalId, districtId, stateId, amountMinorOverride, currency } = req.body as PaymentOrderRequestDto;

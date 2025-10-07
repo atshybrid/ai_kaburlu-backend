@@ -78,12 +78,18 @@ async function main() {
 
   // 8. Create a demo case (reported by volunteer) if reporter relation exists
   let caseRecord: any = null;
-  if (await prisma.$queryRaw`SELECT column_name FROM information_schema.columns WHERE table_name = '"HrcCase"'`) {
-  caseRecord = await p.hrcCase.upsert({
+  if (await prisma.$queryRaw`SELECT column_name FROM information_schema.columns WHERE table_name = 'HrcCase'`) {
+    caseRecord = await p.hrcCase.upsert({
       where: { referenceCode: 'CASE-DEMO-001' },
       update: {},
       create: { referenceCode: 'CASE-DEMO-001', title: 'Demo Grievance', description: 'Example case description', reporterId: volunteer.id, teamId: womenCell.id, priority: 'MEDIUM', status: 'NEW' }
     });
+    // Add an initial case update (idempotent simplistic check)
+    const existingUpdate = await p.hrcCaseUpdate.findFirst({ where: { caseId: caseRecord.id } });
+    if (!existingUpdate) {
+      await p.hrcCaseUpdate.create({ data: { caseId: caseRecord.id, note: 'Initial case created for demonstration', statusFrom: 'NEW', statusTo: 'UNDER_REVIEW' } });
+      await p.hrcCase.update({ where: { id: caseRecord.id }, data: { status: 'UNDER_REVIEW' } });
+    }
   }
 
   // 9. Donation example
