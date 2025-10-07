@@ -31,6 +31,7 @@ import notificationsRoutes from './api/notifications/notifications.routes';
 import promptsRoutes from './api/prompts/prompts.routes';
 import preferencesRoutes from './api/preferences/preferences.routes';
 import legalRoutes from './api/legal/legal.routes';
+import hrcRoutes from './api/hrc/hrc.routes';
 import prisma from './lib/prisma';
 import { Request, Response } from 'express';
 import { Router } from 'express';
@@ -145,6 +146,8 @@ app.use('/devices', devicesRoutes);
 app.use('/notifications', notificationsRoutes);
 app.use('/prompts', promptsRoutes);
 app.use('/preferences', preferencesRoutes);
+app.use('/legal', legalRoutes);
+app.use('/hrc', hrcRoutes);
 // Lightweight schema drift health check (checks presence of key ShortNews columns)
 app.get('/health/schema', async (_req: Request, res: Response) => {
   try {
@@ -197,6 +200,7 @@ apiV1.use('/notifications', notificationsRoutes);
 apiV1.use('/prompts', promptsRoutes);
 apiV1.use('/preferences', preferencesRoutes);
 apiV1.use('/legal', legalRoutes);
+apiV1.use('/hrc', hrcRoutes);
 // Internal-only routes (enabled with ENABLE_INTERNAL_TEST_ROUTES=1)
 if (String(process.env.ENABLE_INTERNAL_TEST_ROUTES) === '1') {
   apiV1.get('/internal/push-logs/shortnews/:id', async (req: Request, res: Response) => {

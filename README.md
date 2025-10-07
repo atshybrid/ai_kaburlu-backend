@@ -1,5 +1,7 @@
 # Node + Express Service Starter
 
+> HRCI Module (Human Rights & Citizen Initiative) – scaffold added. Implements volunteer hierarchy, ID cards, cases, donations, Razorpay payments (in progress).
+
 This is a simple API sample in Node.js with express.js based on [Google Cloud Run Quickstart](https://cloud.google.com/run/docs/quickstarts/build-and-deploy/deploy-nodejs-service).
 
 ## Getting Started
@@ -206,6 +208,13 @@ Returns array of current reaction + aggregate counts.
 |----------|---------|---------|
 | READ_COMPLETE_MIN_TIME_MS | Min ms for completion | 8000 |
 | READ_COMPLETE_SCROLL_PERCENT | Scroll % for completion | 85 |
+| RAZORPAY_KEY_ID | Razorpay public key | (none) |
+| RAZORPAY_KEY_SECRET | Razorpay secret key | (none) |
+| RAZORPAY_WEBHOOK_SECRET | HMAC secret for webhook signature verify | (none) |
+| HRCI_IDCARD_VALIDITY_DAYS | Default validity window for ID cards | 365 |
+| HRCI_IDCARD_RENEW_GRACE_DAYS | Grace days after expiry for renewal pricing | 30 |
+| HRCI_DEFAULT_CURRENCY | Currency for payments | INR |
+| HRCI_AUTO_EXPIRE_CRON | (future) cron expression for card expiry job | 0 2 * * * |
 
 ---
 
@@ -343,4 +352,22 @@ it('retries when under 58 words', async () => {
 | Error telemetry | Partial (HTTP codes) | Add structured event logs for AI retries & category auto-create |
 | Rate limiting | Not yet | Add simple token bucket per user for AI endpoints |
 | Security | JWT enforced | Add role/permission guard for admin-only AI endpoints |
+
+## HRCI Module Roadmap (High Level)
+Phase 1:
+- Teams CRUD (basic)
+- Volunteer onboarding + profile create
+- Fee resolution & order creation (Razorpay)
+- ID card issue / renew (pending payment success)
+
+Phase 2:
+- Cases CRUD + updates + attachments
+- Donations (anonymous + attributed)
+- Refund initiation (admin)
+
+Phase 3:
+- Reporting & analytics endpoints
+- Automated expiry job & renewal reminders
+- Escalation & SLA timers
+- Recurring donations placeholder activation
 

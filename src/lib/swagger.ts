@@ -1,4 +1,3 @@
-
 import swaggerJSDoc from 'swagger-jsdoc';
 import { userSwagger } from '../api/users/users.swagger';
 
@@ -35,7 +34,8 @@ const swaggerDefinition = {
     { name: 'Translate' },
     { name: 'Media' },
     { name: 'Prompts' },
-    { name: 'Engagement - Comments' }
+    { name: 'Engagement - Comments' },
+    { name: 'HRCI' }
   ],
   components: {
     securitySchemes: {
