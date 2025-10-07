@@ -641,11 +641,20 @@ enum HrcTeamMemberRole {
   ADMIN
 }
 
+/// Thematic specialization for a human rights cell / team
+enum HrcCellType {
+  COMPLAINT_LEGAL_SUPPORT
+  WOMEN_CHILD_RIGHTS
+  SOCIAL_JUSTICE
+  AWARENESS_EDUCATION
+}
+
 model HrcTeam {
   id          String          @id @default(cuid())
   name        String
   description String?
   scopeLevel  TeamScopeLevel
+  cellType    HrcCellType?
   countryCode String?
   stateId     String?
   districtId  String?
@@ -663,6 +672,7 @@ model HrcTeam {
   updatedAt   DateTime        @updatedAt
 
   @@index([scopeLevel])
+  @@index([cellType])
   @@index([stateId])
   @@index([districtId])
   @@index([mandalId])

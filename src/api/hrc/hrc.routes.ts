@@ -158,95 +158,64 @@ router.post('/volunteers/onboard', passport.authenticate('jwt', { session: false
     const userId = req.body.userId || req.user?.id;
     if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
-    // Validate hierarchy requirements if provided
-    const { hierarchyLevel, countryCode, stateId, districtId, mandalId, villageName } = req.body as VolunteerOnboardDtoExtended;
+    const { hierarchyLevel, countryCode, stateId, districtId, mandalId, villageName, cellTypes } = req.body as any;
     if (hierarchyLevel) {
       if (!countryCode) return res.status(400).json({ error: 'countryCode required for hierarchyLevel' });
-      if (['SHRC','DISTRICT','MANDAL','VILLAGE'].includes(hierarchyLevel) && !stateId) return res.status(400).json({ error: 'stateId required for this hierarchyLevel' });
-      if (['DISTRICT','MANDAL','VILLAGE'].includes(hierarchyLevel) && !districtId) return res.status(400).json({ error: 'districtId required for this hierarchyLevel' });
-      if (['MANDAL','VILLAGE'].includes(hierarchyLevel) && !mandalId) return res.status(400).json({ error: 'mandalId required for this hierarchyLevel' });
-      if (hierarchyLevel === 'VILLAGE' && !villageName) return res.status(400).json({ error: 'villageName required for VILLAGE hierarchyLevel' });
+      if (['SHRC','DISTRICT','MANDAL','VILLAGE'].includes(hierarchyLevel) && !stateId) return res.status(400).json({ error: 'stateId required' });
+      if (['DISTRICT','MANDAL','VILLAGE'].includes(hierarchyLevel) && !districtId) return res.status(400).json({ error: 'districtId required' });
+      if (['MANDAL','VILLAGE'].includes(hierarchyLevel) && !mandalId) return res.status(400).json({ error: 'mandalId required' });
+      if (hierarchyLevel === 'VILLAGE' && !villageName) return res.status(400).json({ error: 'villageName required' });
     }
 
-    // Ensure user exists
     const user = await (prisma as any).user.findUnique({ where: { id: userId }, include: { hrcVolunteerProfile: true } });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     let volunteer = user.hrcVolunteerProfile;
     if (!volunteer) {
-      volunteer = await (prisma as any).hrcVolunteerProfile.create({
-        data: {
-          userId,
-          bio: req.body.bio,
-          aadhaarNumber: req.body.aadhaarNumber,
-          addressLine1: req.body.addressLine1,
-          addressLine2: req.body.addressLine2,
-          pincode: req.body.pincode,
-          active: true
-        }
-      });
+      volunteer = await (prisma as any).hrcVolunteerProfile.create({ data: { userId, bio: req.body.bio, aadhaarNumber: req.body.aadhaarNumber, addressLine1: req.body.addressLine1, addressLine2: req.body.addressLine2, pincode: req.body.pincode, active: true } });
     } else if (req.body.bio || req.body.aadhaarNumber) {
-      volunteer = await (prisma as any).hrcVolunteerProfile.update({
-        where: { id: volunteer.id },
-        data: {
-          bio: req.body.bio ?? volunteer.bio,
-          aadhaarNumber: req.body.aadhaarNumber ?? volunteer.aadhaarNumber,
-          addressLine1: req.body.addressLine1 ?? volunteer.addressLine1,
-          addressLine2: req.body.addressLine2 ?? volunteer.addressLine2,
-          pincode: req.body.pincode ?? volunteer.pincode,
-          active: true
-        }
-      });
+      volunteer = await (prisma as any).hrcVolunteerProfile.update({ where: { id: volunteer.id }, data: { bio: req.body.bio ?? volunteer.bio, aadhaarNumber: req.body.aadhaarNumber ?? volunteer.aadhaarNumber, addressLine1: req.body.addressLine1 ?? volunteer.addressLine1, addressLine2: req.body.addressLine2 ?? volunteer.addressLine2, pincode: req.body.pincode ?? volunteer.pincode, active: true } });
     }
 
-    // Determine or create team by hierarchyLevel
+    // Base team (non-cell) for the hierarchy level
     const autoTeams: string[] = [];
     if (hierarchyLevel) {
-      let teamName = '';
+      let baseName = '';
       let scopeLevel = 'GLOBAL';
-      const teamData: any = { active: true };
+      const baseData: any = { active: true };
       switch (hierarchyLevel) {
-        case 'NHRC':
-          teamName = 'NHRC Country Cell';
-          scopeLevel = 'COUNTRY';
-          teamData.countryCode = countryCode;
-          break;
-        case 'SHRC':
-          teamName = `SHRC State Cell ${stateId}`;
-          scopeLevel = 'STATE';
-          teamData.stateId = stateId; break;
-        case 'DISTRICT':
-          teamName = `District Human Rights Volunteer ${districtId}`;
-          scopeLevel = 'DISTRICT';
-          teamData.districtId = districtId; break;
-        case 'MANDAL':
-          teamName = `Mandal Human Rights Volunteer ${mandalId}`;
-          scopeLevel = 'MANDAL';
-          teamData.mandalId = mandalId; break;
-        case 'VILLAGE':
-          teamName = `Village Committee ${villageName}`;
-          scopeLevel = 'MANDAL'; // no VILLAGE enum; attach to mandal scope
-          teamData.mandalId = mandalId; break;
+        case 'NHRC': baseName = 'NHRC Country Cell'; scopeLevel = 'COUNTRY'; baseData.countryCode = countryCode; break;
+        case 'SHRC': baseName = `SHRC State Cell ${stateId}`; scopeLevel = 'STATE'; baseData.stateId = stateId; break;
+        case 'DISTRICT': baseName = `District Human Rights Volunteer ${districtId}`; scopeLevel = 'DISTRICT'; baseData.districtId = districtId; break;
+        case 'MANDAL': baseName = `Mandal Human Rights Volunteer ${mandalId}`; scopeLevel = 'MANDAL'; baseData.mandalId = mandalId; break;
+        case 'VILLAGE': baseName = `Village Committee ${villageName}`; scopeLevel = 'MANDAL'; baseData.mandalId = mandalId; break;
       }
-      const team = await (prisma as any).hrcTeam.upsert({
-        where: { name: teamName },
-        update: {},
-        create: { name: teamName, scopeLevel, ...teamData, description: `Auto-created for ${hierarchyLevel}` }
-      });
-      autoTeams.push(team.id);
+      const baseTeam = await (prisma as any).hrcTeam.upsert({ where: { name: baseName }, update: {}, create: { name: baseName, scopeLevel, ...baseData, description: `Auto-created base team for ${hierarchyLevel}` } });
+      autoTeams.push(baseTeam.id);
+
+      // Cell teams
+      if (Array.isArray(cellTypes) && cellTypes.length) {
+        for (const cellType of cellTypes) {
+          let cellName = '';
+          switch (cellType) {
+            case 'COMPLAINT_LEGAL_SUPPORT': cellName = `${baseName} - Complaint & Legal Support`; break;
+            case 'WOMEN_CHILD_RIGHTS': cellName = `${baseName} - Women & Child Rights`; break;
+            case 'SOCIAL_JUSTICE': cellName = `${baseName} - Social Justice`; break;
+            case 'AWARENESS_EDUCATION': cellName = `${baseName} - Awareness & Education`; break;
+            default: cellName = `${baseName} - Cell`; break;
+          }
+          const cellTeam = await (prisma as any).hrcTeam.upsert({ where: { name: cellName }, update: {}, create: { name: cellName, scopeLevel, ...baseData, description: `Auto-created cell team ${cellType}`, cellType } });
+          autoTeams.push(cellTeam.id);
+        }
+      }
     }
 
-    // Provided teamIds
     const teamIds: string[] = [...(req.body.teamIds || []), ...autoTeams];
     const memberships: any[] = [];
     for (const tId of teamIds) {
       const team = await (prisma as any).hrcTeam.findUnique({ where: { id: tId } });
       if (!team) continue;
-      const member = await (prisma as any).hrcTeamMember.upsert({
-        where: { teamId_volunteerId: { teamId: tId, volunteerId: volunteer.id } },
-        update: { active: true },
-        create: { teamId: tId, volunteerId: volunteer.id, membershipRole: 'MEMBER' }
-      });
+      const member = await (prisma as any).hrcTeamMember.upsert({ where: { teamId_volunteerId: { teamId: tId, volunteerId: volunteer.id } }, update: { active: true }, create: { teamId: tId, volunteerId: volunteer.id, membershipRole: 'MEMBER' } });
       memberships.push(member);
     }
 

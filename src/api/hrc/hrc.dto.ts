@@ -49,6 +49,9 @@ export class VolunteerOnboardDto {
   @IsOptional() @IsString() pincode?: string;
 }
 
+export const HrcCellTypeValues = ['COMPLAINT_LEGAL_SUPPORT','WOMEN_CHILD_RIGHTS','SOCIAL_JUSTICE','AWARENESS_EDUCATION'] as const;
+export type HrcCellType = typeof HrcCellTypeValues[number];
+
 export class VolunteerOnboardDtoExtended {
   @IsOptional() @IsString() userId?: string;
   @IsOptional() @IsArray() @ArrayNotEmpty() teamIds?: string[];
@@ -57,13 +60,13 @@ export class VolunteerOnboardDtoExtended {
   @IsOptional() @IsString() addressLine1?: string;
   @IsOptional() @IsString() addressLine2?: string;
   @IsOptional() @IsString() pincode?: string;
-  // Hierarchy additions
   @IsOptional() @IsIn(VolunteerHierarchyLevelValues) hierarchyLevel?: VolunteerHierarchyLevel;
   @IsOptional() @IsString() countryCode?: string; // required when hierarchyLevel provided
   @IsOptional() @IsString() stateId?: string;     // required for SHRC and below
   @IsOptional() @IsString() districtId?: string;  // required for DISTRICT and below
   @IsOptional() @IsString() mandalId?: string;    // required for MANDAL and VILLAGE
   @IsOptional() @IsString() villageName?: string; // only for VILLAGE (no dedicated model yet)
+  @IsOptional() @IsArray() @ArrayNotEmpty() @IsIn(HrcCellTypeValues, { each: true }) cellTypes?: HrcCellType[];
 }
 
 // Payment order (for ID card or donation)
