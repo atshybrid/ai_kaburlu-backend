@@ -182,6 +182,58 @@ model Country {
   updatedAt DateTime @updatedAt
 }
 
+/// Zones for HRCI geography segmentation
+enum HrcZone {
+  NORTH
+  SOUTH
+  EAST
+  WEST
+  CENTRAL
+}
+
+/// Dedicated HRCI country table (decoupled from generic Country for future divergence)
+model HrcCountry {
+  id        String      @id @default(cuid())
+  name      String      @unique
+  code      String?     @unique
+  states    HrcState[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+}
+
+model HrcState {
+  id        String       @id @default(cuid())
+  name      String       @unique
+  code      String?      @unique
+  zone      HrcZone
+  country   HrcCountry   @relation(fields: [countryId], references: [id])
+  countryId String
+  districts HrcDistrict[]
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+}
+
+model HrcDistrict {
+  id        String      @id @default(cuid())
+  name      String
+  state     HrcState    @relation(fields: [stateId], references: [id])
+  stateId   String
+  mandals   HrcMandal[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  @@unique([stateId, name])
+}
+
+model HrcMandal {
+  id          String      @id @default(cuid())
+  name        String
+  district    HrcDistrict @relation(fields: [districtId], references: [id])
+  districtId  String
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  @@unique([districtId, name])
+}
+
 model State {
   id           String        @id @default(cuid())
   name         String        @unique

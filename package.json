@@ -13,8 +13,10 @@
   "seed:legal": "node scripts/seed_legal.js",
     "seed:full": "ts-node prisma/full-seed.ts",
     "seed:force": "cross-env FORCE_WIPE=1 FULL_SEED=1 ts-node prisma/seed.ts",
-    "ai:smoke": "ts-node scripts/aiDraftSmoke.ts",
-    "postinstall": "prisma generate"
+  "ai:smoke": "ts-node scripts/aiDraftSmoke.ts",
+  "seed:hrci:locations": "npx ts-node scripts/seed_hrci_locations.ts",
+  "check:hrci:counts": "node scripts/check_hrci_counts.js",
+  "postinstall": "prisma generate"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -34,6 +34,7 @@ import legalRoutes from './api/legal/legal.routes';
 import prisma from './lib/prisma';
 import { Request, Response } from 'express';
 import { Router } from 'express';
+import geoHrcRoutes from './api/hrci/geo.routes';
 
 const app = express();
 
@@ -198,6 +199,7 @@ apiV1.use('/notifications', notificationsRoutes);
 apiV1.use('/prompts', promptsRoutes);
 apiV1.use('/preferences', preferencesRoutes);
 apiV1.use('/legal', legalRoutes);
+apiV1.use('/hrci/geo', geoHrcRoutes);
 // Internal-only routes (enabled with ENABLE_INTERNAL_TEST_ROUTES=1)
 if (String(process.env.ENABLE_INTERNAL_TEST_ROUTES) === '1') {
   apiV1.get('/internal/push-logs/shortnews/:id', async (req: Request, res: Response) => {
