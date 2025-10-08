@@ -118,6 +118,117 @@ model Cell {
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  memberships Membership[]
+}
+
+/// Organizational levels for membership slots
+enum OrgLevel {
+  NATIONAL
+  ZONE
+  STATE
+  DISTRICT
+  MANDAL
+}
+
+/// Status of a membership (seat claim lifecycle)
+enum MembershipStatus {
+  PENDING_PAYMENT   // reserved but awaiting payment (amount > 0)
+  PENDING_APPROVAL  // payment amount = 0; requires admin approval
+  ACTIVE            // active, card issued
+  EXPIRED           // id card validity ended
+  REVOKED           // manually revoked by admin
+}
+
+/// Payment status for membership fees
+enum MembershipPaymentStatus {
+  NOT_REQUIRED
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+/// ID Card issuance status
+enum IdCardStatus {
+  NOT_CREATED
+  GENERATED
+  REVOKED
+  EXPIRED
+}
+
+/// Designation template (hierarchical) reused across all cells/levels
+model Designation {
+  id             String          @id @default(cuid())
+  name           String
+  code           String          @unique
+  parentId       String?         @db.VarChar(191)
+  parent         Designation?    @relation("DesignationHierarchy", fields: [parentId], references: [id])
+  children       Designation[]   @relation("DesignationHierarchy")
+  defaultCapacity Int            @default(0)
+  idCardFee      Int             @default(0) // amount in smallest currency unit (e.g., INR rupees)
+  validityDays   Int             @default(365)
+  orderRank      Int             @default(0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  memberships    Membership[]
+  @@unique([name, parentId])
+}
+
+/// Membership claiming a designation at a specific org level + geography + cell
+model Membership {
+  id             String            @id @default(cuid())
+  userId         String            // future relation to User (kept as scalar now to avoid circular edits)
+  cell           Cell              @relation(fields: [cellId], references: [id])
+  cellId         String
+  designation    Designation       @relation(fields: [designationId], references: [id])
+  designationId  String
+  level          OrgLevel
+  // Geographic scoping fields (only one or chain relevant depending on level)
+  hrcCountryId   String?           // for NATIONAL / fallback
+  hrcStateId     String?           // for STATE
+  hrcDistrictId  String?           // for DISTRICT
+  hrcMandalId    String?           // for MANDAL
+  status         MembershipStatus  @default(PENDING_PAYMENT)
+  paymentStatus  MembershipPaymentStatus     @default(NOT_REQUIRED)
+  idCardStatus   IdCardStatus      @default(NOT_CREATED)
+  seatSequence   Int               @default(1) // 1..capacity if we enumerate seats
+  lockedAt       DateTime?         // when seat reserved pre-payment
+  activatedAt    DateTime?
+  expiresAt      DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  payments       MembershipPayment[]
+  idCard         IDCard?
+  @@index([cellId, designationId, level])
+  @@unique([cellId, designationId, level, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId, seatSequence])
+}
+
+/// Payment records linked to a membership
+model MembershipPayment {
+  id             String         @id @default(cuid())
+  membership     Membership     @relation(fields: [membershipId], references: [id])
+  membershipId   String
+  amount         Int            @default(0)
+  status         MembershipPaymentStatus  @default(PENDING)
+  providerRef    String?        // gateway transaction id
+  meta           Json?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+/// Generated ID Card details (simple JSON metadata can expand later)
+model IDCard {
+  id            String        @id @default(cuid())
+  membership    Membership    @relation(fields: [membershipId], references: [id])
+  membershipId  String        @unique
+  cardNumber    String        @unique
+  issuedAt      DateTime      @default(now())
+  expiresAt     DateTime
+  meta          Json?
+  status        IdCardStatus  @default(GENERATED)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 }
 
 model Role {
