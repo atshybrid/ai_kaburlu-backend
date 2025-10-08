@@ -15,7 +15,17 @@ interface MandalSeed { name: string }
 interface DistrictSeed { name: string; mandals: MandalSeed[] }
 interface StateSeed { name: string; code?: string; zone: 'NORTH'|'SOUTH'|'EAST'|'WEST'|'CENTRAL'; districts: DistrictSeed[] }
 
+// Zone mapping approach (simplified regional grouping):
+// NORTH: JK, HP, PB, HR, CH, DL, UK, RJ
+// EAST: BR, JH, WB, OD
+// WEST: GJ, MH, GA, DD&DNH (assign to WEST)
+// CENTRAL: MP, CG, (we keep CENTRAL small & focused)
+// SOUTH: AP, TG, KA, KL, TN, PY, LAK, AN (Lakshadweep), LD (handled as LAK), AN (Andaman & Nicobar)
+// NORTH-EAST (not separately in enum, we approximate to EAST): AS, MN, MZ, NL, ML, TR, AR, SK, (Sikkim), Meghalaya etc => map to EAST.
+// UTs not fitting above: Ladakh -> NORTH, Chandigarh -> NORTH, Delhi -> NORTH, Puducherry -> SOUTH, Daman & Diu / Dadra & Nagar Haveli -> WEST
+
 const states: StateSeed[] = [
+  // Existing detailed states first (retain full district structure for TG & AP):
   {
     name: 'Telangana', code: 'TG', zone: SOUTH_ZONE, districts: [
       { name: 'Adilabad', mandals: [ { name: 'Adilabad Urban' }, { name: 'Bela' } ] },
@@ -81,7 +91,46 @@ const states: StateSeed[] = [
       { name: 'West Godavari', mandals: [ { name: 'Bhimavaram' }, { name: 'Tanuku' } ] },
       { name: 'YSR Kadapa', mandals: [ { name: 'Kadapa' }, { name: 'Pulivendula' } ] }
     ]
-  }
+  },
+  // Remaining Indian States & Union Territories with placeholder single district matching state name.
+  // NORTH
+  { name: 'Jammu and Kashmir', code: 'JK', zone: 'NORTH', districts: [ { name: 'Jammu and Kashmir', mandals: [ { name: 'JK Sample' } ] } ] },
+  { name: 'Himachal Pradesh', code: 'HP', zone: 'NORTH', districts: [ { name: 'Himachal Pradesh', mandals: [ { name: 'HP Sample' } ] } ] },
+  { name: 'Punjab', code: 'PB', zone: 'NORTH', districts: [ { name: 'Punjab', mandals: [ { name: 'PB Sample' } ] } ] },
+  { name: 'Haryana', code: 'HR', zone: 'NORTH', districts: [ { name: 'Haryana', mandals: [ { name: 'HR Sample' } ] } ] },
+  { name: 'Chandigarh', code: 'CH', zone: 'NORTH', districts: [ { name: 'Chandigarh', mandals: [ { name: 'CH Sample' } ] } ] },
+  { name: 'Delhi', code: 'DL', zone: 'NORTH', districts: [ { name: 'Delhi', mandals: [ { name: 'DL Sample' } ] } ] },
+  { name: 'Uttarakhand', code: 'UK', zone: 'NORTH', districts: [ { name: 'Uttarakhand', mandals: [ { name: 'UK Sample' } ] } ] },
+  { name: 'Rajasthan', code: 'RJ', zone: 'NORTH', districts: [ { name: 'Rajasthan', mandals: [ { name: 'RJ Sample' } ] } ] },
+  // EAST (includes North-East approximated)
+  { name: 'Bihar', code: 'BR', zone: 'EAST', districts: [ { name: 'Bihar', mandals: [ { name: 'BR Sample' } ] } ] },
+  { name: 'Jharkhand', code: 'JH', zone: 'EAST', districts: [ { name: 'Jharkhand', mandals: [ { name: 'JH Sample' } ] } ] },
+  { name: 'West Bengal', code: 'WB', zone: 'EAST', districts: [ { name: 'West Bengal', mandals: [ { name: 'WB Sample' } ] } ] },
+  { name: 'Odisha', code: 'OD', zone: 'EAST', districts: [ { name: 'Odisha', mandals: [ { name: 'OD Sample' } ] } ] },
+  { name: 'Assam', code: 'AS', zone: 'EAST', districts: [ { name: 'Assam', mandals: [ { name: 'AS Sample' } ] } ] },
+  { name: 'Manipur', code: 'MN', zone: 'EAST', districts: [ { name: 'Manipur', mandals: [ { name: 'MN Sample' } ] } ] },
+  { name: 'Mizoram', code: 'MZ', zone: 'EAST', districts: [ { name: 'Mizoram', mandals: [ { name: 'MZ Sample' } ] } ] },
+  { name: 'Nagaland', code: 'NL', zone: 'EAST', districts: [ { name: 'Nagaland', mandals: [ { name: 'NL Sample' } ] } ] },
+  { name: 'Meghalaya', code: 'ML', zone: 'EAST', districts: [ { name: 'Meghalaya', mandals: [ { name: 'ML Sample' } ] } ] },
+  { name: 'Tripura', code: 'TR', zone: 'EAST', districts: [ { name: 'Tripura', mandals: [ { name: 'TR Sample' } ] } ] },
+  { name: 'Arunachal Pradesh', code: 'AR', zone: 'EAST', districts: [ { name: 'Arunachal Pradesh', mandals: [ { name: 'AR Sample' } ] } ] },
+  { name: 'Sikkim', code: 'SK', zone: 'EAST', districts: [ { name: 'Sikkim', mandals: [ { name: 'SK Sample' } ] } ] },
+  // WEST
+  { name: 'Gujarat', code: 'GJ', zone: 'WEST', districts: [ { name: 'Gujarat', mandals: [ { name: 'GJ Sample' } ] } ] },
+  { name: 'Maharashtra', code: 'MH', zone: 'WEST', districts: [ { name: 'Maharashtra', mandals: [ { name: 'MH Sample' } ] } ] },
+  { name: 'Goa', code: 'GA', zone: 'WEST', districts: [ { name: 'Goa', mandals: [ { name: 'GA Sample' } ] } ] },
+  { name: 'Dadra and Nagar Haveli and Daman and Diu', code: 'DN', zone: 'WEST', districts: [ { name: 'Dadra and Nagar Haveli and Daman and Diu', mandals: [ { name: 'DN Sample' } ] } ] },
+  // CENTRAL
+  { name: 'Madhya Pradesh', code: 'MP', zone: 'CENTRAL', districts: [ { name: 'Madhya Pradesh', mandals: [ { name: 'MP Sample' } ] } ] },
+  { name: 'Chhattisgarh', code: 'CG', zone: 'CENTRAL', districts: [ { name: 'Chhattisgarh', mandals: [ { name: 'CG Sample' } ] } ] },
+  // SOUTH (remaining)
+  { name: 'Karnataka', code: 'KA', zone: 'SOUTH', districts: [ { name: 'Karnataka', mandals: [ { name: 'KA Sample' } ] } ] },
+  { name: 'Kerala', code: 'KL', zone: 'SOUTH', districts: [ { name: 'Kerala', mandals: [ { name: 'KL Sample' } ] } ] },
+  { name: 'Tamil Nadu', code: 'TN', zone: 'SOUTH', districts: [ { name: 'Tamil Nadu', mandals: [ { name: 'TN Sample' } ] } ] },
+  { name: 'Puducherry', code: 'PY', zone: 'SOUTH', districts: [ { name: 'Puducherry', mandals: [ { name: 'PY Sample' } ] } ] },
+  { name: 'Andaman and Nicobar Islands', code: 'AN', zone: 'SOUTH', districts: [ { name: 'Andaman and Nicobar Islands', mandals: [ { name: 'AN Sample' } ] } ] },
+  { name: 'Lakshadweep', code: 'LD', zone: 'SOUTH', districts: [ { name: 'Lakshadweep', mandals: [ { name: 'LD Sample' } ] } ] },
+  { name: 'Ladakh', code: 'LA', zone: 'NORTH', districts: [ { name: 'Ladakh', mandals: [ { name: 'LA Sample' } ] } ] }
 ];
 
 async function main() {
