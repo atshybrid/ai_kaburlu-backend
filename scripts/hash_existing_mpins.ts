@@ -1,28 +1,37 @@
-import prisma from '../src/lib/prisma';
-import { hashMpin } from '../src/lib/mpin';
-
 /**
- * One-time migration: hash any plaintext MPIN values.
- * Safe to run multiple times (skips already-bcrypt hashed values).
+ * Migration: Move any legacy plaintext or hashed MPINs from User.mpin to User.mpinHash and null out mpin.
+ * Idempotent: re-running will skip users already migrated (mpinHash set OR mpin null).
  */
+import prisma from '../src/lib/prisma';
+import { hashMpin, isBcryptHash } from '../src/lib/mpin';
+
 async function main() {
-  console.log('Hashing existing plaintext MPINs...');
-  const batchSize = 100;
-  let skip = 0;
-  let updated = 0;
-  while (true) {
-    const users = await (prisma as any).user.findMany({ skip, take: batchSize, where: { mpin: { not: null } }, select: { id: true, mpin: true } });
-    if (!users.length) break;
-    for (const u of users) {
-      if (u.mpin && !u.mpin.startsWith('$2')) {
-        const hashed = await hashMpin(u.mpin);
-        await (prisma as any).user.update({ where: { id: u.id }, data: { mpin: hashed } });
-        updated++;
-      }
-    }
-    skip += batchSize;
+  console.log('Starting MPIN legacy migration -> mpinHash...');
+  // Use any-casts to avoid transient type mismatch if generated client not refreshed yet
+  const users = await (prisma.user as any).findMany({
+    where: { mpin: { not: null } },
+    select: { id: true, mpin: true, mpinHash: true }
+  });
+
+  if (!users.length) {
+    console.log('No users require migration.');
+    return;
   }
-  console.log(`Completed. Users updated: ${updated}`);
+  let migrated = 0;
+  for (const u of users) {
+    if (u.mpinHash) continue; // already migrated
+    const current = u.mpin as string | null;
+    if (!current) continue;
+    let hashed: string;
+    if (isBcryptHash(current)) {
+      hashed = current;
+    } else {
+      hashed = await hashMpin(current);
+    }
+    await (prisma.user as any).update({ where: { id: u.id }, data: { mpinHash: hashed, mpin: null } });
+    migrated++;
+  }
+  console.log(`Migration complete. Migrated ${migrated} user(s).`);
 }
 
-main().catch(e => { console.error(e); process.exit(1); }).finally(async () => { await prisma.$disconnect(); });
+main().catch(e => { console.error('Migration failed:', e); process.exit(1); }).finally(async () => { await prisma.$disconnect(); });

@@ -119,22 +119,25 @@ export const getComments = async ({ articleId, shortNewsId, depth = 5 }: GetComm
   if (articleId) where.articleId = articleId;
   if (shortNewsId) where.shortNewsId = shortNewsId;
 
+  // Workaround for Prisma type limitation on deep self-relation include chain
+  const includeObj: any = {
+    user: {
+      select: {
+        id: true,
+        profile: {
+          select: {
+            fullName: true,
+            profilePhotoUrl: true
+          }
+        }
+      }
+    },
+    children: recursiveReplies(depth)
+  };
+
   const comments = await prisma.comment.findMany({
     where,
-    include: {
-      user: { 
-        select: { 
-          id: true,
-          profile: {
-            select: {
-              fullName: true,
-              profilePhotoUrl: true
-            }
-          }
-        } 
-      },
-      children: recursiveReplies(depth)
-    },
+    include: includeObj,
     orderBy: { createdAt: 'desc' }
   });
   return comments.filter(c => !c.parentId);

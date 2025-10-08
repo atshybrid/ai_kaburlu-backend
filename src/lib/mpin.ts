@@ -1,15 +1,21 @@
 import * as bcrypt from 'bcrypt';
 
-const SALT_ROUNDS = 10;
+const DEFAULT_ROUNDS = parseInt(process.env.MPIN_SALT_ROUNDS || '10', 10);
 
-export async function hashMpin(raw: string): Promise<string> {
-  if (!raw) throw new Error('MPIN empty');
-  return bcrypt.hash(raw, SALT_ROUNDS);
+export function isBcryptHash(value?: string | null) {
+  return !!value && value.startsWith('$2');
 }
 
-export async function verifyMpin(raw: string, hashed?: string | null): Promise<boolean> {
-  if (!raw || !hashed) return false;
-  // If hashed accidentally stored in plain (legacy), fallback compare direct equality
-  if (!hashed.startsWith('$2')) return raw === hashed;
-  return bcrypt.compare(raw, hashed);
+export async function hashMpin(raw: string, rounds: number = DEFAULT_ROUNDS): Promise<string> {
+  if (!raw) throw new Error('MPIN empty');
+  return bcrypt.hash(raw, rounds);
+}
+
+export async function verifyMpin(raw: string, stored?: string | null): Promise<boolean> {
+  if (!raw || !stored) return false;
+  if (!isBcryptHash(stored)) {
+    // Legacy fallback (plaintext). Accept match but caller should migrate.
+    return raw === stored;
+  }
+  try { return await bcrypt.compare(raw, stored); } catch { return false; }
 }

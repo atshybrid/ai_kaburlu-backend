@@ -30,10 +30,12 @@ import { hashMpin } from '../../lib/mpin';
 
 export const createUser = async (data: any) => {
     const toCreate = { ...data };
-    if (toCreate.mpin && !toCreate.mpin.startsWith('$2')) {
-        toCreate.mpin = await hashMpin(toCreate.mpin);
+    if (toCreate.mpin) {
+        const hashed = await hashMpin(toCreate.mpin);
+        toCreate.mpinHash = hashed;
+        toCreate.mpin = null;
     }
-    return prisma.user.create({ data: toCreate });
+    return (prisma as any).user.create({ data: toCreate as any });
 };
 
 export const findAllUsers = async () => {
@@ -51,8 +53,9 @@ export const findUserByMobileNumber = async (mobileNumber: string) => {
 export const updateUser = async (id: string, data: any) => {
     const { roleId, languageId, ...rest } = data;
     const updateData: any = { ...rest };
-    if (updateData.mpin && !updateData.mpin.startsWith('$2')) {
-        updateData.mpin = await hashMpin(updateData.mpin);
+    if (updateData.mpin) {
+        updateData.mpinHash = await hashMpin(updateData.mpin);
+        updateData.mpin = null;
     }
 
     if (roleId) {
@@ -67,9 +70,9 @@ export const updateUser = async (id: string, data: any) => {
         };
     }
 
-    return prisma.user.update({
+    return (prisma as any).user.update({
         where: { id },
-        data: updateData,
+        data: updateData as any,
     });
 };
 
@@ -98,13 +101,13 @@ export const upgradeGuest = async (data: any) => {
 
     if (user) {
         // If device already exists, just update user and mark guest as upgraded
-    let hashed = mpin;
-    if (hashed && !hashed.startsWith('$2')) hashed = await hashMpin(hashed);
-    return prisma.user.update({
+    let hashed = mpin ? await hashMpin(mpin) : undefined;
+    return (prisma as any).user.update({
             where: { id: user.id },
             data: {
                 mobileNumber,
-        mpin: hashed,
+                mpinHash: hashed,
+                mpin: null,
                 email,
                 roleId: citizenReporterRole.id,
                 status: 'ACTIVE',
@@ -127,12 +130,12 @@ export const upgradeGuest = async (data: any) => {
         });
     } else {
         // Create user and device together
-    let hashed = mpin;
-    if (hashed && !hashed.startsWith('$2')) hashed = await hashMpin(hashed);
-    return prisma.user.create({
+    let hashed = mpin ? await hashMpin(mpin) : undefined;
+    return (prisma as any).user.create({
             data: {
                 mobileNumber,
-        mpin: hashed,
+    mpinHash: hashed,
+    mpin: null,
                 email,
                 roleId: citizenReporterRole.id,
                 languageId,

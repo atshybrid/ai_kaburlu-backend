@@ -1,7 +1,7 @@
 import { RequestOtpDto, VerifyOtpDto, SetMpinDto } from './otp.dto';
-import * as bcrypt from 'bcrypt';
 import prisma from '../../lib/prisma';
 import { sendToUser } from '../../lib/fcm';
+import { hashMpin, verifyMpin, isBcryptHash } from '../../lib/mpin';
 
 export class OtpService {
     async requestOtp(data: RequestOtpDto) {
@@ -18,7 +18,7 @@ export class OtpService {
         });
 
         // Check if the mobile number is already registered
-        const user = await prisma.user.findUnique({ where: { mobileNumber: data.mobileNumber } });
+    const user = await prisma.user.findUnique({ where: { mobileNumber: data.mobileNumber } });
         const isRegistered = !!user;
 
         // Optional: deliver OTP via push notification to existing user's devices
@@ -62,38 +62,26 @@ export class OtpService {
     }
 
     async setMpin(data: SetMpinDto) {
-        // Hash the MPIN from the request
-        const saltRounds = 10;
-        const hashedMpin = await bcrypt.hash(data.mpin, saltRounds);
-        const user = await prisma.user.findUnique({
-            where: { mobileNumber: data.mobileNumber },
-        });
-        if (!user) {
-            throw new Error('User not found');
-        }
-        await prisma.user.update({
+        const user = await prisma.user.findUnique({ where: { mobileNumber: data.mobileNumber } });
+        if (!user) throw new Error('User not found');
+
+        const hashed = await hashMpin(data.mpin);
+        await (prisma as any).user.update({
             where: { id: user.id },
-            data: { mpin: hashedMpin },
+            data: { mpinHash: hashed, mpin: null } as any, // cast to bypass missing generated field type
         });
         return { success: true };
     }
 
     async getMpinStatus(mobileNumber: string) {
-        const user = await prisma.user.findUnique({
-            where: { mobileNumber },
-            include: { role: true },
-        });
-
+    const user = await prisma.user.findUnique({ where: { mobileNumber }, include: { role: true } });
         if (!user) {
             return { mpinStatus: false, isRegistered: false, roleId: null, roleName: null };
         }
-
         const roleId = user.roleId || null;
         const roleName = user.role?.name || null;
-
-        if (user.mpin) {
-            return { mpinStatus: true, roleId, roleName };
-        }
-        return { mpinStatus: false, isRegistered: true, roleId, roleName };
+        // mpin considered set if mpinHash exists OR legacy mpin is a bcrypt hash (backward compatibility window)
+        const mpinSet = !!(user as any).mpinHash || (user.mpin && isBcryptHash(user.mpin));
+        return { mpinStatus: mpinSet, isRegistered: true, roleId, roleName };
     }
 }
