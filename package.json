@@ -16,6 +16,7 @@
   "ai:smoke": "ts-node scripts/aiDraftSmoke.ts",
   "seed:hrci:locations": "npx ts-node scripts/seed_hrci_locations.ts",
   "check:hrci:counts": "node scripts/check_hrci_counts.js",
+  "seed:cells": "npx ts-node scripts/seed_cells.ts",
   "postinstall": "prisma generate"
   },
   "engines": {

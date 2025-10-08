@@ -109,6 +109,17 @@ model Prompt {
   createdAt   DateTime @default(now())
 }
 
+/// Organizational cells / wings (e.g., General Body, Women Wing, Youth Wing)
+model Cell {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  code        String?  @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
 model Role {
   id          String   @id @default(cuid())
   name        String   @unique
