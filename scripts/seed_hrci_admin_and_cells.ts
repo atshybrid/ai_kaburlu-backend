@@ -1,24 +1,7 @@
 import prisma from '../src/lib/prisma';
 
 async function main() {
-  console.log('Seeding HRCI admin role & default cells...');
-
-  // 1. Upsert HRCI_ADMIN role
-  const permissions = {
-    hrc: {
-      teams: ['create','read','update'],
-      volunteers: ['onboard','assign'],
-      idcards: ['issue','renew','revoke'],
-      payments: ['create','refund','read'],
-      cases: ['create','read','update','assign','close'],
-      donations: ['read'],
-    }
-  };
-  const hrcAdmin = await (prisma as any).role.upsert({
-    where: { name: 'HRCI_ADMIN' },
-    update: { permissions },
-    create: { name: 'HRCI_ADMIN', permissions }
-  });
+  console.log('Seeding default cells...');
 
   // Try to pick a state for scoping (optional)
   const state = await (prisma as any).state.findFirst();
@@ -68,7 +51,7 @@ async function main() {
     }
   }
 
-  console.log('Seeded HRCI admin & cells', { hrcAdmin: hrcAdmin.id, cells: results.length });
+  console.log('Seeded cells', { cells: results.length });
 }
 
 main().catch(e => { console.error(e); process.exit(1); }).finally(async () => { await prisma.$disconnect(); });

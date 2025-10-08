@@ -29,7 +29,7 @@ export function buildNewsArticleJsonLd(params: {
     datePublished,
     dateModified,
     authorName,
-    publisherName = process.env.SEO_PUBLISHER_NAME || 'HRCI Today News',
+    publisherName,
     publisherLogoUrl = process.env.SEO_PUBLISHER_LOGO || '',
     videoUrl,
     videoThumbnailUrl,

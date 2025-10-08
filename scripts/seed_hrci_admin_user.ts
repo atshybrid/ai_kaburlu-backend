@@ -37,14 +37,14 @@ async function main() {
   // Upsert user
   // Check existing user to avoid double hashing
   const existing = await (prisma as any).user.findUnique({ where: { mobileNumber } });
-  let hashed = existing?.mpin;
+  let hashed = (existing as any)?.mpinHash || (existing as any)?.mpin;
   if (!hashed || !hashed.startsWith('$2')) {
     hashed = await hashMpin(rawMpin);
   }
   const user = await (prisma as any).user.upsert({
     where: { mobileNumber },
-    update: { mpin: hashed, roleId: role.id, languageId: language.id, status: 'ACTIVE' },
-    create: { mobileNumber, mpin: hashed, roleId: role.id, languageId: language.id, status: 'ACTIVE' }
+    update: { mpinHash: hashed, mpin: null, roleId: role.id, languageId: language.id, status: 'ACTIVE' },
+    create: { mobileNumber, mpinHash: hashed, mpin: null, roleId: role.id, languageId: language.id, status: 'ACTIVE' }
   });
 
   console.log('Default HRCI admin user ready:', { userId: user.id, mobileNumber });

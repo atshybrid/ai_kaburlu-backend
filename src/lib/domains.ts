@@ -34,8 +34,8 @@ export function getCanonicalDomain(): string {
   
   const domainConfig: DomainConfig = {
     development: process.env.DEV_DOMAIN || 'http://localhost:3000',
-    staging: process.env.STAGING_DOMAIN || 'https://staging.hrcitodaynews.in',
-    production: process.env.PROD_DOMAIN || 'https://app.hrcitodaynews.in'
+    staging: process.env.STAGING_DOMAIN || 'https://staging.example.com',
+    production: process.env.PROD_DOMAIN || 'https://app.example.com'
   };
 
   let selectedDomain: string;
@@ -127,11 +127,11 @@ export function getDomainInfo(): {
  * 
  * Staging:
  * NODE_ENV=staging  
- * STAGING_DOMAIN=https://staging.hrcitodaynews.in
+ * STAGING_DOMAIN=https://staging.example.com
  * 
  * Production:
  * NODE_ENV=production
- * PROD_DOMAIN=https://app.hrcitodaynews.in
+ * PROD_DOMAIN=https://app.example.com
  * 
  * Override for any environment:
  * CANONICAL_DOMAIN=https://custom.domain.com

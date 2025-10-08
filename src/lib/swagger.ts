@@ -16,10 +16,6 @@ const swaggerDefinition = {
     {
       url: 'https://ai-kaburlu-backend.onrender.com/api/v1',
       description: 'Render server'
-    },
-    {
-      url: 'https://app.hrcitodaynews.in/api/v1',
-      description: 'Production server'
     }
   ],
   tags: [
@@ -33,9 +29,8 @@ const swaggerDefinition = {
     { name: 'States' },
     { name: 'Translate' },
     { name: 'Media' },
-    { name: 'Prompts' },
-    { name: 'Engagement - Comments' },
-    { name: 'HRCI' }
+  { name: 'Prompts' },
+  { name: 'Engagement - Comments' }
   ],
   components: {
     securitySchemes: {

@@ -1,1 +1,2 @@
-declare module './hrc.security';
+// Removed legacy HRC ambient module declarations.
+export {};
