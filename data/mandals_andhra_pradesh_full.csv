@@ -1,0 +1,7 @@
+# Full Andhra Pradesh mandals CSV
+# Replace this with the authoritative full list (expected total mandals: 679)
+# Columns: state,district,mandal
+state,district,mandal
+Andhra Pradesh,Kurnool,Kurnool
+Andhra Pradesh,Kurnool,Panyam
+# ... add remaining 677 rows ...
