@@ -1,4 +1,10 @@
-import { PrismaClient, OrgLevel, MembershipStatus, MembershipPaymentStatus, IdCardStatus } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
+
+// Fallback literal typings because generated client did not export enums (likely due to an internal generation quirk with current Prisma version or enum naming).
+type OrgLevel = 'NATIONAL' | 'ZONE' | 'STATE' | 'DISTRICT' | 'MANDAL';
+type MembershipStatus = 'PENDING_PAYMENT' | 'PENDING_APPROVAL' | 'ACTIVE' | 'EXPIRED' | 'REVOKED';
+type MembershipPaymentStatus = 'NOT_REQUIRED' | 'PENDING' | 'SUCCESS' | 'FAILED' | 'REFUNDED';
+type IdCardStatus = 'NOT_CREATED' | 'GENERATED' | 'REVOKED' | 'EXPIRED';
 
 const prisma = new PrismaClient();
 const p: any = prisma;
@@ -33,7 +39,7 @@ async function main() {
 
   // For this prototype we scope only by level (MANDAL) with a fixed mandal example ID null (no geo seeded yet for membership).
   // Real implementation will pass actual hrcMandalId etc.
-  const level = OrgLevel.MANDAL;
+  const level: OrgLevel = 'MANDAL';
 
   // Count existing occupied seats for this combination.
   const existingCount = await p.membership.count({
@@ -42,7 +48,7 @@ async function main() {
       designationId: designation.id,
       level,
       hrcMandalId: null, // adjust when linking to a real mandal
-      status: { in: [MembershipStatus.PENDING_PAYMENT, MembershipStatus.PENDING_APPROVAL, MembershipStatus.ACTIVE] }
+      status: { in: ['PENDING_PAYMENT','PENDING_APPROVAL','ACTIVE'] }
     }
   });
 
@@ -59,8 +65,8 @@ async function main() {
       designationId: designation.id,
       level,
       hrcMandalId: null,
-  status: requiresPayment ? MembershipStatus.PENDING_PAYMENT : MembershipStatus.PENDING_APPROVAL,
-  paymentStatus: requiresPayment ? MembershipPaymentStatus.PENDING : MembershipPaymentStatus.NOT_REQUIRED,
+  status: (requiresPayment ? 'PENDING_PAYMENT' : 'PENDING_APPROVAL'),
+  paymentStatus: (requiresPayment ? 'PENDING' : 'NOT_REQUIRED'),
       seatSequence: existingCount + 1,
       lockedAt: new Date()
     }
@@ -71,24 +77,24 @@ async function main() {
   if (requiresPayment) {
     // Simulate payment success
     await p.membershipPayment.create({
-      data: { membershipId: membership.id, amount: designation.idCardFee, status: MembershipPaymentStatus.SUCCESS }
+      data: { membershipId: membership.id, amount: designation.idCardFee, status: 'SUCCESS' }
     });
     membership = await p.membership.update({
       where: { id: membership.id },
-      data: { paymentStatus: MembershipPaymentStatus.SUCCESS }
+      data: { paymentStatus: 'SUCCESS' }
     });
   } else {
     console.log('No payment required; waiting for admin approval simulation');
   }
 
   // Auto-issue ID card if payment succeeded or (no payment & approval simulated)
-  if (membership.paymentStatus === MembershipPaymentStatus.SUCCESS || (!requiresPayment && membership.status === MembershipStatus.PENDING_APPROVAL)) {
+  if (membership.paymentStatus === 'SUCCESS' || (!requiresPayment && membership.status === 'PENDING_APPROVAL')) {
     // For zero-payment flow we'd normally wait for admin to approve—here we simulate that approval instantly.
     const activatedAt = new Date();
     const expiresAt = new Date(activatedAt.getTime() + designation.validityDays * 86400000);
     membership = await p.membership.update({
       where: { id: membership.id },
-  data: { status: MembershipStatus.ACTIVE, activatedAt, expiresAt, idCardStatus: IdCardStatus.GENERATED }
+  data: { status: 'ACTIVE', activatedAt, expiresAt, idCardStatus: 'GENERATED' }
     });
     await p.iDCard.create({
       data: { membershipId: membership.id, cardNumber: 'CARD-' + membership.id.slice(0,8), issuedAt: activatedAt, expiresAt }

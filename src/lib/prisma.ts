@@ -11,5 +11,7 @@ const prisma = new PrismaClient();
 // (No runtime effect; if it doesn't exist, this file would error during build.)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 type __PushNotificationLogDelegate = typeof prisma.pushNotificationLog; // keep at least one reference
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// type hint for MembershipKyc delegate intentionally omitted to avoid stale LS errors during generation
 
 export default prisma;

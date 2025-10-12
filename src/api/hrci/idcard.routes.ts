@@ -1,0 +1,184 @@
+import { Router } from 'express';
+import prisma from '../../lib/prisma';
+import { requireAuth, requireAdmin } from '../middlewares/authz';
+
+const router = Router();
+
+/**
+ * @swagger
+ * tags:
+ *   name: HRCI ID Cards
+ *   description: ID Card settings and public card views
+ */
+
+// Admin CRUD for settings
+/**
+ * @swagger
+ * /hrci/idcard/settings:
+ *   get:
+ *     tags: [HRCI ID Cards]
+ *     summary: List ID card settings (admin)
+ *     security: [ { bearerAuth: [] } ]
+ *   post:
+ *     tags: [HRCI ID Cards]
+ *     summary: Create an ID card setting (admin)
+ *     security: [ { bearerAuth: [] } ]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name: { type: string }
+ *               isActive: { type: boolean }
+ *               primaryColor: { type: string }
+ *               secondaryColor: { type: string }
+ *               frontH1: { type: string }
+ *               frontH2: { type: string }
+ *               frontH3: { type: string }
+ *               frontH4: { type: string }
+ *               frontLogoUrl: { type: string }
+ *               secondLogoUrl: { type: string }
+ *               hrciStampUrl: { type: string }
+ *               authorSignUrl: { type: string }
+ *               registerDetails: { type: string }
+ *               frontFooterText: { type: string }
+ *               headOfficeAddress: { type: string }
+ *               terms: { type: array, items: { type: string } }
+ *               qrLandingBaseUrl: { type: string }
+ */
+router.get('/settings', requireAuth, requireAdmin, async (_req, res) => {
+  const rows = await (prisma as any).idCardSetting.findMany({ orderBy: { updatedAt: 'desc' } });
+  res.json({ success: true, data: rows });
+});
+
+router.post('/settings', requireAuth, requireAdmin, async (req, res) => {
+  const body = req.body || {};
+  const created = await (prisma as any).idCardSetting.create({ data: body });
+  if (created.isActive) {
+    // optional: deactivate others
+    await (prisma as any).idCardSetting.updateMany({ where: { id: { not: created.id } }, data: { isActive: false } });
+  }
+  res.json({ success: true, data: created });
+});
+
+/**
+ * @swagger
+ * /hrci/idcard/settings/{id}:
+ *   put:
+ *     tags: [HRCI ID Cards]
+ *     summary: Update an ID card setting (admin)
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ */
+router.put('/settings/:id', requireAuth, requireAdmin, async (req, res) => {
+  const updated = await (prisma as any).idCardSetting.update({ where: { id: req.params.id }, data: req.body || {} });
+  if (updated.isActive) {
+    await (prisma as any).idCardSetting.updateMany({ where: { id: { not: updated.id } }, data: { isActive: false } });
+  }
+  res.json({ success: true, data: updated });
+});
+
+/**
+ * @swagger
+ * /hrci/idcard/{cardNumber}:
+ *   get:
+ *     tags: [HRCI ID Cards]
+ *     summary: Public JSON for an ID card by cardNumber
+ */
+router.get('/:cardNumber', async (req, res) => {
+  const card = await prisma.iDCard.findUnique({ where: { cardNumber: req.params.cardNumber } });
+  if (!card) return res.status(404).json({ success: false, error: 'CARD_NOT_FOUND' });
+  const setting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
+  const baseUrl = setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`;
+  const verifyUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}`;
+  return res.json({ success: true, data: { card, setting, verifyUrl } });
+});
+
+/**
+ * @swagger
+ * /hrci/idcard/{cardNumber}/html:
+ *   get:
+ *     tags: [HRCI ID Cards]
+ *     summary: Render a simple HTML preview of the ID card (public)
+ */
+router.get('/:cardNumber/html', async (req, res) => {
+  const card = await prisma.iDCard.findUnique({ where: { cardNumber: req.params.cardNumber } });
+  if (!card) return res.status(404).send('Card not found');
+  const s = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
+  // Resolve display fields
+  let fullName = (card as any).fullName || '';
+  let designationName = (card as any).designationName || '';
+  let cellName = (card as any).cellName || '';
+  let mobileNumber = (card as any).mobileNumber || '';
+  if (!fullName || !designationName || !cellName || !mobileNumber) {
+    const m = await prisma.membership.findUnique({ where: { id: card.membershipId }, include: { designation: true, cell: true } });
+    if (m) {
+      try {
+        // fetch from user and profile
+        const user = await prisma.user.findUnique({ where: { id: m.userId }, include: { profile: true } });
+        fullName = fullName || (user?.profile?.fullName || '');
+        mobileNumber = mobileNumber || (user?.mobileNumber || '');
+      } catch {}
+      designationName = designationName || (m as any).designation?.name || '';
+      cellName = cellName || (m as any).cell?.name || '';
+    }
+  }
+  const primary = s?.primaryColor || '#0d6efd';
+  const secondary = s?.secondaryColor || '#6c757d';
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>ID Card</title>
+  <style>body{font-family:Arial;margin:0;padding:0;background:#f5f5f5} .card{width:360px;margin:16px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.12)} .hdr{background:${primary};color:#fff;padding:12px;text-align:center}
+  .logo{height:48px;border-radius:50%;object-fit:cover}
+  .blk{padding:12px;color:#212529}
+  .h1{font-size:18px;font-weight:700}
+  .h2{font-size:14px;color:${secondary}}
+  .row{display:flex;justify-content:space-between;margin-top:8px}
+  .qr{margin:12px auto;text-align:center}
+  .footer{font-size:11px;color:#666;text-align:center;padding:8px 12px}
+  </style></head><body>
+  <div class="card">
+   <div class="hdr">
+     ${s?.frontLogoUrl ? `<img class="logo" src="${s.frontLogoUrl}"/>` : ''}
+     <div class="h1">${s?.frontH1 || 'HRCI'}</div>
+     <div class="h2">${s?.frontH2 || ''}</div>
+   </div>
+   <div class="blk">
+     <div><b>Name:</b> ${fullName}</div>
+     <div><b>Designation:</b> ${designationName}</div>
+     <div><b>Cell:</b> ${cellName}</div>
+     <div><b>Mobile:</b> ${mobileNumber}</div>
+     ${s?.registerDetails ? `<div style="margin-top:8px;white-space:pre-wrap">${s.registerDetails}</div>` : ''}
+     ${s?.authorSignUrl ? `<div style="margin-top:8px"><img src="${s.authorSignUrl}" style="height:36px"/></div>` : ''}
+   </div>
+   <div class="qr">
+     <img src="/hrci/idcard/${encodeURIComponent(card.cardNumber)}/qr" alt="QR"/>
+   </div>
+   <div class="footer">${s?.frontFooterText || ''}</div>
+  </div>
+  </body></html>`;
+  res.setHeader('Content-Type', 'text/html');
+  res.send(html);
+});
+
+// Simple QR endpoint (PNG) using Google Chart API fallback or pure SVG
+router.get('/:cardNumber/qr', async (req, res) => {
+  const card = await prisma.iDCard.findUnique({ where: { cardNumber: req.params.cardNumber } });
+  if (!card) return res.status(404).send('Not found');
+  const setting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
+  const baseUrl = setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`;
+  const url = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}`;
+  // Lightweight inline SVG QR (placeholder pattern). For production, integrate 'qrcode' package.
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><rect width='160' height='160' fill='#fff'/>`+
+              `<text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='10'>QR</text>`+
+              `</svg>`;
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.send(svg);
+});
+
+export default router;

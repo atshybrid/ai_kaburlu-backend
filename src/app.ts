@@ -35,6 +35,15 @@ import prisma from './lib/prisma';
 import { Request, Response } from 'express';
 import { Router } from 'express';
 import geoHrcRoutes from './api/hrci/geo.routes';
+import geoHrcAdminRoutes from './api/hrci/geo.admin.routes';
+import hrciCellsRoutes from './api/hrci/cells.routes';
+import hrciDesignationsRoutes from './api/hrci/designations.routes';
+import membershipsPublicRoutes from './api/memberships/public.routes';
+import membershipsPaymentsRoutes from './api/memberships/payments.routes';
+import membershipsRoutes from './api/memberships/memberships.routes';
+import membershipsAdminRoutes from './api/memberships/admin.routes';
+import membershipsKycRoutes from './api/memberships/kyc.routes';
+import idcardRoutes from './api/hrci/idcard.routes';
 
 const app = express();
 
@@ -147,6 +156,16 @@ app.use('/notifications', notificationsRoutes);
 app.use('/prompts', promptsRoutes);
 app.use('/preferences', preferencesRoutes);
 app.use('/legal', legalRoutes);
+// Public joining endpoints (no version prefix per request)
+app.use('/hrci/geo', geoHrcRoutes); // expose HRCI geo reads without versioned base
+app.use('/hrci/geo/admin', geoHrcAdminRoutes); // protected via JWT + admin
+app.use('/hrci/cells', hrciCellsRoutes); // public cells listing
+app.use('/hrci/designations', hrciDesignationsRoutes); // public designations listing
+app.use('/hrci/idcard', idcardRoutes); // settings + public card JSON/HTML/QR
+app.use('/memberships/public', membershipsPublicRoutes); // open public
+app.use('/memberships/public/kyc', membershipsKycRoutes); // public KYC submit/get
+app.use('/memberships/payments', membershipsPaymentsRoutes); // open for front-end payment
+app.use('/memberships/admin', membershipsAdminRoutes); // JWT + admin required
 // Lightweight schema drift health check (checks presence of key ShortNews columns)
 app.get('/health/schema', async (_req: Request, res: Response) => {
   try {
@@ -200,6 +219,10 @@ apiV1.use('/prompts', promptsRoutes);
 apiV1.use('/preferences', preferencesRoutes);
 apiV1.use('/legal', legalRoutes);
 apiV1.use('/hrci/geo', geoHrcRoutes);
+apiV1.use('/hrci/cells', hrciCellsRoutes);
+apiV1.use('/hrci/designations', hrciDesignationsRoutes);
+apiV1.use('/memberships', membershipsRoutes);
+apiV1.use('/memberships/admin', membershipsAdminRoutes);
 // Internal-only routes (enabled with ENABLE_INTERNAL_TEST_ROUTES=1)
 if (String(process.env.ENABLE_INTERNAL_TEST_ROUTES) === '1') {
   apiV1.get('/internal/push-logs/shortnews/:id', async (req: Request, res: Response) => {
