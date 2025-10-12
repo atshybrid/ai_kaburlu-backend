@@ -21,6 +21,7 @@
     "seed:designations": "npx ts-node scripts/seed_designations.ts",
     "seed:hrci:mandals:ap-tg": "npx ts-node scripts/seed_hrci_mandals_ap_tg.ts",
     "seed:hrci:mandals:full": "npx ts-node scripts/seed_hrci_mandals_full_ap_tg.ts",
+    "seed:hrci:samples": "npx ts-node scripts/seed_hrci_samples.ts",
     "verify:hrci:mandals": "npx ts-node scripts/verify_hrci_mandals.ts",
     "postinstall": "prisma generate"
   },

@@ -90,14 +90,25 @@ router.put('/settings/:id', requireAuth, requireAdmin, async (req, res) => {
  *   get:
  *     tags: [HRCI ID Cards]
  *     summary: Public JSON for an ID card by cardNumber
+ *     parameters:
+ *       - in: path
+ *         name: cardNumber
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: hrci-2510-00001
  */
 router.get('/:cardNumber', async (req, res) => {
   const card = await prisma.iDCard.findUnique({ where: { cardNumber: req.params.cardNumber } });
   if (!card) return res.status(404).json({ success: false, error: 'CARD_NOT_FOUND' });
   const setting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
   const baseUrl = setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`;
-  const verifyUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}`;
-  return res.json({ success: true, data: { card, setting, verifyUrl } });
+  const apiUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}`;
+  const htmlUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/html`;
+  const qrUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/qr`;
+  // Keep verifyUrl for backward compatibility (points to API JSON), also return htmlUrl and qrUrl for UX
+  const verifyUrl = apiUrl;
+  return res.json({ success: true, data: { card, setting, verifyUrl, htmlUrl, qrUrl } });
 });
 
 /**
@@ -106,6 +117,13 @@ router.get('/:cardNumber', async (req, res) => {
  *   get:
  *     tags: [HRCI ID Cards]
  *     summary: Render a simple HTML preview of the ID card (public)
+ *     parameters:
+ *       - in: path
+ *         name: cardNumber
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: hrci-2510-00001
  */
 router.get('/:cardNumber/html', async (req, res) => {
   const card = await prisma.iDCard.findUnique({ where: { cardNumber: req.params.cardNumber } });
@@ -167,12 +185,27 @@ router.get('/:cardNumber/html', async (req, res) => {
 });
 
 // Simple QR endpoint (PNG) using Google Chart API fallback or pure SVG
+/**
+ * @swagger
+ * /hrci/idcard/{cardNumber}/qr:
+ *   get:
+ *     tags: [HRCI ID Cards]
+ *     summary: Render a QR image (SVG) for public verification
+ *     parameters:
+ *       - in: path
+ *         name: cardNumber
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: hrci-2510-00001
+ */
 router.get('/:cardNumber/qr', async (req, res) => {
   const card = await prisma.iDCard.findUnique({ where: { cardNumber: req.params.cardNumber } });
   if (!card) return res.status(404).send('Not found');
   const setting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
   const baseUrl = setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`;
-  const url = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}`;
+  // Prefer HTML landing page when scanning the QR for human-friendly view
+  const url = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/html`;
   // Lightweight inline SVG QR (placeholder pattern). For production, integrate 'qrcode' package.
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><rect width='160' height='160' fill='#fff'/>`+
               `<text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='10'>QR</text>`+

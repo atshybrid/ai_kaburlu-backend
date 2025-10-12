@@ -221,6 +221,7 @@ apiV1.use('/legal', legalRoutes);
 apiV1.use('/hrci/geo', geoHrcRoutes);
 apiV1.use('/hrci/cells', hrciCellsRoutes);
 apiV1.use('/hrci/designations', hrciDesignationsRoutes);
+apiV1.use('/hrci/idcard', idcardRoutes);
 apiV1.use('/memberships', membershipsRoutes);
 apiV1.use('/memberships/admin', membershipsAdminRoutes);
 // Internal-only routes (enabled with ENABLE_INTERNAL_TEST_ROUTES=1)
