@@ -8,7 +8,7 @@
     "dev": "npm run start:dev",
     "build:clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run build:clean && tsc",
-  "postbuild": "node -e \"const fs=require('fs'); fs.writeFileSync('dist/index.js', \"require('./src/index.js');\")\"",
+  "postbuild": "node scripts/postbuild.js",
     "start": "node dist/src/index.js",
     "start:dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "seed": "ts-node prisma/seed.ts",
