@@ -45,7 +45,13 @@ const defaultPermissions: Record<string, any> = {
     CITIZEN_REPORTER: [],
     GUEST: [],
     // Members: basic self-service permissions (expand as needed)
-    MEMBER: ['member:read','idcard:read','kyc:read','kyc:update'],
+    MEMBER: [
+        'member:read',
+        'idcard:read',
+        'kyc:read','kyc:update',
+        'profile:read','profile:update',
+        'user:self:read','user:self:update'
+    ],
     // HRCI Admin: structured permissions aligned with HRCI admin activities
     HRCI_ADMIN: {
         hrc: {

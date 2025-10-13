@@ -19,7 +19,7 @@ const router = Router();
  * /profiles/me:
  *   get:
  *     summary: Get the authenticated user's own profile (Best Practice)
- *     tags: [Profiles]
+ *     tags: [Profiles, Member APIs]
  *     security:
  *       - bearerAuth: []
  *     responses:
@@ -52,7 +52,7 @@ router.get('/me', passport.authenticate('jwt', { session: false }), async (req: 
  * /profiles/me:
  *   post:
  *     summary: Create or update a profile for the authenticated user (upsert)
- *     tags: [Profiles]
+ *     tags: [Profiles, Member APIs]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -91,7 +91,7 @@ router.post('/me', passport.authenticate('jwt', { session: false }), validationM
  * /profiles/me:
  *   put:
  *     summary: Update the authenticated user's own profile
- *     tags: [Profiles]
+ *     tags: [Profiles, Member APIs]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -130,7 +130,7 @@ router.put('/me', passport.authenticate('jwt', { session: false }), validationMi
  * /profiles/me:
  *   delete:
  *     summary: Delete the authenticated user's profile
- *     tags: [Profiles]
+ *     tags: [Profiles, Member APIs]
  *     security:
  *       - bearerAuth: []
  *     responses:
@@ -183,7 +183,7 @@ router.get('/:userId', passport.authenticate('jwt', { session: false }), async (
   const requestedUserId = req.params.userId;
 
   // Check if the user is an admin
-  const isAdmin = authenticatedUser.role?.name === 'SUPERADMIN' || authenticatedUser.role?.name === 'LANGUAGE_ADMIN';
+  const isAdmin = ['SUPERADMIN','SUPER_ADMIN','LANGUAGE_ADMIN','ADMIN'].includes((authenticatedUser.role?.name || '').toUpperCase());
 
   // Admins can access any profile. Regular users can only access their own (covered by /me).
   if (!isAdmin) {
@@ -227,7 +227,7 @@ router.get('/:userId', passport.authenticate('jwt', { session: false }), async (
  */
 router.get('/', passport.authenticate('jwt', { session: false }), async (req: any, res) => {
   const authenticatedUser = req.user;
-  const isAdmin = authenticatedUser.role?.name === 'SUPERADMIN' || authenticatedUser.role?.name === 'LANGUAGE_ADMIN';
+  const isAdmin = ['SUPERADMIN','SUPER_ADMIN','LANGUAGE_ADMIN','ADMIN'].includes((authenticatedUser.role?.name || '').toUpperCase());
   if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
   const page = Number(req.query.page || 1);
   const pageSize = Number(req.query.pageSize || 20);
@@ -257,7 +257,7 @@ router.get('/', passport.authenticate('jwt', { session: false }), async (req: an
  */
 router.delete('/:userId', passport.authenticate('jwt', { session: false }), async (req: any, res) => {
   const authenticatedUser = req.user;
-  const isAdmin = authenticatedUser.role?.name === 'SUPERADMIN' || authenticatedUser.role?.name === 'LANGUAGE_ADMIN';
+  const isAdmin = ['SUPERADMIN','SUPER_ADMIN','LANGUAGE_ADMIN','ADMIN'].includes((authenticatedUser.role?.name || '').toUpperCase());
   if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
   try {
     const out = await deleteProfile(req.params.userId);
