@@ -158,6 +158,17 @@ router.post('/register', async (req, res) => {
       hrcMandalId: hrcMandalId || undefined
     } as any);
 
+    // If no seats remaining, do not create membership; return conflict
+    if (!join.accepted) {
+      return res.status(409).json({
+        success: false,
+        error: 'QUOTA_FULL',
+        reason: join.reason || 'NO_SEATS',
+        remaining: typeof (join as any).remaining === 'number' ? (join as any).remaining : 0,
+        message: 'Quota full for this designation at the selected level and location. Please try another designation.'
+      });
+    }
+
     // If fee=0, upgrade membership to ACTIVE immediately and create ID card
     let order: any = null;
     let idCardCreated = false; let idCardReason: string | null = null;
