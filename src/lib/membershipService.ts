@@ -77,7 +77,9 @@ export async function getAvailability(q: AvailabilityQuery) {
     designation: {
       capacity: designation.defaultCapacity,
       used,
-      remaining: Math.max(0, designationRemaining)
+      remaining: Math.max(0, designationRemaining),
+      fee: designation.idCardFee,
+      validityDays: designation.validityDays
     },
     levelAggregate: aggregate || null
   };
