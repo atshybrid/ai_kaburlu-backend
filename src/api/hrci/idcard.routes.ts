@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
-import { requireAuth, requireAdmin } from '../middlewares/authz';
+import { requireAuth, requireAdmin, requireHrcAdmin } from '../middlewares/authz';
 
 const router = Router();
 
@@ -48,12 +48,12 @@ const router = Router();
  *               terms: { type: array, items: { type: string } }
  *               qrLandingBaseUrl: { type: string }
  */
-router.get('/settings', requireAuth, requireAdmin, async (_req, res) => {
+router.get('/settings', requireAuth, requireHrcAdmin, async (_req, res) => {
   const rows = await (prisma as any).idCardSetting.findMany({ orderBy: { updatedAt: 'desc' } });
   res.json({ success: true, data: rows });
 });
 
-router.post('/settings', requireAuth, requireAdmin, async (req, res) => {
+router.post('/settings', requireAuth, requireHrcAdmin, async (req, res) => {
   const body = req.body || {};
   const created = await (prisma as any).idCardSetting.create({ data: body });
   if (created.isActive) {
@@ -76,7 +76,7 @@ router.post('/settings', requireAuth, requireAdmin, async (req, res) => {
  *         required: true
  *         schema: { type: string }
  */
-router.put('/settings/:id', requireAuth, requireAdmin, async (req, res) => {
+router.put('/settings/:id', requireAuth, requireHrcAdmin, async (req, res) => {
   const updated = await (prisma as any).idCardSetting.update({ where: { id: req.params.id }, data: req.body || {} });
   if (updated.isActive) {
     await (prisma as any).idCardSetting.updateMany({ where: { id: { not: updated.id } }, data: { isActive: false } });
