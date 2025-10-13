@@ -43,11 +43,14 @@ export const login = async (loginDto: MpinLoginDto) => {
 
   // Securely compare the provided mpin with the hashed mpin from the database
   console.log("Provided mpin:", loginDto.mpin);
-  console.log("Hashed mpin from DB:", user.mpin);
-  if (!user.mpin) {
+  console.log("Hashed mpin from DB (mpin):", user.mpin);
+  console.log("Hashed mpin from DB (mpinHash):", (user as any).mpinHash);
+  // Support both legacy 'mpin' (hashed) and new 'mpinHash' field
+  const storedHash = user.mpin || (user as any).mpinHash || null;
+  if (!storedHash) {
     return null;
   }
-  const isMpinValid = await bcrypt.compare(loginDto.mpin, user.mpin);
+  const isMpinValid = await bcrypt.compare(loginDto.mpin, storedHash);
   console.log("isMpinValid:", isMpinValid);
   if (!isMpinValid) {
     console.log("Invalid mpin for user:", user.id);
