@@ -5,18 +5,13 @@ import { generateNextIdCardNumber } from '../../lib/idCardNumber';
 
 const router = Router();
 
-/**
- * @swagger
- * tags:
- *   name: Memberships Admin
- *   description: Admin CRUD for memberships
- */
+// Note: Admin APIs tag is defined in payfirst.routes.ts
 
 /**
  * @swagger
  * /memberships/admin:
  *   get:
- *     tags: [Memberships Admin]
+ *     tags: [HRCI Membership - Admin APIs]
  *     summary: List memberships (admin)
  *     security:
  *       - bearerAuth: []
@@ -80,7 +75,7 @@ router.get('/', requireAuth, requireAdmin, async (req, res) => {
  * @swagger
  * /memberships/admin/{id}:
  *   get:
- *     tags: [Memberships Admin]
+ *     tags: [HRCI Membership - Admin APIs]
  *     summary: Get membership by ID (admin)
  *     security:
  *       - bearerAuth: []
@@ -107,7 +102,7 @@ router.get('/:id', requireAuth, requireAdmin, async (req, res) => {
  * @swagger
  * /memberships/admin/{id}/status:
  *   put:
- *     tags: [Memberships Admin]
+ *     tags: [HRCI Membership - Admin APIs]
  *     summary: Update membership status (admin)
  *     security:
  *       - bearerAuth: []
@@ -160,7 +155,7 @@ router.put('/:id/status', requireAuth, requireAdmin, async (req, res) => {
  * @swagger
  * /memberships/admin/{id}/idcard:
  *   post:
- *     tags: [Memberships Admin]
+ *     tags: [HRCI Membership - Admin APIs]
  *     summary: Reissue ID card (admin)
  *     security:
  *       - bearerAuth: []

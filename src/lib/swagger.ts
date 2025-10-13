@@ -37,13 +37,13 @@ const swaggerDefinition = {
     { name: 'States' },
     { name: 'Translate' },
     { name: 'Media' },
-  { name: 'Prompts' },
-  { name: 'Engagement - Comments' }
-  ,{ name: 'HRCI' }
-  ,{ name: 'HRCI Admin' }
-  ,{ name: 'Memberships Public' }
-  ,{ name: 'Memberships Payments' }
-  ,{ name: 'Memberships KYC' }
+    { name: 'Prompts' },
+    { name: 'Engagement - Comments' },
+    { name: 'HRCI' },
+    { name: 'HRCI Admin' },
+    { name: 'Member APIs', description: 'Member registration and payment APIs' },
+    { name: 'Admin APIs', description: 'Admin management for memberships and KYC approvals' },
+    { name: 'DEPRECATED APIs', description: 'Deprecated endpoints' }
   ],
   components: {
     securitySchemes: {

@@ -12,8 +12,12 @@ const port = Number(process.env.PORT) || 3001;
 async function start() {
   try {
     if (process.env.DATABASE_URL) {
-      await prisma.$connect();
-      console.log('Prisma connected');
+      try {
+        await prisma.$connect();
+        console.log('Prisma connected');
+      } catch (e) {
+        console.error('Prisma connect failed on startup — continuing without DB connection:', (e as any)?.message || e);
+      }
     } else {
       console.log('DATABASE_URL not set — skipping Prisma connect');
     }
@@ -68,7 +72,8 @@ async function start() {
     } catch (e) {
       // ignore
     }
-    process.exit(1);
+    // Do not hard-exit on startup to avoid Render 503 loops; allow platform to restart or hit health endpoints
+    // process.exit(1);
   }
 }
 

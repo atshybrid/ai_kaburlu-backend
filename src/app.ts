@@ -127,6 +127,11 @@ app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 // Also expose docs under the versioned base for convenience
 app.use('/api/v1/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
+// Simple health endpoint for platform health checks
+app.get('/healthz', (_req, res) => {
+  res.json({ ok: true, uptime: process.uptime(), timestamp: new Date().toISOString() });
+});
+
 // API Routes (no version prefix) - legacy support
 app.use('/articles', articlesRoutes);
 app.use('/articles/read', articleReadRoutes);

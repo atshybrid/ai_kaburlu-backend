@@ -2,52 +2,11 @@ import { Router } from 'express';
 import prisma from '../../lib/prisma';
 import { generateNextIdCardNumber } from '../../lib/idCardNumber';
 
-/**
- * @swagger
- * tags:
- *   name: Memberships Payments
- *   description: Payment initiation and confirmation
- */
+// DEPRECATED: This entire file is deprecated - use pay-first flow instead
+// No Swagger documentation to keep it out of API docs
 const router = Router();
 
-// Create payment order (stubbed)
-/**
- * @swagger
- * /memberships/payments/orders:
- *   post:
- *     tags: [Memberships Payments]
- *     summary: Create payment order (stub)
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               membershipId:
- *                 type: string
- *     responses:
- *       200:
- *         description: Order created or no order if fee=0
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success: { type: boolean }
- *                 data:
- *                   type: object
- *                   properties:
- *                     order:
- *                       type: object
- *                       nullable: true
- *                       properties:
- *                         orderId: { type: string }
- *                         amount: { type: integer }
- *                         currency: { type: string }
- *                     amount: { type: integer, nullable: true }
- *                     currency: { type: string, nullable: true }
- */
+// DEPRECATED - Use /memberships/payfirst/orders instead
 router.post('/orders', async (req, res) => {
   try {
     const { membershipId } = req.body || {};
@@ -73,48 +32,7 @@ router.post('/orders', async (req, res) => {
   } catch (e: any) { return res.status(500).json({ success: false, error: 'ORDER_CREATE_FAILED', message: e?.message }); }
 });
 
-// Confirm payment
-/**
- * @swagger
- * /memberships/payments/confirm:
- *   post:
- *     tags: [Memberships Payments]
- *     summary: Confirm payment result and update membership
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               membershipId: { type: string }
- *               providerRef: { type: string }
- *               status:
- *                 type: string
- *                 enum: [SUCCESS, FAILED]
- *               razorpay:
- *                 type: object
- *                 nullable: true
- *                 properties:
- *                   orderId: { type: string }
- *                   paymentId: { type: string }
- *                   signature: { type: string }
- *     responses:
- *       200:
- *         description: Confirmation result
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success: { type: boolean }
- *                 data:
- *                   type: object
- *                   properties:
- *                     status: { type: string, enum: [ACTIVE, FAILED] }
- *                     idCardCreated: { type: boolean }
- *                     idCardReason: { type: string, nullable: true }
- */
+// DEPRECATED - Use /memberships/payfirst/confirm instead
 router.post('/confirm', async (req, res) => {
   try {
     const { membershipId, providerRef, status, razorpay } = req.body || {};

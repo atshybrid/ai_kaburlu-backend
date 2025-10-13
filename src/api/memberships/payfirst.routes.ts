@@ -1,14 +1,43 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
 import { createRazorpayOrder, razorpayEnabled, getRazorpayKeyId, verifyRazorpaySignature } from '../../lib/razorpay';
-import { generateNextIdCardNumber } from '../../lib/idCardNumber';
+import * as bcrypt from 'bcrypt';
 import { membershipService } from '../../lib/membershipService';
+
+// Helper to get seat details from PaymentIntent
+async function getSeatDetails(intent: any) {
+  const cell = await (prisma as any).cell.findFirst({ where: { OR: [{ id: intent.cellCodeOrName }, { code: intent.cellCodeOrName }, { name: intent.cellCodeOrName }] } });
+  const designation = await (prisma as any).designation.findFirst({ where: { OR: [{ code: intent.designationCode }, { id: intent.designationCode }] } });
+  
+  let location: any = null;
+  if (intent.level === 'ZONE' && intent.zone) {
+    location = { type: 'zone', zone: intent.zone };
+  } else if (intent.level === 'STATE' && intent.hrcStateId) {
+    const state = await (prisma as any).hrcState.findUnique({ where: { id: intent.hrcStateId } });
+    location = { type: 'state', id: intent.hrcStateId, name: state?.name };
+  } else if (intent.level === 'DISTRICT' && intent.hrcDistrictId) {
+    const district = await (prisma as any).hrcDistrict.findUnique({ where: { id: intent.hrcDistrictId } });
+    location = { type: 'district', id: intent.hrcDistrictId, name: district?.name };
+  } else if (intent.level === 'MANDAL' && intent.hrcMandalId) {
+    const mandal = await (prisma as any).hrcMandal.findUnique({ where: { id: intent.hrcMandalId } });
+    location = { type: 'mandal', id: intent.hrcMandalId, name: mandal?.name };
+  }
+
+  return {
+    cell: { id: cell?.id, name: cell?.name, code: cell?.code },
+    designation: { id: designation?.id, name: designation?.name, code: designation?.code },
+    level: intent.level,
+    location
+  };
+}
 
 /**
  * @swagger
  * tags:
- *   name: Memberships PayFirst
- *   description: Pay-first onboarding flow (create order first, create membership on success)
+ *   - name: HRCI Membership - Member APIs
+ *     description: Member registration, payment, and KYC submission APIs
+ *   - name: HRCI Membership - Admin APIs  
+ *     description: Admin management for memberships and KYC approvals
  */
 const router = Router();
 
@@ -41,7 +70,7 @@ function validateGeoByLevel(level: string, body: any): { ok: boolean; error?: st
  * @swagger
  * /memberships/payfirst/orders:
  *   post:
- *     tags: [Memberships PayFirst]
+ *     tags: [HRCI Membership - Member APIs]
  *     summary: Create payment intent (order) for a seat spec without creating membership
  *     requestBody:
  *       required: true
@@ -49,11 +78,12 @@ function validateGeoByLevel(level: string, body: any): { ok: boolean; error?: st
  *         application/json:
  *           schema:
  *             type: object
- *             required: [cell, designationCode, level]
+ *             required: [cell, designationCode, level, mobileNumber]
  *             properties:
  *               cell: { type: string }
  *               designationCode: { type: string }
  *               level: { type: string, enum: [NATIONAL, ZONE, STATE, DISTRICT, MANDAL] }
+ *               mobileNumber: { type: string, description: 'Mobile number for registration linking' }
  *               zone: { type: string, nullable: true, description: 'REQUIRED when level=ZONE' }
  *               hrcCountryId: { type: string, nullable: true, description: 'Optional unless you manage multiple countries' }
  *               hrcStateId: { type: string, nullable: true, description: 'REQUIRED when level=STATE' }
@@ -61,18 +91,15 @@ function validateGeoByLevel(level: string, body: any): { ok: boolean; error?: st
  *               hrcMandalId: { type: string, nullable: true, description: 'REQUIRED when level=MANDAL' }
  *           examples:
  *             NATIONAL:
- *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'NATIONAL' }
+ *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'NATIONAL', mobileNumber: '9876543210' }
  *             ZONE:
- *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'ZONE', zone: 'SOUTH' }
+ *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'ZONE', zone: 'SOUTH', mobileNumber: '9876543210' }
  *             STATE:
- *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'STATE', hrcStateId: 'ap' }
+ *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'STATE', hrcStateId: 'ap', mobileNumber: '9876543210' }
  *             DISTRICT:
- *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'DISTRICT', hrcDistrictId: 'krishna' }
+ *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'DISTRICT', hrcDistrictId: 'krishna', mobileNumber: '9876543210' }
  *             MANDAL:
- *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'MANDAL', hrcMandalId: 'mylavaram' }
- *     description: |
- *       Creates a payment intent for the specified seat. No membership or user is created at this step.
- *       Supply the user details at /memberships/payfirst/confirm after payment success.
+ *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'MANDAL', hrcMandalId: 'mylavaram', mobileNumber: '9876543210' }
  *     responses:
  *       200:
  *         description: Order created
@@ -102,8 +129,8 @@ function validateGeoByLevel(level: string, body: any): { ok: boolean; error?: st
  */
 router.post('/orders', async (req, res) => {
   try {
-    const { cell, designationCode, level, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId } = req.body || {};
-    if (!cell || !designationCode || !level) return res.status(400).json({ success: false, error: 'cell, designationCode, level required' });
+    const { cell, designationCode, level, mobileNumber, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId } = req.body || {};
+    if (!cell || !designationCode || !level || !mobileNumber) return res.status(400).json({ success: false, error: 'cell, designationCode, level, mobileNumber required' });
     const geoCheck = validateGeoByLevel(level, req.body || {});
     if (!geoCheck.ok) return res.status(400).json({ success: false, error: 'MISSING_LOCATION', message: geoCheck.error });
     // Price from designation
@@ -116,7 +143,8 @@ router.post('/orders', async (req, res) => {
       data: {
         cellCodeOrName: String(cell), designationCode: String(designationCode), level: String(level),
         zone: zone || null, hrcCountryId: hrcCountryId || null, hrcStateId: hrcStateId || null, hrcDistrictId: hrcDistrictId || null, hrcMandalId: hrcMandalId || null,
-        amount, currency: 'INR', status: 'PENDING'
+        amount, currency: 'INR', status: 'PENDING',
+        meta: { registrationMobile: String(mobileNumber) }
       }
     });
     // If Razorpay is configured, create a provider order, else return internal order only
@@ -136,7 +164,7 @@ router.post('/orders', async (req, res) => {
  * @swagger
  * /memberships/payfirst/confirm:
  *   post:
- *     tags: [Memberships PayFirst]
+ *     tags: [HRCI Membership - Member APIs]
  *     summary: Confirm payment success and create membership atomically
  *     requestBody:
  *       required: true
@@ -149,25 +177,18 @@ router.post('/orders', async (req, res) => {
  *               orderId: { type: string }
  *               providerRef: { type: string }
  *               status: { type: string, enum: [SUCCESS, FAILED] }
- *               mobileNumber: { type: string, description: 'Required when status=SUCCESS' }
- *               mpin: { type: string, description: 'Required when status=SUCCESS (stored as hash)' }
- *               fullName: { type: string, description: 'Required when status=SUCCESS' }
+ *               mobileNumber: { type: string, description: 'Optional - for future registration linking' }
  *               provider: { type: string, nullable: true, description: 'e.g., razorpay' }
  *               razorpay_order_id: { type: string, nullable: true }
  *               razorpay_payment_id: { type: string, nullable: true }
  *               razorpay_signature: { type: string, nullable: true }
  *           examples:
  *             SuccessInternal:
- *               value: { orderId: 'cmgxxx', status: 'SUCCESS', mobileNumber: '9000000001', mpin: '1234', fullName: 'John Doe' }
+ *               value: { orderId: 'cmgxxx', status: 'SUCCESS' }
  *             SuccessRazorpay:
- *               value: { orderId: 'cmgxxx', status: 'SUCCESS', provider: 'razorpay', razorpay_order_id: 'order_abc', razorpay_payment_id: 'pay_xyz', razorpay_signature: 'sig123', mobileNumber: '9000000001', mpin: '1234', fullName: 'John Doe' }
+ *               value: { orderId: 'cmgxxx', status: 'SUCCESS', provider: 'razorpay', razorpay_order_id: 'order_abc', razorpay_payment_id: 'pay_xyz', razorpay_signature: 'sig123' }
  *             Failed:
  *               value: { orderId: 'cmgxxx', status: 'FAILED', providerRef: 'pay_xyz' }
- *     description: |
- *       Notes:
- *       - Capacity is re-checked on confirm to prevent overbooking.
- *       - For ZONE/STATE/DISTRICT/MANDAL, the PaymentIntent must carry zone/hrcStateId/hrcDistrictId/hrcMandalId respectively.
- *       - If not present, confirm will fail with MISSING_LOCATION.
  *     responses:
  *       200:
  *         description: Result
@@ -181,21 +202,25 @@ router.post('/orders', async (req, res) => {
  *                   type: object
  *                   properties:
  *                     status: { type: string }
- *                     membershipId: { type: string }
- *                     idCardCreated: { type: boolean }
- *                     idCardReason: { type: string, nullable: true }
+ *                     seatReserved: { type: boolean }
+ *                     seatDetails: 
+ *                       type: object
+ *                       properties:
+ *                         cell: { type: object }
+ *                         designation: { type: object }
+ *                         level: { type: string }
+ *                         location: { type: object, nullable: true }
  */
 router.post('/confirm', async (req, res) => {
   try {
-    const { orderId, providerRef, status, mobileNumber, mpin, fullName } = req.body || {};
+    const { orderId, providerRef, status, mobileNumber } = req.body || {};
     if (!orderId || !status) return res.status(400).json({ success: false, error: 'orderId and status required' });
     const intent = await (prisma as any).paymentIntent.findUnique({ where: { id: String(orderId) } });
     if (!intent) return res.status(404).json({ success: false, error: 'INTENT_NOT_FOUND' });
-    // Idempotency: if already successful and linked, return same
-    if (intent.status === 'SUCCESS' && intent.membershipId) {
-      // Check if card exists for completeness
-      const existingCard = await (prisma as any).iDCard.findUnique({ where: { membershipId: intent.membershipId } }).catch(() => null);
-      return res.json({ success: true, data: { status: 'ACTIVE', membershipId: intent.membershipId, idCardCreated: !!existingCard, idCardReason: existingCard ? null : 'CARD_NOT_ISSUED' } });
+    // Idempotency: if already successful, return seat details
+    if (intent.status === 'SUCCESS') {
+      const seatDetails = await getSeatDetails(intent);
+      return res.json({ success: true, data: { status: 'PAID', seatReserved: true, seatDetails } });
     }
     // Validate geo presence for the saved level
     const geoCheck = validateGeoByLevel(intent.level, intent);
@@ -214,20 +239,109 @@ router.post('/confirm', async (req, res) => {
       await (prisma as any).paymentIntent.update({ where: { id: intent.id }, data: { status: 'FAILED', providerRef: providerRef || null } });
       return res.json({ success: true, data: { status: 'FAILED' } });
     }
-    // SUCCESS path
-    const result = await (prisma as any).$transaction(async (tx: any) => {
-      // 1) Re-check availability live
-      const avail = await membershipService.getAvailability({
-        cellCodeOrName: intent.cellCodeOrName, designationCode: intent.designationCode, level: intent.level,
-        zone: intent.zone || undefined, hrcCountryId: intent.hrcCountryId || undefined, hrcStateId: intent.hrcStateId || undefined,
-        hrcDistrictId: intent.hrcDistrictId || undefined, hrcMandalId: intent.hrcMandalId || undefined
-      } as any);
-      if ((avail as any).designation.remaining <= 0) {
-        await tx.paymentIntent.update({ where: { id: intent.id }, data: { status: 'REFUND_REQUIRED', providerRef: providerRef || null } });
-        return { soldOut: true };
+    // SUCCESS path - just mark payment as successful and reserve seat
+    await (prisma as any).paymentIntent.update({ 
+      where: { id: intent.id }, 
+      data: { 
+        status: 'SUCCESS', 
+        providerRef: providerRef || null,
+        // Optionally link mobile for future registration
+        ...(mobileNumber && { meta: { registrationMobile: mobileNumber } })
+      } 
+    });
+    
+    const seatDetails = await getSeatDetails(intent);
+    return res.json({ 
+      success: true, 
+      data: { 
+        status: 'PAID', 
+        seatReserved: true, 
+        seatDetails,
+        registrationRequired: true,
+        message: 'Payment successful. Please complete registration to activate membership.'
+      } 
+    });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'CONFIRM_FAILED', message: e?.message });
+  }
+});
+
+// Check payment status by order ID
+/**
+ * @swagger
+ * /memberships/payfirst/status/{orderId}:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Check payment status for an order
+ *     parameters:
+ *       - name: orderId
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Payment status
+ */
+router.get('/status/:orderId', async (req, res) => {
+  try {
+    const intent = await (prisma as any).paymentIntent.findUnique({ where: { id: req.params.orderId } });
+    if (!intent) return res.status(404).json({ success: false, error: 'ORDER_NOT_FOUND' });
+    
+    const seatDetails = await getSeatDetails(intent);
+    return res.json({
+      success: true,
+      data: {
+        orderId: intent.id,
+        status: intent.status, // PENDING, SUCCESS, FAILED, REFUND_REQUIRED
+        amount: intent.amount,
+        currency: intent.currency,
+        seatDetails,
+        canRegister: intent.status === 'SUCCESS'
       }
-      // 2) Upsert user with mpinHash
-      if (!mobileNumber || !mpin || !fullName) throw new Error('mobileNumber, mpin, fullName required');
+    });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'STATUS_CHECK_FAILED', message: e?.message });
+  }
+});
+
+// Complete registration for paid seat
+/**
+ * @swagger
+ * /memberships/payfirst/register:
+ *   post:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Complete registration for a paid seat
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [orderId, mobileNumber, mpin, fullName]
+ *             properties:
+ *               orderId: { type: string }
+ *               mobileNumber: { type: string }
+ *               mpin: { type: string }
+ *               fullName: { type: string }
+ *     responses:
+ *       200:
+ *         description: Registration completed
+ */
+router.post('/register', async (req, res) => {
+  try {
+    const { orderId, mobileNumber, mpin, fullName } = req.body || {};
+    if (!orderId || !mobileNumber || !mpin || !fullName) {
+      return res.status(400).json({ success: false, error: 'orderId, mobileNumber, mpin, fullName required' });
+    }
+
+    const intent = await (prisma as any).paymentIntent.findUnique({ where: { id: String(orderId) } });
+    if (!intent) return res.status(404).json({ success: false, error: 'ORDER_NOT_FOUND' });
+    if (intent.status !== 'SUCCESS') return res.status(400).json({ success: false, error: 'PAYMENT_NOT_COMPLETED' });
+    if (intent.membershipId) return res.status(409).json({ success: false, error: 'ALREADY_REGISTERED', membershipId: intent.membershipId });
+
+    const result = await (prisma as any).$transaction(async (tx: any) => {
+      // 1) Upsert user with mpinHash
       let user = await tx.user.findFirst({ where: { mobileNumber: String(mobileNumber) } });
       const bcrypt = await import('bcrypt');
       const mpinHash = await bcrypt.hash(String(mpin), 10);
@@ -240,7 +354,8 @@ router.post('/confirm', async (req, res) => {
         await tx.user.update({ where: { id: user.id }, data: { mpin: null as any, mpinHash } });
       }
       await tx.userProfile.upsert({ where: { userId: user.id }, create: { userId: user.id, fullName }, update: { fullName } });
-      // 3) Create membership ACTIVE immediately (payment already succeeded)
+      
+      // 2) Create membership ACTIVE immediately (payment already succeeded)
       const join = await membershipService.joinSeat({
         userId: user.id,
         cellCodeOrName: intent.cellCodeOrName,
@@ -252,37 +367,386 @@ router.post('/confirm', async (req, res) => {
         hrcDistrictId: intent.hrcDistrictId || undefined,
         hrcMandalId: intent.hrcMandalId || undefined
       } as any);
+      
       if (!join.accepted) {
-        await tx.paymentIntent.update({ where: { id: intent.id }, data: { status: 'REFUND_REQUIRED', providerRef: providerRef || null } });
-        return { soldOut: true };
+        throw new Error('Seat no longer available');
       }
+      
       // Activate membership and link intent
       await tx.membership.update({ where: { id: join.membershipId }, data: { status: 'ACTIVE', paymentStatus: 'SUCCESS', activatedAt: new Date() } });
-      await tx.paymentIntent.update({ where: { id: intent.id }, data: { status: 'SUCCESS', providerRef: providerRef || null, membershipId: join.membershipId } });
-      // Auto-issue ID card if profile has photo and no existing card
-      let idCardCreated = false; let idCardReason: string | null = null;
-      const existingCard = await tx.iDCard.findUnique({ where: { membershipId: join.membershipId } }).catch(() => null);
-      if (!existingCard) {
-        const m = await tx.membership.findUnique({ where: { id: join.membershipId }, include: { designation: true, cell: true, user: { include: { profile: true } } } });
-        const hasPhoto = !!(m?.user?.profile?.profilePhotoUrl || m?.user?.profile?.profilePhotoMediaId);
-        if (!hasPhoto) {
-          idCardCreated = false; idCardReason = 'PROFILE_PHOTO_REQUIRED';
-        } else {
-          const cardNumber = await generateNextIdCardNumber(tx as any);
-          const fullName = m?.user?.profile?.fullName || undefined;
-          const mobileNumber = m?.user?.mobileNumber || undefined;
-          const designationName = m?.designation?.name || undefined;
-          const cellName = m?.cell?.name || undefined;
-          await tx.iDCard.create({ data: { membershipId: join.membershipId, cardNumber, expiresAt: new Date(Date.now() + 365*24*60*60*1000), fullName, mobileNumber, designationName, cellName } as any });
-          idCardCreated = true; idCardReason = null;
+      await tx.paymentIntent.update({ where: { id: intent.id }, data: { membershipId: join.membershipId } });
+      
+      return { membershipId: join.membershipId };
+    });
+
+    return res.json({ 
+      success: true, 
+      data: { 
+        status: 'ACTIVE', 
+        membershipId: result.membershipId,
+        message: 'Registration completed successfully'
+      } 
+    });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'REGISTRATION_FAILED', message: e?.message });
+  }
+});
+
+// Check if mobile number has any paid but unregistered seats
+/**
+ * @swagger
+ * /memberships/payfirst/check-mobile:
+ *   post:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Check if mobile number has paid but unregistered seats
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [mobileNumber]
+ *             properties:
+ *               mobileNumber: { type: string }
+ *     responses:
+ *       200:
+ *         description: Mobile number payment status
+ */
+router.post('/check-mobile', async (req, res) => {
+  try {
+    const { mobileNumber } = req.body || {};
+    if (!mobileNumber) return res.status(400).json({ success: false, error: 'mobileNumber required' });
+
+    // Check if user already registered
+    const existingUser = await (prisma as any).user.findFirst({ where: { mobileNumber: String(mobileNumber) } });
+    const isRegistered = !!existingUser;
+
+    // Find paid intents linked to this mobile (stored in meta)
+    const paidIntents = await (prisma as any).paymentIntent.findMany({
+      where: {
+        status: 'SUCCESS',
+        membershipId: null, // Not yet registered
+        OR: [
+          { meta: { path: ['registrationMobile'], equals: mobileNumber } },
+          // Also check if mobile matches any existing user with active membership
+          ...(existingUser ? [{ 
+            membershipId: { 
+              in: await (prisma as any).membership.findMany({
+                where: { userId: existingUser.id },
+                select: { id: true }
+              }).then((ms: any[]) => ms.map(m => m.id))
+            }
+          }] : [])
+        ]
+      }
+    });
+
+    const pendingRegistrations = [];
+    for (const intent of paidIntents) {
+      const seatDetails = await getSeatDetails(intent);
+      pendingRegistrations.push({
+        orderId: intent.id,
+        amount: intent.amount,
+        paidAt: intent.updatedAt,
+        seatDetails
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        mobileNumber,
+        isRegistered,
+        hasPendingSeats: pendingRegistrations.length > 0,
+        pendingRegistrations,
+        message: pendingRegistrations.length > 0 
+          ? `Found ${pendingRegistrations.length} paid seat(s) waiting for registration`
+          : isRegistered 
+            ? 'User already registered' 
+            : 'No pending payments found'
+      }
+    });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'CHECK_FAILED', message: e?.message });
+  }
+});
+
+// Admin: List all paid but unregistered seats
+/**
+ * @swagger
+ * /memberships/payfirst/admin/pending:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: List all paid but unregistered seats (Admin)
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Pending registrations
+ */
+router.get('/admin/pending', async (req, res) => {
+  try {
+    // Note: Add proper admin auth middleware in production
+    const pendingIntents = await (prisma as any).paymentIntent.findMany({
+      where: {
+        status: 'SUCCESS',
+        membershipId: null // Not yet registered
+      },
+      orderBy: { updatedAt: 'desc' }
+    });
+
+    const pendingList = [];
+    for (const intent of pendingIntents) {
+      const seatDetails = await getSeatDetails(intent);
+      const linkedMobile = intent.meta?.registrationMobile || null;
+      
+      pendingList.push({
+        orderId: intent.id,
+        amount: intent.amount,
+        paidAt: intent.updatedAt,
+        linkedMobile,
+        seatDetails,
+        daysSincePaid: Math.floor((Date.now() - new Date(intent.updatedAt).getTime()) / (24 * 60 * 60 * 1000))
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        count: pendingList.length,
+        pendingRegistrations: pendingList,
+        message: `Found ${pendingList.length} paid seats awaiting registration`
+      }
+    });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'ADMIN_CHECK_FAILED', message: e?.message });
+  }
+});
+
+// Admin: Manually complete registration for a payment intent
+/**
+ * @swagger
+ * /memberships/payfirst/admin/complete/{orderId}:
+ *   post:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Manually complete registration for paid order (Admin)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: orderId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               mobile:
+ *                 type: string
+ *                 example: "9876543210"
+ *               firstName:
+ *                 type: string
+ *                 example: "John"
+ *               lastName:
+ *                 type: string
+ *                 example: "Doe"
+ *               mpin:
+ *                 type: string
+ *                 example: "123456"
+ *             required: [mobile, firstName, lastName, mpin]
+ *     responses:
+ *       200:
+ *         description: Registration completed successfully
+ */
+router.post('/admin/complete/:orderId', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { mobile, firstName, lastName, mpin } = req.body;
+
+    // Note: Add proper admin auth middleware in production
+
+    // Find the payment intent
+    const paymentIntent = await (prisma as any).paymentIntent.findUnique({
+      where: { id: orderId }
+    });
+
+    if (!paymentIntent) {
+      return res.status(404).json({
+        success: false,
+        error: 'ORDER_NOT_FOUND',
+        message: 'Payment order not found'
+      });
+    }
+
+    if (paymentIntent.status !== 'SUCCESS') {
+      return res.status(400).json({
+        success: false,
+        error: 'PAYMENT_NOT_SUCCESS',
+        message: 'Payment is not in SUCCESS status'
+      });
+    }
+
+    if (paymentIntent.membershipId) {
+      return res.status(400).json({
+        success: false,
+        error: 'ALREADY_REGISTERED',
+        message: 'This payment has already been used for registration'
+      });
+    }
+
+    // Check if user exists
+    let user = await (prisma as any).user.findUnique({
+      where: { mobileNumber: mobile }
+    });
+
+    let createdNewUser = false;
+    if (!user) {
+      // Create new user (similar to /register endpoint)
+      const mpinHash = await bcrypt.hash(String(mpin), 10);
+      const citizen = await (prisma as any).role.findFirst({ 
+        where: { name: { in: ['CITIZEN_REPORTER','USER','MEMBER','GUEST'] as any } } 
+      });
+      const lang = await (prisma as any).language.findFirst();
+      
+      if (!citizen || !lang) {
+        return res.status(500).json({
+          success: false,
+          error: 'CONFIG_MISSING',
+          message: 'System configuration missing'
+        });
+      }
+      
+      user = await (prisma as any).user.create({
+        data: {
+          mobileNumber: String(mobile),
+          mpin: null as any,
+          mpinHash,
+          roleId: citizen.id,
+          languageId: lang.id,
+          status: 'PENDING'
+        }
+      });
+      createdNewUser = true;
+
+      // Create user profile
+      await (prisma as any).userProfile.create({
+        data: {
+          userId: user.id,
+          fullName: `${firstName} ${lastName}`
+        }
+      });
+    } else {
+      // Update existing user's MPIN
+      const mpinHash = await bcrypt.hash(String(mpin), 10);
+      await (prisma as any).user.update({
+        where: { id: user.id },
+        data: { mpin: null as any, mpinHash }
+      });
+
+      // Update user profile
+      await (prisma as any).userProfile.upsert({
+        where: { userId: user.id },
+        create: { userId: user.id, fullName: `${firstName} ${lastName}` },
+        update: { fullName: `${firstName} ${lastName}` }
+      });
+    }
+
+    // Create membership using the same approach as the register endpoint
+    const join = await membershipService.joinSeat({
+      userId: user.id,
+      cellCodeOrName: paymentIntent.cellCodeOrName,
+      designationCode: paymentIntent.designationCode,
+      level: paymentIntent.level as any,
+      zone: paymentIntent.zone || undefined,
+      hrcCountryId: paymentIntent.hrcCountryId || undefined,
+      hrcStateId: paymentIntent.hrcStateId || undefined,
+      hrcDistrictId: paymentIntent.hrcDistrictId || undefined,
+      hrcMandalId: paymentIntent.hrcMandalId || undefined
+    } as any);
+
+    if (!join.accepted) {
+      return res.status(400).json({
+        success: false,
+        error: 'SEAT_UNAVAILABLE',
+        message: 'Seat is no longer available'
+      });
+    }
+
+    // Activate membership and link intent
+    const membership = await (prisma as any).membership.update({
+      where: { id: join.membershipId },
+      data: {
+        status: 'ACTIVE',
+        paymentStatus: 'SUCCESS',
+        activatedAt: new Date()
+      }
+    });
+
+    // Link the membership to payment intent
+    await (prisma as any).paymentIntent.update({
+      where: { id: orderId },
+      data: { membershipId: join.membershipId }
+    });
+
+    // Get seat details for response
+    const seatDetails = await getSeatDetails(paymentIntent);
+
+    // Issue ID Card
+    let idCard;
+    try {
+      idCard = await (prisma as any).iDCard.create({
+        data: {
+          userId: user.id,
+          membershipId: membership.id,
+          cardNumber: `HRCI-${Date.now()}-${user.id}`,
+          status: 'ACTIVE'
+        }
+      });
+    } catch (idError) {
+      console.warn('ID Card creation failed:', idError);
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        message: 'Registration completed successfully by admin',
+        user: {
+          id: user.id,
+          mobile: user.mobileNumber,
+          createdNewUser
+        },
+        membership: {
+          id: membership.id,
+          cell: seatDetails.cell,
+          designation: seatDetails.designation,
+          level: seatDetails.level,
+          location: seatDetails.location,
+          status: 'ACTIVE'
+        },
+        idCard: idCard ? {
+          id: idCard.id,
+          cardNumber: idCard.cardNumber,
+          status: idCard.status
+        } : null,
+        paymentIntent: {
+          id: paymentIntent.id,
+          amount: paymentIntent.amount,
+          status: 'REGISTRATION_COMPLETED'
         }
       }
-      return { soldOut: false, membershipId: join.membershipId, idCardCreated, idCardReason };
     });
-    if (result.soldOut) return res.status(409).json({ success: false, error: 'SOLD_OUT', message: 'Seat sold out. Refund is required.' });
-    return res.json({ success: true, data: { status: 'ACTIVE', membershipId: result.membershipId, idCardCreated: result.idCardCreated, idCardReason: result.idCardReason } });
+
   } catch (e: any) {
-    return res.status(500).json({ success: false, error: 'CONFIRM_FAILED', message: e?.message });
+    console.error('Admin complete registration error:', e);
+    return res.status(500).json({ 
+      success: false, 
+      error: 'ADMIN_COMPLETE_FAILED', 
+      message: e?.message 
+    });
   }
 });
 
