@@ -14,7 +14,7 @@ const swaggerDefinition = {
       description: 'Local server (root)'
     },
     {
-      url: 'https://ai-kaburlu-backend.onrender.com',
+      url: 'https://app.hrcitodaynews.in/api/v1',
       description: 'Render server (root)'
     },
     {
@@ -22,7 +22,7 @@ const swaggerDefinition = {
       description: 'Local server (v1 legacy)'
     },
     {
-      url: 'https://ai-kaburlu-backend.onrender.com/api/v1',
+      url: 'https://app.hrcitodaynews.in/api/v1',
       description: 'Render server (v1 legacy)'
     }
   ],
