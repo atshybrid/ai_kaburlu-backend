@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
+import { createRazorpayOrder, razorpayEnabled, getRazorpayKeyId, verifyRazorpaySignature } from '../../lib/razorpay';
 import { membershipService } from '../../lib/membershipService';
 
 /**
@@ -57,12 +58,30 @@ function validateGeoByLevel(level: string, body: any): { ok: boolean; error?: st
  *               hrcStateId: { type: string, nullable: true, description: 'REQUIRED when level=STATE' }
  *               hrcDistrictId: { type: string, nullable: true, description: 'REQUIRED when level=DISTRICT' }
  *               hrcMandalId: { type: string, nullable: true, description: 'REQUIRED when level=MANDAL' }
- *               mobileNumber: { type: string }
- *               fullName: { type: string }
- *               mpin: { type: string }
+ *     description: |
+ *       Creates a payment intent for the specified seat. No membership or user is created at this step.
+ *       Supply the user details at /memberships/payfirst/confirm after payment success.
  *     responses:
  *       200:
  *         description: Order created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     order:
+ *                       type: object
+ *                       properties:
+ *                         orderId: { type: string }
+ *                         amount: { type: number }
+ *                         currency: { type: string }
+ *                         provider: { type: string, nullable: true }
+ *                         providerOrderId: { type: string, nullable: true }
+ *                         providerKeyId: { type: string, nullable: true }
  */
 router.post('/orders', async (req, res) => {
   try {
@@ -83,8 +102,13 @@ router.post('/orders', async (req, res) => {
         amount, currency: 'INR', status: 'PENDING'
       }
     });
-    // Return an order stub (integrate real PG later)
-    return res.json({ success: true, data: { order: { orderId: intent.id, amount, currency: 'INR' } } });
+    // If Razorpay is configured, create a provider order, else return internal order only
+    let providerOrderId: string | undefined;
+    if (razorpayEnabled()) {
+      const rp = await createRazorpayOrder({ amountPaise: amount * 100, currency: 'INR', receipt: intent.id, notes: { cell, designationCode, level } });
+      providerOrderId = rp.id;
+    }
+    return res.json({ success: true, data: { order: { orderId: intent.id, amount, currency: 'INR', provider: razorpayEnabled() ? 'razorpay' : null, providerOrderId: providerOrderId || null, providerKeyId: razorpayEnabled() ? getRazorpayKeyId() : null } } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'ORDER_FAILED', message: e?.message });
   }
@@ -108,9 +132,13 @@ router.post('/orders', async (req, res) => {
  *               orderId: { type: string }
  *               providerRef: { type: string }
  *               status: { type: string, enum: [SUCCESS, FAILED] }
- *               mobileNumber: { type: string }
- *               mpin: { type: string }
- *               fullName: { type: string }
+ *               mobileNumber: { type: string, description: 'Required when status=SUCCESS' }
+ *               mpin: { type: string, description: 'Required when status=SUCCESS (stored as hash)' }
+ *               fullName: { type: string, description: 'Required when status=SUCCESS' }
+ *               provider: { type: string, nullable: true, description: 'e.g., razorpay' }
+ *               razorpay_order_id: { type: string, nullable: true }
+ *               razorpay_payment_id: { type: string, nullable: true }
+ *               razorpay_signature: { type: string, nullable: true }
  *     description: |
  *       Notes:
  *       - Capacity is re-checked on confirm to prevent overbooking.
@@ -129,6 +157,16 @@ router.post('/confirm', async (req, res) => {
     // Validate geo presence for the saved level
     const geoCheck = validateGeoByLevel(intent.level, intent);
     if (!geoCheck.ok) return res.status(400).json({ success: false, error: 'MISSING_LOCATION', message: geoCheck.error });
+    // Optional Razorpay signature verification on SUCCESS
+    if (status === 'SUCCESS' && req.body.provider === 'razorpay') {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.status(400).json({ success: false, error: 'MISSING_PG_SIGNATURE' });
+      }
+      const valid = verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!valid) return res.status(400).json({ success: false, error: 'INVALID_PG_SIGNATURE' });
+    }
+
     if (status === 'FAILED') {
       await (prisma as any).paymentIntent.update({ where: { id: intent.id }, data: { status: 'FAILED', providerRef: providerRef || null } });
       return res.json({ success: true, data: { status: 'FAILED' } });
