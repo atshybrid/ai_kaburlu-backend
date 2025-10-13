@@ -21,9 +21,22 @@ const FORCE_WIPE = process.env.FORCE_WIPE === '1';
 const FULL_SEED = process.env.FULL_SEED === '1' || process.env.SEED_MODE === 'full';
 
 // --- Static Reference Data -------------------------------------------------
-const roles = [ 'SUPER_ADMIN','LANGUAGE_ADMIN','NEWS_DESK','REPORTER','ADMIN','CITIZEN_REPORTER','GUEST' ];
+// Add core roles plus requested HRCI roles (MEMBER, HRCI_ADMIN, VITTEAM)
+const roles = [
+    'SUPER_ADMIN',
+    'LANGUAGE_ADMIN',
+    'NEWS_DESK',
+    'REPORTER',
+    'ADMIN',
+    'CITIZEN_REPORTER',
+    'GUEST',
+    'MEMBER',
+    'HRCI_ADMIN',
+    'VITTEAM',
+];
 
-const defaultPermissions: Record<string, string[]> = {
+// Permissions JSON can be arrays of strings or nested objects depending on role needs
+const defaultPermissions: Record<string, any> = {
     SUPER_ADMIN: ['create','read','update','delete','approve','reject'],
     LANGUAGE_ADMIN: ['articles:create','articles:read','articles:update','articles:delete','articles:approve','articles:reject','users:read'],
     NEWS_DESK: [],
@@ -31,6 +44,21 @@ const defaultPermissions: Record<string, string[]> = {
     ADMIN: [],
     CITIZEN_REPORTER: [],
     GUEST: [],
+    // Members: basic self-service permissions (expand as needed)
+    MEMBER: ['member:read','idcard:read','kyc:read','kyc:update'],
+    // HRCI Admin: structured permissions aligned with HRCI admin activities
+    HRCI_ADMIN: {
+        hrc: {
+            teams: ['create','read','update'],
+            volunteers: ['onboard','assign'],
+            idcards: ['issue','renew','revoke'],
+            payments: ['create','refund','read'],
+            cases: ['create','read','update','assign','close'],
+            donations: ['read']
+        }
+    },
+    // VITTEAM: placeholder; specific APIs/permissions to be added later
+    VITTEAM: [],
 };
 
 const languages: { name: string; code: string; nativeName: string; direction: string; isDeleted: boolean }[] = [
