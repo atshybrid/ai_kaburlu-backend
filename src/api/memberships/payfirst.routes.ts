@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
 import { createRazorpayOrder, razorpayEnabled, getRazorpayKeyId, verifyRazorpaySignature } from '../../lib/razorpay';
+import { generateNextIdCardNumber } from '../../lib/idCardNumber';
 import { membershipService } from '../../lib/membershipService';
 
 /**
@@ -58,6 +59,17 @@ function validateGeoByLevel(level: string, body: any): { ok: boolean; error?: st
  *               hrcStateId: { type: string, nullable: true, description: 'REQUIRED when level=STATE' }
  *               hrcDistrictId: { type: string, nullable: true, description: 'REQUIRED when level=DISTRICT' }
  *               hrcMandalId: { type: string, nullable: true, description: 'REQUIRED when level=MANDAL' }
+ *           examples:
+ *             NATIONAL:
+ *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'NATIONAL' }
+ *             ZONE:
+ *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'ZONE', zone: 'SOUTH' }
+ *             STATE:
+ *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'STATE', hrcStateId: 'ap' }
+ *             DISTRICT:
+ *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'DISTRICT', hrcDistrictId: 'krishna' }
+ *             MANDAL:
+ *               value: { cell: 'GENERAL_BODY', designationCode: 'EXECUTIVE_MEMBER', level: 'MANDAL', hrcMandalId: 'mylavaram' }
  *     description: |
  *       Creates a payment intent for the specified seat. No membership or user is created at this step.
  *       Supply the user details at /memberships/payfirst/confirm after payment success.
@@ -82,6 +94,11 @@ function validateGeoByLevel(level: string, body: any): { ok: boolean; error?: st
  *                         provider: { type: string, nullable: true }
  *                         providerOrderId: { type: string, nullable: true }
  *                         providerKeyId: { type: string, nullable: true }
+ *             examples:
+ *               WithRazorpay:
+ *                 value: { success: true, data: { order: { orderId: 'cmgxxx', amount: 100, currency: 'INR', provider: 'razorpay', providerOrderId: 'order_abc', providerKeyId: 'rzp_test_xxx' } } }
+ *               InternalOnly:
+ *                 value: { success: true, data: { order: { orderId: 'cmgxxx', amount: 100, currency: 'INR', provider: null, providerOrderId: null } } }
  */
 router.post('/orders', async (req, res) => {
   try {
@@ -139,6 +156,13 @@ router.post('/orders', async (req, res) => {
  *               razorpay_order_id: { type: string, nullable: true }
  *               razorpay_payment_id: { type: string, nullable: true }
  *               razorpay_signature: { type: string, nullable: true }
+ *           examples:
+ *             SuccessInternal:
+ *               value: { orderId: 'cmgxxx', status: 'SUCCESS', mobileNumber: '9000000001', mpin: '1234', fullName: 'John Doe' }
+ *             SuccessRazorpay:
+ *               value: { orderId: 'cmgxxx', status: 'SUCCESS', provider: 'razorpay', razorpay_order_id: 'order_abc', razorpay_payment_id: 'pay_xyz', razorpay_signature: 'sig123', mobileNumber: '9000000001', mpin: '1234', fullName: 'John Doe' }
+ *             Failed:
+ *               value: { orderId: 'cmgxxx', status: 'FAILED', providerRef: 'pay_xyz' }
  *     description: |
  *       Notes:
  *       - Capacity is re-checked on confirm to prevent overbooking.
@@ -147,6 +171,19 @@ router.post('/orders', async (req, res) => {
  *     responses:
  *       200:
  *         description: Result
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     status: { type: string }
+ *                     membershipId: { type: string }
+ *                     idCardCreated: { type: boolean }
+ *                     idCardReason: { type: string, nullable: true }
  */
 router.post('/confirm', async (req, res) => {
   try {
@@ -154,6 +191,12 @@ router.post('/confirm', async (req, res) => {
     if (!orderId || !status) return res.status(400).json({ success: false, error: 'orderId and status required' });
     const intent = await (prisma as any).paymentIntent.findUnique({ where: { id: String(orderId) } });
     if (!intent) return res.status(404).json({ success: false, error: 'INTENT_NOT_FOUND' });
+    // Idempotency: if already successful and linked, return same
+    if (intent.status === 'SUCCESS' && intent.membershipId) {
+      // Check if card exists for completeness
+      const existingCard = await (prisma as any).iDCard.findUnique({ where: { membershipId: intent.membershipId } }).catch(() => null);
+      return res.json({ success: true, data: { status: 'ACTIVE', membershipId: intent.membershipId, idCardCreated: !!existingCard, idCardReason: existingCard ? null : 'CARD_NOT_ISSUED' } });
+    }
     // Validate geo presence for the saved level
     const geoCheck = validateGeoByLevel(intent.level, intent);
     if (!geoCheck.ok) return res.status(400).json({ success: false, error: 'MISSING_LOCATION', message: geoCheck.error });
@@ -216,10 +259,28 @@ router.post('/confirm', async (req, res) => {
       // Activate membership and link intent
       await tx.membership.update({ where: { id: join.membershipId }, data: { status: 'ACTIVE', paymentStatus: 'SUCCESS', activatedAt: new Date() } });
       await tx.paymentIntent.update({ where: { id: intent.id }, data: { status: 'SUCCESS', providerRef: providerRef || null, membershipId: join.membershipId } });
-      return { soldOut: false, membershipId: join.membershipId };
+      // Auto-issue ID card if profile has photo and no existing card
+      let idCardCreated = false; let idCardReason: string | null = null;
+      const existingCard = await tx.iDCard.findUnique({ where: { membershipId: join.membershipId } }).catch(() => null);
+      if (!existingCard) {
+        const m = await tx.membership.findUnique({ where: { id: join.membershipId }, include: { designation: true, cell: true, user: { include: { profile: true } } } });
+        const hasPhoto = !!(m?.user?.profile?.profilePhotoUrl || m?.user?.profile?.profilePhotoMediaId);
+        if (!hasPhoto) {
+          idCardCreated = false; idCardReason = 'PROFILE_PHOTO_REQUIRED';
+        } else {
+          const cardNumber = await generateNextIdCardNumber(tx as any);
+          const fullName = m?.user?.profile?.fullName || undefined;
+          const mobileNumber = m?.user?.mobileNumber || undefined;
+          const designationName = m?.designation?.name || undefined;
+          const cellName = m?.cell?.name || undefined;
+          await tx.iDCard.create({ data: { membershipId: join.membershipId, cardNumber, expiresAt: new Date(Date.now() + 365*24*60*60*1000), fullName, mobileNumber, designationName, cellName } as any });
+          idCardCreated = true; idCardReason = null;
+        }
+      }
+      return { soldOut: false, membershipId: join.membershipId, idCardCreated, idCardReason };
     });
     if (result.soldOut) return res.status(409).json({ success: false, error: 'SOLD_OUT', message: 'Seat sold out. Refund is required.' });
-    return res.json({ success: true, data: { status: 'ACTIVE', membershipId: result.membershipId } });
+    return res.json({ success: true, data: { status: 'ACTIVE', membershipId: result.membershipId, idCardCreated: result.idCardCreated, idCardReason: result.idCardReason } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'CONFIRM_FAILED', message: e?.message });
   }
