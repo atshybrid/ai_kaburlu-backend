@@ -220,6 +220,40 @@ model MembershipPayment {
   updatedAt      DateTime       @updatedAt
 }
 
+/// Payment Intent to support pay-first flow (no membership row until payment success)
+enum PaymentIntentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUND_REQUIRED
+  EXPIRED
+}
+
+model PaymentIntent {
+  id            String               @id @default(cuid())
+  // Seat specification at the time of order creation
+  cellCodeOrName String
+  designationCode String
+  level          OrgLevel
+  zone           HrcZone?
+  hrcCountryId   String?
+  hrcStateId     String?
+  hrcDistrictId  String?
+  hrcMandalId    String?
+  // Payment details
+  amount        Int                  @default(0)
+  currency      String               @default("INR")
+  status        PaymentIntentStatus  @default(PENDING)
+  providerRef   String?
+  meta          Json?
+  // Result linkage (after success)
+  membershipId  String?
+  // Optional expiry for the intent
+  expiresAt     DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+}
+
 /// Aggregate capacity per Cell + OrgLevel (independent of designation) to enforce
 /// a hard upper bound like: each cell can have at most 72 NATIONAL posts total (sum of all designations).
 model CellLevelCapacity {
