@@ -298,8 +298,30 @@ async function getMembershipSummary(userId: string, hasProfilePhoto: boolean) {
       }
     : null;
 
+  // Resolve HRCI geography display names if present
+  let country: any = null, state: any = null, district: any = null, mandal: any = null;
+  try {
+    if ((m as any).hrcCountryId) {
+      const c = await (prisma as any).hrcCountry.findUnique({ where: { id: (m as any).hrcCountryId } });
+      if (c) country = { id: c.id, name: c.name, code: c.code || null };
+    }
+    if ((m as any).hrcStateId) {
+      const s = await (prisma as any).hrcState.findUnique({ where: { id: (m as any).hrcStateId } });
+      if (s) state = { id: s.id, name: s.name, code: s.code || null, zone: s.zone, countryId: s.countryId };
+    }
+    if ((m as any).hrcDistrictId) {
+      const d = await (prisma as any).hrcDistrict.findUnique({ where: { id: (m as any).hrcDistrictId } });
+      if (d) district = { id: d.id, name: d.name, stateId: d.stateId };
+    }
+    if ((m as any).hrcMandalId) {
+      const md = await (prisma as any).hrcMandal.findUnique({ where: { id: (m as any).hrcMandalId } });
+      if (md) mandal = { id: md.id, name: md.name, districtId: md.districtId };
+    }
+  } catch {}
+
   return {
     hasMembership: true,
+    role: 'MEMBER',
     membershipId: m.id,
     level: m.level,
     cell: m.cell ? { id: m.cellId, name: (m as any).cell?.name ?? null } : null,
@@ -307,6 +329,13 @@ async function getMembershipSummary(userId: string, hasProfilePhoto: boolean) {
     status: m.status,
     paymentStatus: m.paymentStatus,
     idCardStatus: m.idCardStatus,
+    hrci: {
+      zone: (m as any).zone || null,
+      country,
+      state,
+      district,
+      mandal,
+    },
     activatedAt: m.activatedAt ? m.activatedAt.toISOString() : null,
     expiresAt: expiresAt ? expiresAt.toISOString() : null,
     expired: isExpired,
