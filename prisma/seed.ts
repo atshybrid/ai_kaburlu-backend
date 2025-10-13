@@ -42,7 +42,12 @@ const defaultPermissions: Record<string, any> = {
     NEWS_DESK: [],
     REPORTER: [],
     ADMIN: [],
-    CITIZEN_REPORTER: [],
+    CITIZEN_REPORTER: [
+        'shortnews:create','shortnews:update:own','shortnews:list','shortnews:moderation:self',
+        'ai:rewrite','ai:shortnews:article',
+        'profile:read','profile:update',
+        'user:self:read','user:self:update'
+    ],
     GUEST: [],
     // Members: basic self-service permissions (expand as needed)
     MEMBER: [

@@ -5,6 +5,16 @@ import { sendShortNewsApprovedNotification } from './shortnews.notifications';
 
 const router = Router();
 
+function roleName(user: any): string { return (user?.role?.name || '').toUpperCase(); }
+function isReporterOrAbove(user: any): boolean {
+	const r = roleName(user);
+	return ['CITIZEN_REPORTER','REPORTER','NEWS_DESK','NEWS_DESK_ADMIN','LANGUAGE_ADMIN','SUPERADMIN','SUPER_ADMIN','ADMIN'].includes(r);
+}
+function requireReporterOrAbove(req: any, res: any, next: any) {
+	if (isReporterOrAbove(req.user)) return next();
+	return res.status(403).json({ error: 'Forbidden: reporter required' });
+}
+
 /**
  * @swagger
  * /shortnews/AIarticle:
@@ -53,7 +63,7 @@ const router = Router();
  *       500:
  *         description: AI failure or invalid output
  */
-router.post('/AIarticle', passport.authenticate('jwt', { session: false }), shortNewsController.aiGenerateShortNewsArticle);
+router.post('/AIarticle', passport.authenticate('jwt', { session: false }), requireReporterOrAbove, shortNewsController.aiGenerateShortNewsArticle);
 
 /**
  * @swagger
@@ -99,7 +109,7 @@ router.post('/AIarticle', passport.authenticate('jwt', { session: false }), shor
  *       500:
  *         description: AI failure or invalid output
  */
-router.post('/ai/rewrite', passport.authenticate('jwt', { session: false }), shortNewsController.aiRewriteShortNews);
+router.post('/ai/rewrite', passport.authenticate('jwt', { session: false }), requireReporterOrAbove, shortNewsController.aiRewriteShortNews);
 
 /**
  * @swagger
@@ -343,7 +353,7 @@ router.post('/ai/rewrite', passport.authenticate('jwt', { session: false }), sho
  *       200:
  *         description: Status updated
  */
-router.post('/', passport.authenticate('jwt', { session: false }), shortNewsController.createShortNews);
+router.post('/', passport.authenticate('jwt', { session: false }), requireReporterOrAbove, shortNewsController.createShortNews);
 router.get('/', passport.authenticate('jwt', { session: false }), shortNewsController.listShortNews);
 
 // Role guard utility for privileged reads
@@ -439,7 +449,7 @@ router.get('/all', passport.authenticate('jwt', { session: false }), requireDesk
  *         description: Updated short news item
  */
 router.put('/:id', passport.authenticate('jwt', { session: false }), shortNewsController.updateShortNews);
-router.patch('/:id/status', shortNewsController.updateShortNewsStatus);
+router.patch('/:id/status', passport.authenticate('jwt', { session: false }), requireDeskOrAdmin, shortNewsController.updateShortNewsStatus);
 
 /**
  * @swagger
