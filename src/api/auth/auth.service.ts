@@ -79,6 +79,9 @@ export const login = async (loginDto: MpinLoginDto) => {
     orderBy: { updatedAt: 'desc' } 
   }); // Get most recent device
 
+  // Build membership/payment/ID card summary for login UX
+  const membershipSummary = await getMembershipSummary(user.id, !!userProfile?.profilePhotoUrl);
+
   const result =  {
     jwt: accessToken,
     refreshToken: refreshToken,
@@ -107,6 +110,8 @@ export const login = async (loginDto: MpinLoginDto) => {
       address: userLocation.address,
       source: userLocation.source
     } : null,
+    // Surface latest membership state to help the app decide navigation (pay, wait approval, renew, etc.)
+    membership: membershipSummary
   };
   console.log("result", result)
   return result
@@ -236,3 +241,91 @@ export const registerGuestUser = async (guestDto: GuestRegistrationDto, existing
     throw error;
   }
 };
+
+/**
+ * Compute a concise summary of the user's most relevant membership, payment, and ID card status,
+ * plus a suggested nextAction to help the client decide navigation.
+ */
+async function getMembershipSummary(userId: string, hasProfilePhoto: boolean) {
+  // Pick the most recently updated membership (covers PENDING/PAYMENT/ACTIVE/EXPIRED)
+  const m = await prisma.membership.findFirst({
+    where: { userId },
+    orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+    include: {
+      designation: true,
+      cell: true,
+      idCard: true,
+      payments: { orderBy: { createdAt: 'desc' }, take: 1 },
+    },
+  });
+
+  if (!m) return { hasMembership: false };
+
+  const now = new Date();
+  const lastPayment = (m as any).payments?.[0] || null;
+  const idCard = (m as any).idCard || null;
+  const expiresAt: Date | null = (m as any).expiresAt || (idCard?.expiresAt ?? null);
+  const isExpired = !!(expiresAt && expiresAt.getTime() < now.getTime()) || m.status === 'EXPIRED' || idCard?.status === 'EXPIRED';
+
+  // Determine if a payment is currently required/blocked
+  const requiresPayment = m.status === 'PENDING_PAYMENT' || m.paymentStatus === 'PENDING' || m.paymentStatus === 'FAILED';
+
+  // Compute nextAction hint for UI
+  let nextAction: any = { type: 'NONE', reason: null as string | null };
+  if (isExpired) {
+    nextAction = { type: 'RENEW', reason: 'Membership/ID card expired. Please renew to continue.' };
+  } else if (requiresPayment) {
+    nextAction = { type: 'PAYMENT', reason: 'Complete payment to activate your membership.' };
+  } else if (m.status === 'PENDING_APPROVAL') {
+    nextAction = { type: 'AWAIT_APPROVAL', reason: 'Your membership is awaiting admin approval.' };
+  } else if (m.status === 'ACTIVE' && m.idCardStatus === 'NOT_CREATED') {
+    if (!hasProfilePhoto) {
+      nextAction = { type: 'UPLOAD_PHOTO', reason: 'Upload a profile photo to generate your ID card.' };
+    } else {
+      nextAction = { type: 'ISSUE_ID_CARD', reason: 'ID card can be issued.' };
+    }
+  }
+
+  // Prepare relative paths for ID card viewing (front-end can prefix base URL; also available under /api/v1)
+  const idCardPaths = idCard?.cardNumber
+    ? {
+        json: `/hrci/idcard/${idCard.cardNumber}`,
+        html: `/hrci/idcard/${idCard.cardNumber}/html`,
+        qr: `/hrci/idcard/${idCard.cardNumber}/qr`,
+      }
+    : null;
+
+  return {
+    hasMembership: true,
+    membershipId: m.id,
+    level: m.level,
+    cell: m.cell ? { id: m.cellId, name: (m as any).cell?.name ?? null } : null,
+    designation: m.designation ? { id: m.designationId, code: (m as any).designation?.code ?? null, name: (m as any).designation?.name ?? null } : null,
+    status: m.status,
+    paymentStatus: m.paymentStatus,
+    idCardStatus: m.idCardStatus,
+    activatedAt: m.activatedAt ? m.activatedAt.toISOString() : null,
+    expiresAt: expiresAt ? expiresAt.toISOString() : null,
+    expired: isExpired,
+    lastPayment: lastPayment
+      ? {
+          status: lastPayment.status,
+          amount: lastPayment.amount,
+          providerRef: lastPayment.providerRef || null,
+          createdAt: lastPayment.createdAt?.toISOString?.() ?? null,
+        }
+      : null,
+    amountDue: (m as any).designation?.idCardFee ?? null,
+    requiresPayment,
+    card: idCard
+      ? {
+          cardNumber: idCard.cardNumber,
+          status: idCard.status,
+          issuedAt: idCard.issuedAt?.toISOString?.() ?? null,
+          expiresAt: idCard.expiresAt?.toISOString?.() ?? null,
+          paths: idCardPaths,
+        }
+      : null,
+    nextAction,
+  };
+}
