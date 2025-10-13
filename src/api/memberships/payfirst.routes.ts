@@ -411,6 +411,30 @@ router.post('/register', async (req, res) => {
  *     responses:
  *       200:
  *         description: Mobile number payment status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     mobileNumber: { type: string }
+ *                     isRegistered: { type: boolean }
+ *                     roleName: { type: string, nullable: true, description: 'Role name when user exists (e.g., MEMBER, HRCI_ADMIN). Null if not registered.' }
+ *                     hasPendingSeats: { type: boolean }
+ *                     pendingRegistrations:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           orderId: { type: string }
+ *                           amount: { type: number }
+ *                           paidAt: { type: string, format: date-time }
+ *                           seatDetails:
+ *                             type: object
+ *                     message: { type: string }
  */
 router.post('/check-mobile', async (req, res) => {
   try {
@@ -418,7 +442,7 @@ router.post('/check-mobile', async (req, res) => {
     if (!mobileNumber) return res.status(400).json({ success: false, error: 'mobileNumber required' });
 
     // Check if user already registered
-    const existingUser = await (prisma as any).user.findFirst({ where: { mobileNumber: String(mobileNumber) } });
+  const existingUser = await (prisma as any).user.findFirst({ where: { mobileNumber: String(mobileNumber) }, include: { role: true } });
     const isRegistered = !!existingUser;
 
     // Find paid intents linked to this mobile (stored in meta)
@@ -457,6 +481,7 @@ router.post('/check-mobile', async (req, res) => {
       data: {
         mobileNumber,
         isRegistered,
+        roleName: existingUser?.role?.name || null,
         hasPendingSeats: pendingRegistrations.length > 0,
         pendingRegistrations,
         message: pendingRegistrations.length > 0 
