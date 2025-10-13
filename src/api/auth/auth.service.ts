@@ -85,7 +85,7 @@ export const login = async (loginDto: MpinLoginDto) => {
   // Build membership/payment/ID card summary for login UX
   const membershipSummary = await getMembershipSummary(user.id, !!userProfile?.profilePhotoUrl);
 
-  const result =  {
+  const result: any =  {
     jwt: accessToken,
     refreshToken: refreshToken,
     expiresIn: 86400, // seconds (1 day)
@@ -112,10 +112,12 @@ export const login = async (loginDto: MpinLoginDto) => {
       placeName: userLocation.placeName,
       address: userLocation.address,
       source: userLocation.source
-    } : null,
-    // Surface latest membership state to help the app decide navigation (pay, wait approval, renew, etc.)
-    membership: membershipSummary
+    } : null
   };
+  // Only attach membership section for actual members
+  if (membershipSummary?.hasMembership) {
+    result.membership = membershipSummary;
+  }
   console.log("result", result)
   return result
 };
