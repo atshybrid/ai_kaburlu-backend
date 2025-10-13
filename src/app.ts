@@ -224,6 +224,10 @@ apiV1.use('/hrci/designations', hrciDesignationsRoutes);
 apiV1.use('/hrci/idcard', idcardRoutes);
 apiV1.use('/memberships', membershipsRoutes);
 apiV1.use('/memberships/admin', membershipsAdminRoutes);
+// Mirror public membership routes under /api/v1 for production base compatibility
+apiV1.use('/memberships/public', membershipsPublicRoutes);
+apiV1.use('/memberships/public/kyc', membershipsKycRoutes);
+apiV1.use('/memberships/payments', membershipsPaymentsRoutes);
 // Internal-only routes (enabled with ENABLE_INTERNAL_TEST_ROUTES=1)
 if (String(process.env.ENABLE_INTERNAL_TEST_ROUTES) === '1') {
   apiV1.get('/internal/push-logs/shortnews/:id', async (req: Request, res: Response) => {
