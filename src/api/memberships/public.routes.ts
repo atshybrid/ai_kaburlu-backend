@@ -133,11 +133,16 @@ router.post('/register', async (req, res) => {
     let user = await prisma.user.findFirst({ where: { mobileNumber: String(mobileNumber) } });
     const mpinHash = await bcrypt.hash(String(mpin), 10);
     if (!user) {
-      // Minimal required fields: roleId and languageId are required in schema; pick defaults
-      const role = await prisma.role.findFirst({ where: { name: { in: ['USER','user'] as any } } }) || await prisma.role.findFirst();
+      // Minimal required fields: roleId and languageId are required in schema; pick safe defaults
+      // Prefer least-privileged roles; never fall back to the first role arbitrarily (could be SUPER_ADMIN)
+      const desiredRoles = ['CITIZEN_REPORTER', 'USER', 'MEMBER', 'member', 'user', 'GUEST'];
+      let role = await prisma.role.findFirst({ where: { name: { in: desiredRoles as any } } });
+      if (!role) {
+        return res.status(500).json({ success: false, error: 'SAFE_ROLE_NOT_FOUND', message: 'No suitable default role (CITIZEN_REPORTER/USER/MEMBER/GUEST) found. Please seed roles.' });
+      }
       const lang = await prisma.language.findFirst();
-      if (!role || !lang) return res.status(500).json({ success: false, error: 'CONFIG_MISSING', message: 'Default role or language missing' });
-  user = await prisma.user.create({ data: { mobileNumber: String(mobileNumber), mpin: null as any, mpinHash, roleId: role.id, languageId: (lang as any).id, status: 'PENDING' } });
+      if (!lang) return res.status(500).json({ success: false, error: 'CONFIG_MISSING', message: 'Default language missing' });
+      user = await prisma.user.create({ data: { mobileNumber: String(mobileNumber), mpin: null as any, mpinHash, roleId: role.id, languageId: (lang as any).id, status: 'PENDING' } });
     } else {
       // Update mpinHash
   await prisma.user.update({ where: { id: user.id }, data: { mpin: null as any, mpinHash } });
