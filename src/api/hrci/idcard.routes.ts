@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
 import { requireAuth, requireAdmin, requireHrcAdmin } from '../middlewares/authz';
+import QRCode from 'qrcode';
 
 const router = Router();
 
@@ -156,7 +157,7 @@ router.get('/:cardNumber', async (req, res) => {
  * /hrci/idcard/{cardNumber}/html:
  *   get:
  *     tags: [HRCI ID Cards]
- *     summary: Render a simple HTML preview of the ID card (public)
+ *     summary: Render a full visual HTML ID card (front and back) using current settings (public)
  *     parameters:
  *       - in: path
  *         name: cardNumber
@@ -189,40 +190,101 @@ router.get('/:cardNumber/html', async (req, res) => {
       cellName = cellName || (m as any).cell?.name || '';
     }
   }
+  // Dates
+  function fmt(d?: Date | string | null) {
+    if (!d) return '';
+    const dt = typeof d === 'string' ? new Date(d) : d;
+    if (Number.isNaN(dt.getTime())) return '';
+    return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  }
   const primary = s?.primaryColor || '#0d6efd';
   const secondary = s?.secondaryColor || '#6c757d';
+  // Compose terms as list
+  const terms: string[] = Array.isArray((s as any)?.terms)
+    ? ((s as any).terms as any[]).map(String)
+    : (typeof (s as any)?.terms === 'object' && (s as any).terms
+        ? Object.values((s as any).terms).map(String)
+        : []);
+  // Generate inline QR SVG for the human-friendly HTML landing URL
+  const baseHost = (s?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+  const landingUrl = `${baseHost}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/html`;
+  let qrSvg = '';
+  try {
+    qrSvg = await QRCode.toString(landingUrl, { type: 'svg', margin: 0, width: 160 });
+  } catch {
+    qrSvg = `<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><rect width='160' height='160' fill='#fff'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='10'>QR</text></svg>`;
+  }
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>ID Card</title>
-  <style>body{font-family:Arial;margin:0;padding:0;background:#f5f5f5} .card{width:360px;margin:16px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.12)} .hdr{background:${primary};color:#fff;padding:12px;text-align:center}
-  .logo{height:48px;border-radius:50%;object-fit:cover}
-  .blk{padding:12px;color:#212529}
-  .photo{display:flex;justify-content:center;margin-top:8px}
-  .photo img{width:90px;height:90px;border-radius:8px;object-fit:cover;border:3px solid ${secondary}33}
+  <title>ID Card ${card.cardNumber}</title>
+  <style>
+  :root{--primary:${primary};--secondary:${secondary}}
+  *{box-sizing:border-box}
+  body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:16px;background:#f5f5f5;color:#212529}
+  .wrap{display:flex;gap:24px;flex-wrap:wrap;justify-content:center}
+  .card{width:360px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.12)}
+  .hdr{background:var(--primary);color:#fff;padding:10px 12px;text-align:center}
+  .hdr .logos{display:flex;gap:12px;justify-content:center;align-items:center;margin-bottom:6px}
+  .logo{height:44px;object-fit:contain}
   .h1{font-size:18px;font-weight:700}
-  .h2{font-size:14px;color:${secondary}}
-  .row{display:flex;justify-content:space-between;margin-top:8px}
-  .qr{margin:12px auto;text-align:center}
-  .footer{font-size:11px;color:#666;text-align:center;padding:8px 12px}
+  .h2{font-size:13px;opacity:.9}
+  .h34{font-size:12px;opacity:.9}
+  .blk{padding:12px}
+  .photo{display:flex;justify-content:center;margin:8px 0}
+  .photo img{width:96px;height:96px;border-radius:10px;object-fit:cover;border:3px solid rgba(0,0,0,.08)}
+  .row{display:flex;gap:8px;margin:6px 0}
+  .kv{flex:1 1 50%}
+  .kv .k{font-size:12px;color:#666}
+  .kv .v{font-weight:600}
+  .divider{height:1px;background:#eee;margin:10px 0}
+  .meta{font-size:12px;color:#555}
+  .qr{display:flex;justify-content:center;margin:10px 0}
+  .signs{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:8px 0}
+  .signs img{height:40px}
+  .footer{font-size:11px;color:#666;text-align:center;padding:8px 12px;background:#fafafa}
+  /* Back */
+  .back .title{background:var(--secondary);color:#fff;text-align:center;padding:8px 12px;font-weight:700}
+  .terms{padding:10px 16px;font-size:12px}
+  .terms li{margin:6px 0}
+  .addr{padding:0 16px 12px;color:#444;font-size:12px}
+  @media print {.wrap{gap:0}.card{box-shadow:none;margin:0}}
   </style></head><body>
-  <div class="card">
-   <div class="hdr">
-     ${s?.frontLogoUrl ? `<img class="logo" src="${s.frontLogoUrl}"/>` : ''}
-     <div class="h1">${s?.frontH1 || 'HRCI'}</div>
-     <div class="h2">${s?.frontH2 || ''}</div>
-   </div>
-   <div class="blk">
-     ${photoUrl ? `<div class="photo"><img src="${photoUrl}" alt="Photo"/></div>` : ''}
-     <div><b>Name:</b> ${fullName}</div>
-     <div><b>Designation:</b> ${designationName}</div>
-     <div><b>Cell:</b> ${cellName}</div>
-     <div><b>Mobile:</b> ${mobileNumber}</div>
-     ${s?.registerDetails ? `<div style="margin-top:8px;white-space:pre-wrap">${s.registerDetails}</div>` : ''}
-     ${s?.authorSignUrl ? `<div style="margin-top:8px"><img src="${s.authorSignUrl}" style="height:36px"/></div>` : ''}
-   </div>
-   <div class="qr">
-     <img src="/hrci/idcard/${encodeURIComponent(card.cardNumber)}/qr" alt="QR"/>
-   </div>
-   <div class="footer">${s?.frontFooterText || ''}</div>
+  <div class="wrap">
+    <div class="card front">
+      <div class="hdr">
+        <div class="logos">
+          ${s?.frontLogoUrl ? `<img class="logo" src="${s.frontLogoUrl}" alt="Logo"/>` : ''}
+          ${s?.secondLogoUrl ? `<img class="logo" src="${s.secondLogoUrl}" alt="Second Logo"/>` : ''}
+        </div>
+        <div class="h1">${s?.frontH1 || 'HRCI'}</div>
+        ${s?.frontH2 ? `<div class="h2">${s.frontH2}</div>` : ''}
+        ${(s?.frontH3 || s?.frontH4) ? `<div class="h34">${[s?.frontH3, s?.frontH4].filter(Boolean).join(' • ')}</div>` : ''}
+      </div>
+      <div class="blk">
+        ${photoUrl ? `<div class="photo"><img src="${photoUrl}" alt="Photo"/></div>` : ''}
+        <div class="row">
+          <div class="kv"><div class="k">Name</div><div class="v">${fullName || '-'}</div></div>
+          <div class="kv"><div class="k">Mobile</div><div class="v">${mobileNumber || '-'}</div></div>
+        </div>
+        <div class="row">
+          <div class="kv"><div class="k">Designation</div><div class="v">${designationName || '-'}</div></div>
+          <div class="kv"><div class="k">Cell</div><div class="v">${cellName || '-'}</div></div>
+        </div>
+        <div class="divider"></div>
+        <div class="meta">Card No: <b>${card.cardNumber}</b></div>
+        <div class="meta">Issued: <b>${fmt(card.issuedAt)}</b> &nbsp; | &nbsp; Valid Upto: <b>${fmt(card.expiresAt)}</b></div>
+        <div class="qr">${qrSvg}</div>
+        ${s?.registerDetails ? `<div class="meta" style="white-space:pre-wrap">${s.registerDetails}</div>` : ''}
+        ${s?.authorSignUrl || s?.hrciStampUrl ? `<div class="signs">${s?.authorSignUrl ? `<img src="${s.authorSignUrl}" alt="Signature"/>` : ''}${s?.hrciStampUrl ? `<img src="${s.hrciStampUrl}" alt="Stamp"/>` : ''}</div>` : ''}
+      </div>
+      <div class="footer">${s?.frontFooterText || ''}</div>
+    </div>
+    <div class="card back">
+      <div class="title">Terms & Instructions</div>
+      <ol class="terms">
+        ${terms.length ? terms.map(t => `<li>${t}</li>`).join('') : '<li>Carry this card at all times during official duties.</li>'}
+      </ol>
+      ${s?.headOfficeAddress ? `<div class="addr"><b>Head Office:</b><br/>${s.headOfficeAddress}</div>` : ''}
+    </div>
   </div>
   </body></html>`;
   res.setHeader('Content-Type', 'text/html');
@@ -248,15 +310,18 @@ router.get('/:cardNumber/qr', async (req, res) => {
   const card = await prisma.iDCard.findUnique({ where: { cardNumber: req.params.cardNumber } });
   if (!card) return res.status(404).send('Not found');
   const setting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
-  const baseUrl = setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`;
+  const baseUrl = (setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
   // Prefer HTML landing page when scanning the QR for human-friendly view
   const url = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/html`;
-  // Lightweight inline SVG QR (placeholder pattern). For production, integrate 'qrcode' package.
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><rect width='160' height='160' fill='#fff'/>`+
-              `<text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='10'>QR</text>`+
-              `</svg>`;
-  res.setHeader('Content-Type', 'image/svg+xml');
-  res.send(svg);
+  try {
+    const svg = await QRCode.toString(url, { type: 'svg', margin: 0, width: 160 });
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.send(svg);
+  } catch (e) {
+    const fallback = `<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><rect width='160' height='160' fill='#fff'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='10'>QR</text></svg>`;
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.send(fallback);
+  }
 });
 
 export default router;
