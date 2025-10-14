@@ -27,18 +27,55 @@ function buildCardPaths(cardNumber: string) {
 router.get('/me/idcard', requireAuth, async (req: any, res) => {
   try {
     const userId = req.user.id;
-    // Prefer the latest active membership
-    const membership = await prisma.membership.findFirst({
+    // Fetch all memberships for the user (lightweight) with potential card relation
+    const memberships = await prisma.membership.findMany({
       where: { userId },
-      orderBy: { updatedAt: 'desc' },
-      include: { idCard: true, designation: true, cell: true }
+      include: { idCard: true },
+      orderBy: { updatedAt: 'desc' }
     });
-    if (!membership) return res.json({ success: true, data: { hasMembership: false, message: 'No membership found' } });
-    const card = membership.idCard || null;
-    if (!card) {
-      return res.json({ success: true, data: { hasMembership: true, hasCard: false, membershipId: membership.id, idCardStatus: membership.idCardStatus, message: membership.idCardStatus === 'NOT_CREATED' ? 'Upload a profile photo and issue your ID card.' : 'ID card not available.' } });
+    if (!memberships || memberships.length === 0) {
+      return res.json({ success: true, data: { hasMembership: false, message: 'No membership found' } });
     }
-    return res.json({ success: true, data: { hasMembership: true, hasCard: true, card: { id: card.id, cardNumber: card.cardNumber, status: card.status, issuedAt: card.issuedAt, expiresAt: card.expiresAt, paths: buildCardPaths(card.cardNumber) } } });
+
+    // Prefer a membership that already has a card; else take the most recent
+    let picked = memberships.find(m => !!(m as any).idCard) || memberships[0];
+    const card = (picked as any).idCard || null;
+
+    // Reconcile: if card exists but membership.idCardStatus is not GENERATED, fix it silently
+    if (card && picked.idCardStatus !== 'GENERATED') {
+      try { await prisma.membership.update({ where: { id: picked.id }, data: { idCardStatus: 'GENERATED' as any } }); } catch {}
+    }
+
+    if (!card) {
+      return res.json({
+        success: true,
+        data: {
+          hasMembership: true,
+          hasCard: false,
+          membershipId: picked.id,
+          idCardStatus: picked.idCardStatus,
+          message: picked.idCardStatus === 'NOT_CREATED' ? 'Upload a profile photo and issue your ID card.' : 'ID card not available.'
+        }
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        hasMembership: true,
+        hasCard: true,
+        membershipId: picked.id,
+        idCardStatus: 'GENERATED',
+        card: {
+          id: card.id,
+          cardNumber: card.cardNumber,
+          status: card.status,
+          issuedAt: card.issuedAt,
+          expiresAt: card.expiresAt,
+          paths: buildCardPaths(card.cardNumber)
+        }
+      }
+    });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'FETCH_CARD_FAILED', message: e?.message });
   }
