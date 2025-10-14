@@ -170,7 +170,9 @@ app.use('/hrci/cells', hrciCellsRoutes); // public cells listing
 app.use('/hrci/designations', hrciDesignationsRoutes); // public designations listing
 app.use('/hrci/idcard', idcardRoutes); // settings + public card JSON/HTML/QR
 app.use('/memberships/public', membershipsPublicRoutes); // open public
-app.use('/memberships/public/kyc', membershipsKycRoutes); // public KYC submit/get
+// KYC: JWT required inside the router; mounted under member path. Public alias retained for backward compatibility.
+app.use('/memberships/kyc', membershipsKycRoutes);
+app.use('/memberships/public/kyc', membershipsKycRoutes); // deprecated alias
 app.use('/memberships/payments', membershipsPaymentsRoutes); // open for front-end payment
 app.use('/memberships/payfirst', membershipsPayFirstRoutes); // pay-first flow (order first)
 app.use('/memberships/admin', membershipsAdminRoutes); // JWT + admin required
@@ -236,7 +238,8 @@ apiV1.use('/memberships/admin', membershipsAdminRoutes);
 apiV1.use('/memberships', membershipsSelfRoutes);
 // Mirror public membership routes under /api/v1 for production base compatibility
 apiV1.use('/memberships/public', membershipsPublicRoutes);
-apiV1.use('/memberships/public/kyc', membershipsKycRoutes);
+apiV1.use('/memberships/kyc', membershipsKycRoutes);
+apiV1.use('/memberships/public/kyc', membershipsKycRoutes); // deprecated alias
 apiV1.use('/memberships/payments', membershipsPaymentsRoutes);
 apiV1.use('/memberships/payfirst', membershipsPayFirstRoutes);
 // Internal-only routes (enabled with ENABLE_INTERNAL_TEST_ROUTES=1)

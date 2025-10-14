@@ -8,10 +8,10 @@ const router = Router();
 
 /**
  * @swagger
- * /memberships/public/kyc/{membershipId}:
+ * /memberships/kyc/{membershipId}:
  *   get:
  *     tags: [HRCI Membership - Member APIs]
- *     summary: Get KYC details for a membership
+ *     summary: Get KYC details for a membership (JWT required)
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -82,10 +82,10 @@ router.get('/:membershipId', requireAuth, async (req, res) => {
 
 /**
  * @swagger
- * /memberships/public/kyc:
+ * /memberships/kyc:
  *   post:
  *     tags: [HRCI Membership - Member APIs]
- *     summary: Submit or update KYC for a membership
+ *     summary: Submit or update KYC for a membership (JWT required)
  *     security:
  *       - bearerAuth: []
  *     requestBody:
