@@ -387,6 +387,21 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ success: false, error: 'MOBILE_MISMATCH', message: 'Use the same mobile number used when creating the order' });
     }
 
+    // If a user exists on this mobile but is NOT already a member, do not upgrade/link – block the registration
+    const preUser = await (prisma as any).user.findFirst({ where: { mobileNumber: String(mobileNumber) }, include: { role: true } });
+    if (preUser) {
+      const preRoleName = String(preUser.role?.name || '').toUpperCase();
+      const preIsMember = ['HRCI_MEMBER','MEMBER'].includes(preRoleName);
+      if (!preIsMember) {
+        return res.status(409).json({ 
+          success: false, 
+          error: 'EXISTING_NON_MEMBER', 
+          roleName: preUser.role?.name || null,
+          message: 'This mobile is already registered with a non-member role. Please login and contact admin to upgrade, or use a different mobile number.' 
+        });
+      }
+    }
+
     const result = await (prisma as any).$transaction(async (tx: any) => {
       // 1) Upsert user with mpinHash and ensure proper MEMBER role
       let user = await tx.user.findFirst({ where: { mobileNumber: String(mobileNumber) } });
@@ -401,12 +416,12 @@ router.post('/register', async (req, res) => {
       if (!user) {
         user = await tx.user.create({ data: { mobileNumber: String(mobileNumber), mpin: null as any, mpinHash, roleId: targetRole.id, languageId: lang.id, status: 'PENDING' } });
       } else {
-        // Always set MPIN; upgrade role if low-privilege
+        // Only allow if already a member; do NOT upgrade/link non-members
         const currentRole = await tx.role.findUnique({ where: { id: user.roleId } });
         const currentName = String(currentRole?.name || '').toUpperCase();
         const isMember = ['HRCI_MEMBER','MEMBER'].includes(currentName);
-        // Upgrade any non-member role (including USER, CITIZEN_REPORTER, GUEST) to MEMBER
-        await tx.user.update({ where: { id: user.id }, data: { mpin: null as any, mpinHash, ...(!isMember ? { roleId: targetRole.id } : {}) } });
+        if (!isMember) throw new Error('EXISTING_NON_MEMBER');
+        await tx.user.update({ where: { id: user.id }, data: { mpin: null as any, mpinHash } });
       }
       await tx.userProfile.upsert({ where: { userId: user.id }, create: { userId: user.id, fullName }, update: { fullName } });
       
@@ -443,6 +458,9 @@ router.post('/register', async (req, res) => {
       } 
     });
   } catch (e: any) {
+    if (String(e?.message) === 'EXISTING_NON_MEMBER') {
+      return res.status(409).json({ success: false, error: 'EXISTING_NON_MEMBER', message: 'This mobile is already registered with a non-member role. Please login and contact admin to upgrade, or use a different mobile number.' });
+    }
     return res.status(500).json({ success: false, error: 'REGISTRATION_FAILED', message: e?.message });
   }
 });
