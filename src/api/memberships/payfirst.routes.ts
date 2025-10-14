@@ -368,6 +368,16 @@ router.get('/lookup/razorpay/:providerOrderId', async (req, res) => {
  *     responses:
  *       200:
  *         description: Registration completed
+ *       409:
+ *         description: Existing mobile is registered with a non-member role (CITIZEN_REPORTER/USER/GUEST)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 error: { type: string, example: 'EXISTING_NON_MEMBER' }
+ *                 message: { type: string }
  */
 router.post('/register', async (req, res) => {
   try {
