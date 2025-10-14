@@ -32,8 +32,9 @@ async function start() {
     const server = http.createServer(app);
 
     server.listen(port, host, () => {
-      console.log(`Server is running on http://${host}:${port}`);
-      console.log(`Swagger is running on http://${host}:${port}/api/docs`);
+      const displayHost = (host === '0.0.0.0' || host === '::') ? 'localhost' : host;
+      console.log(`Server is running on http://${displayHost}:${port}`);
+      console.log(`Swagger is running on http://${displayHost}:${port}/api/docs`);
     });
 
     // graceful shutdown

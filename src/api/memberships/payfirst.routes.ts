@@ -455,6 +455,13 @@ router.post('/register', async (req, res) => {
       // Activate membership and link intent
       await tx.membership.update({ where: { id: join.membershipId }, data: { status: 'ACTIVE', paymentStatus: 'SUCCESS', activatedAt: new Date() } });
       await tx.paymentIntent.update({ where: { id: intent.id }, data: { membershipId: join.membershipId } });
+      // Update MembershipPayment record to SUCCESS (if exists)
+      try {
+        const lastPayment = await tx.membershipPayment.findFirst({ where: { membershipId: join.membershipId }, orderBy: { createdAt: 'desc' } });
+        if (lastPayment) {
+          await tx.membershipPayment.update({ where: { id: lastPayment.id }, data: { status: 'SUCCESS' as any, providerRef: intent.providerRef || lastPayment.providerRef, meta: { ...(lastPayment as any).meta, paymentIntentId: intent.id } } });
+        }
+      } catch {}
       
       return { membershipId: join.membershipId };
     });
@@ -799,6 +806,14 @@ router.post('/admin/complete/:orderId', async (req, res) => {
       where: { id: orderId },
       data: { membershipId: join.membershipId }
     });
+
+    // Update MembershipPayment record to SUCCESS (if exists)
+    try {
+      const lastPayment = await (prisma as any).membershipPayment.findFirst({ where: { membershipId: join.membershipId }, orderBy: { createdAt: 'desc' } });
+      if (lastPayment) {
+        await (prisma as any).membershipPayment.update({ where: { id: lastPayment.id }, data: { status: 'SUCCESS', providerRef: paymentIntent.providerRef || lastPayment.providerRef, meta: { ...(lastPayment as any).meta, paymentIntentId: orderId } } });
+      }
+    } catch {}
 
     // Get seat details for response
     const seatDetails = await getSeatDetails(paymentIntent);
