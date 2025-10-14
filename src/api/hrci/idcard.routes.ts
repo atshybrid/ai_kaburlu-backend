@@ -9,6 +9,36 @@ const router = Router();
  * tags:
  *   name: HRCI ID Cards
  *   description: ID Card settings and public card views
+ * components:
+ *   schemas:
+ *     IdCardSetting:
+ *       type: object
+ *       properties:
+ *         id: { type: string }
+ *         name: { type: string }
+ *         isActive: { type: boolean }
+ *         primaryColor: { type: string, nullable: true }
+ *         secondaryColor: { type: string, nullable: true }
+ *         frontH1: { type: string, nullable: true }
+ *         frontH2: { type: string, nullable: true }
+ *         frontH3: { type: string, nullable: true }
+ *         frontH4: { type: string, nullable: true }
+ *         frontLogoUrl: { type: string, nullable: true }
+ *         secondLogoUrl: { type: string, nullable: true }
+ *         hrciStampUrl: { type: string, nullable: true }
+ *         authorSignUrl: { type: string, nullable: true }
+ *         registerDetails: { type: string, nullable: true }
+ *         frontFooterText: { type: string, nullable: true }
+ *         headOfficeAddress: { type: string, nullable: true }
+ *         terms:
+ *           oneOf:
+ *             - type: array
+ *               items: { type: string }
+ *             - type: object
+ *               description: JSON field may be stored as generic JSON in DB
+ *         qrLandingBaseUrl: { type: string, nullable: true }
+ *         createdAt: { type: string, format: date-time }
+ *         updatedAt: { type: string, format: date-time }
  */
 
 // Admin CRUD for settings
@@ -19,6 +49,22 @@ const router = Router();
  *     tags: [HRCI ID Cards]
  *     summary: List ID card settings (admin)
  *     security: [ { bearerAuth: [] } ]
+ *     responses:
+ *       200:
+ *         description: List of settings
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/IdCardSetting'
+ *             examples:
+ *               ok:
+ *                 value: { success: true, data: [ { id: 'cuid', name: 'ID Card', isActive: true } ] }
  *   post:
  *     tags: [HRCI ID Cards]
  *     summary: Create an ID card setting (admin)
@@ -47,6 +93,31 @@ const router = Router();
  *               headOfficeAddress: { type: string }
  *               terms: { type: array, items: { type: string } }
  *               qrLandingBaseUrl: { type: string }
+ *     responses:
+ *       200:
+ *         description: Created setting
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   $ref: '#/components/schemas/IdCardSetting'
+ *             examples:
+ *               created:
+ *                 value:
+ *                   success: true
+ *                   data:
+ *                     id: 'cuid_123'
+ *                     name: 'ID Card'
+ *                     isActive: true
+ *                     primaryColor: '#FFFFFF'
+ *                     secondaryColor: '#BBBBBB'
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden (requires HRCI admin)
  */
 router.get('/settings', requireAuth, requireHrcAdmin, async (_req, res) => {
   const rows = await (prisma as any).idCardSetting.findMany({ orderBy: { updatedAt: 'desc' } });
@@ -75,6 +146,21 @@ router.post('/settings', requireAuth, requireHrcAdmin, async (req, res) => {
  *         name: id
  *         required: true
  *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Updated setting
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   $ref: '#/components/schemas/IdCardSetting'
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden (requires HRCI admin)
  */
 router.put('/settings/:id', requireAuth, requireHrcAdmin, async (req, res) => {
   const updated = await (prisma as any).idCardSetting.update({ where: { id: req.params.id }, data: req.body || {} });
