@@ -260,14 +260,17 @@ async function getMembershipSummary(userId: string, hasProfilePhoto: boolean) {
       designation: true,
       cell: true,
       idCard: true,
-      payments: { orderBy: { createdAt: 'desc' }, take: 1 },
+      // Use updatedAt to reflect status transitions (PENDING -> SUCCESS)
+      payments: { orderBy: { updatedAt: 'desc' }, take: 3 },
     },
   });
 
   if (!m) return { hasMembership: false };
 
   const now = new Date();
-  const lastPayment = (m as any).payments?.[0] || null;
+  // Prefer a SUCCESS payment if available among the most recent; else fall back to the latest by updatedAt
+  const payments = ((m as any).payments || []) as any[];
+  const lastPayment = payments.find(p => p.status === 'SUCCESS') || payments[0] || null;
   const idCard = (m as any).idCard || null;
   const expiresAt: Date | null = (m as any).expiresAt || (idCard?.expiresAt ?? null);
   const isExpired = !!(expiresAt && expiresAt.getTime() < now.getTime()) || m.status === 'EXPIRED' || idCard?.status === 'EXPIRED';

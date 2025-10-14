@@ -59,6 +59,26 @@ router.get('/me/idcard', requireAuth, async (req: any, res) => {
       });
     }
 
+    // Include current active IdCardSetting in response for the client to style/render
+    const setting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
+    // Resolve holder fields (from snapshot or live)
+    let fullName = (card as any).fullName || '';
+    let designationName = (card as any).designationName || '';
+    let cellName = (card as any).cellName || '';
+    let mobileNumber = (card as any).mobileNumber || '';
+    if (!fullName || !designationName || !cellName || !mobileNumber) {
+      const m = await prisma.membership.findUnique({ where: { id: picked.id }, include: { designation: true, cell: true } });
+      if (m) {
+        try {
+          const user = await prisma.user.findUnique({ where: { id: m.userId }, include: { profile: true } });
+          fullName = fullName || (user as any)?.profile?.fullName || '';
+          mobileNumber = mobileNumber || (user as any)?.mobileNumber || '';
+        } catch {}
+        designationName = designationName || (m as any).designation?.name || '';
+        cellName = cellName || (m as any).cell?.name || '';
+      }
+    }
+
     return res.json({
       success: true,
       data: {
@@ -72,8 +92,10 @@ router.get('/me/idcard', requireAuth, async (req: any, res) => {
           status: card.status,
           issuedAt: card.issuedAt,
           expiresAt: card.expiresAt,
+          holder: { fullName, mobileNumber, designationName, cellName },
           paths: buildCardPaths(card.cardNumber)
-        }
+        },
+        setting
       }
     });
   } catch (e: any) {
@@ -221,7 +243,7 @@ router.get('/me/profile', requireAuth, async (req: any, res) => {
           designation,
           hrci,
           lastPayment: await (async () => {
-            const mp = await (prisma as any).membershipPayment.findFirst({ where: { membershipId: membership.id }, orderBy: { createdAt: 'desc' } });
+            const mp = await (prisma as any).membershipPayment.findFirst({ where: { membershipId: membership.id }, orderBy: { updatedAt: 'desc' } });
             return mp ? { amount: mp.amount, status: mp.status, providerRef: mp.providerRef, createdAt: mp.createdAt } : null;
           })()
         } : null,
