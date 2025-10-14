@@ -223,7 +223,42 @@ router.post(
 
 export default router;
 /**
- * List designation prices (admin)
+ * @swagger
+ * /hrci/designations/{designationId}/prices:
+ *   get:
+ *     tags: [HRCI]
+ *     summary: List designation prices (admin)
+ *     description: Retrieve override prices for a designation filtered by cell/level/geo.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: designationId
+ *         required: true
+ *         schema: { type: string }
+ *         description: Designation id or code
+ *       - in: query
+ *         name: cell
+ *         schema: { type: string }
+ *         description: Cell id, code, or name
+ *       - in: query
+ *         name: level
+ *         schema: { type: string, enum: [NATIONAL, ZONE, STATE, DISTRICT, MANDAL] }
+ *       - in: query
+ *         name: zone
+ *         schema: { type: string, enum: [NORTH, SOUTH, EAST, WEST, CENTRAL] }
+ *       - in: query
+ *         name: hrcStateId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: hrcDistrictId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: hrcMandalId
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: OK
  */
 router.get(
   '/:designationId/prices',

@@ -73,6 +73,23 @@ router.get('/settings', requireAuth, requireHrcAdmin, async (_req, res) => {
 
 /**
  * @swagger
+ * /hrci/idcard/settings:
+ *   post:
+ *     deprecated: true
+ *     tags: [HRCI ID Cards]
+ *     summary: Deprecated – use PUT /hrci/idcard/settings/{id}
+ *     description: Creation via POST is removed. A default record is seeded; update it with PUT.
+ *     security: [ { bearerAuth: [] } ]
+ *     responses:
+ *       410:
+ *         description: Gone – use PUT instead
+ */
+router.post('/settings', requireAuth, requireHrcAdmin, (_req, res) => {
+  res.status(410).json({ success: false, error: 'GONE', message: 'Use PUT /hrci/idcard/settings/{id}. A default setting is seeded.' });
+});
+
+/**
+ * @swagger
  * /hrci/idcard/settings/{id}:
  *   put:
  *     tags: [HRCI ID Cards]
