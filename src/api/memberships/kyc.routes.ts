@@ -65,6 +65,14 @@ async function pickUserMembership(userId: string) {
 router.get('/:membershipId', requireAuth, async (req, res) => {
   try {
     const membershipId = String(req.params.membershipId);
+    // Delegate '/me' to self handler semantics
+    if (membershipId.toLowerCase() === 'me') {
+      const user: any = (req as any).user;
+      const m = await pickUserMembership(user.id);
+      if (!m) return res.status(404).json({ success: false, error: 'NO_MEMBERSHIP' });
+      const kyc = await (prisma as any).membershipKyc.findUnique({ where: { membershipId: m.id } }).catch(() => null);
+      return res.json({ success: true, data: kyc || null, membershipId: m.id });
+    }
     const user: any = (req as any).user;
     
     // Check if user is HRCI_ADMIN or owns this membership
@@ -319,7 +327,7 @@ router.post('/me', requireAuth, async (req, res) => {
 
 /**
  * @swagger
- * /memberships/public/kyc/pending:
+ * /memberships/kyc/pending:
  *   get:
  *     tags: [HRCI Membership - Admin APIs]
  *     summary: Get all pending KYC submissions (HRCI Admin only)
@@ -432,7 +440,7 @@ router.get('/pending', requireAuth, requireHrcAdmin, async (req, res) => {
 
 /**
  * @swagger
- * /memberships/public/kyc/{membershipId}/approve:
+ * /memberships/kyc/{membershipId}/approve:
  *   put:
  *     tags: [HRCI Membership - Admin APIs]
  *     summary: Approve or reject KYC (HRCI Admin only)

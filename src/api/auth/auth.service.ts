@@ -262,6 +262,7 @@ async function getMembershipSummary(userId: string, hasProfilePhoto: boolean) {
       idCard: true,
       // Use updatedAt to reflect status transitions (PENDING -> SUCCESS)
       payments: { orderBy: { updatedAt: 'desc' }, take: 3 },
+      kyc: true,
     },
   });
 
@@ -272,6 +273,7 @@ async function getMembershipSummary(userId: string, hasProfilePhoto: boolean) {
   const payments = ((m as any).payments || []) as any[];
   const lastPayment = payments.find(p => p.status === 'SUCCESS') || payments[0] || null;
   const idCard = (m as any).idCard || null;
+  const kyc = (m as any).kyc || null;
   const expiresAt: Date | null = (m as any).expiresAt || (idCard?.expiresAt ?? null);
   const isExpired = !!(expiresAt && expiresAt.getTime() < now.getTime()) || m.status === 'EXPIRED' || idCard?.status === 'EXPIRED';
 
@@ -363,6 +365,13 @@ async function getMembershipSummary(userId: string, hasProfilePhoto: boolean) {
           paths: idCardPaths,
         }
       : null,
+    kyc: kyc
+      ? {
+          hasKyc: true,
+          status: kyc.status || 'PENDING',
+          updatedAt: kyc.updatedAt?.toISOString?.() ?? null,
+        }
+      : { hasKyc: false, status: 'NOT_SUBMITTED' },
     nextAction,
   };
 }

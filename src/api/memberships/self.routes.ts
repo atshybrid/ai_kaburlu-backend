@@ -173,7 +173,7 @@ router.get('/me/profile', requireAuth, async (req: any, res) => {
     const membership = await prisma.membership.findFirst({
       where: { userId },
       orderBy: { updatedAt: 'desc' },
-      include: { designation: true, cell: true, idCard: true }
+      include: { designation: true, cell: true, idCard: true, kyc: true }
     });
 
     // Profile photo resolution
@@ -245,7 +245,8 @@ router.get('/me/profile', requireAuth, async (req: any, res) => {
           lastPayment: await (async () => {
             const mp = await (prisma as any).membershipPayment.findFirst({ where: { membershipId: membership.id }, orderBy: { updatedAt: 'desc' } });
             return mp ? { amount: mp.amount, status: mp.status, providerRef: mp.providerRef, createdAt: mp.createdAt } : null;
-          })()
+          })(),
+          kyc: membership.kyc ? { hasKyc: true, status: (membership as any).kyc?.status || 'PENDING', updatedAt: (membership as any).kyc?.updatedAt } : { hasKyc: false, status: 'NOT_SUBMITTED' }
         } : null,
         card,
         nextAction: !photoUrl && membership && membership.idCardStatus === 'NOT_CREATED'
