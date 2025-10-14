@@ -6,6 +6,28 @@ import { membershipService } from '../../lib/membershipService';
 
 const router = Router();
 
+// Helper: validate required geo fields based on level (mirrors pay-first)
+function validateGeoByLevel(level: string, q: any): { ok: boolean; error?: string } {
+  switch (String(level)) {
+    case 'ZONE':
+      if (!q.zone) return { ok: false, error: 'zone is required for level ZONE' };
+      return { ok: true };
+    case 'STATE':
+      if (!q.hrcStateId) return { ok: false, error: 'hrcStateId is required for level STATE' };
+      return { ok: true };
+    case 'DISTRICT':
+      if (!q.hrcDistrictId) return { ok: false, error: 'hrcDistrictId is required for level DISTRICT' };
+      return { ok: true };
+    case 'MANDAL':
+      if (!q.hrcMandalId) return { ok: false, error: 'hrcMandalId is required for level MANDAL' };
+      return { ok: true };
+    case 'NATIONAL':
+      return { ok: true };
+    default:
+      return { ok: false, error: 'Unsupported level' };
+  }
+}
+
 // Availability with explicit cell and level + geo chain
 /**
  * @swagger
@@ -18,44 +40,83 @@ const router = Router();
  *         name: cell
  *         schema:
  *           type: string
+ *         description: Cell id/code/name
  *       - in: query
  *         name: designationCode
  *         schema:
  *           type: string
+ *         description: Designation code or id
  *       - in: query
  *         name: level
  *         schema:
  *           type: string
  *           enum: [NATIONAL, ZONE, STATE, DISTRICT, MANDAL]
+ *         description: Organizational level (geo fields below are required depending on level)
  *       - in: query
  *         name: zone
  *         schema:
  *           type: string
+ *         description: Required when level=ZONE
  *       - in: query
  *         name: hrcCountryId
  *         schema:
  *           type: string
+ *         description: Optional unless multi-country support
  *       - in: query
  *         name: hrcStateId
  *         schema:
  *           type: string
+ *         description: Required when level=STATE
  *       - in: query
  *         name: hrcDistrictId
  *         schema:
  *           type: string
+ *         description: Required when level=DISTRICT
  *       - in: query
  *         name: hrcMandalId
  *         schema:
  *           type: string
+ *         description: Required when level=MANDAL
+ *       - in: query
+ *         name: includeAggregate
+ *         schema:
+ *           type: boolean
+ *         description: Set true to include aggregate capacity for the cell+level under data.aggregate (defaults to false)
  *     responses:
  *       200:
  *         description: Availability info
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     capacity: { type: integer }
+ *                     used: { type: integer }
+ *                     remaining: { type: integer }
+ *                     fee: { type: integer }
+ *                     validityDays: { type: integer }
+ *                     aggregate:
+ *                       type: object
+ *                       nullable: true
+ *                       properties:
+ *                         capacity: { type: integer }
+ *                         used: { type: integer }
+ *                         remaining: { type: integer }
  */
 router.get('/availability', async (req, res) => {
   try {
     const { cell, designationCode, level, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId } = req.query as any;
     if (!cell || !designationCode || !level) return res.status(400).json({ success: false, error: 'cell, designationCode and level are required' });
-    const data = await membershipService.getAvailability({
+
+    // Enforce required geo per level to avoid ambiguous capacities
+    const geoCheck = validateGeoByLevel(String(level), req.query || {});
+    if (!geoCheck.ok) return res.status(400).json({ success: false, error: 'MISSING_LOCATION', message: geoCheck.error });
+
+    const avail: any = await membershipService.getAvailability({
       cellCodeOrName: String(cell),
       designationCode: String(designationCode),
       level: String(level) as any,
@@ -65,7 +126,24 @@ router.get('/availability', async (req, res) => {
       hrcDistrictId: hrcDistrictId ? String(hrcDistrictId) : undefined,
       hrcMandalId: hrcMandalId ? String(hrcMandalId) : undefined,
     });
-    return res.json({ success: true, data });
+    const result: any = {
+      capacity: avail.designation.capacity,
+      used: avail.designation.used,
+      remaining: avail.designation.remaining,
+      fee: avail.designation.fee,
+      validityDays: avail.designation.validityDays
+    };
+    const includeAggregate = String(req.query.includeAggregate || '').toLowerCase() === 'true';
+    if (includeAggregate && avail.levelAggregate) {
+      result.aggregate = {
+        capacity: avail.levelAggregate.capacity,
+        used: avail.levelAggregate.used,
+        remaining: avail.levelAggregate.remaining
+      };
+    } else {
+      result.aggregate = null;
+    }
+    return res.json({ success: true, data: result });
   } catch (e: any) {
     const status = /CELL_NOT_FOUND|DESIGNATION_NOT_FOUND|not found|missing/i.test(e?.message) ? 404 : 500;
     return res.status(status).json({ success: false, error: 'FAILED_AVAILABILITY', message: e?.message });
