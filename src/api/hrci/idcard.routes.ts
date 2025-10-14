@@ -126,12 +126,17 @@ router.get('/settings', requireAuth, requireHrcAdmin, async (_req, res) => {
 
 router.post('/settings', requireAuth, requireHrcAdmin, async (req, res) => {
   const body = req.body || {};
-  const created = await (prisma as any).idCardSetting.create({ data: body });
-  if (created.isActive) {
-    // optional: deactivate others
-    await (prisma as any).idCardSetting.updateMany({ where: { id: { not: created.id } }, data: { isActive: false } });
+  // Enforce singleton: if a setting exists, update it; otherwise create one
+  const existing = await (prisma as any).idCardSetting.findFirst();
+  const saved = existing
+    ? await (prisma as any).idCardSetting.update({ where: { id: existing.id }, data: body })
+    : await (prisma as any).idCardSetting.create({ data: body });
+
+  if (saved.isActive) {
+    // Deactivate any other rows (safety if historical duplicates exist)
+    await (prisma as any).idCardSetting.updateMany({ where: { id: { not: saved.id } }, data: { isActive: false } });
   }
-  res.json({ success: true, data: created });
+  res.json({ success: true, data: saved });
 });
 
 /**
