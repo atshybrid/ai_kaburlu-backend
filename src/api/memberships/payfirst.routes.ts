@@ -392,18 +392,21 @@ router.post('/register', async (req, res) => {
       let user = await tx.user.findFirst({ where: { mobileNumber: String(mobileNumber) } });
       const bcrypt = await import('bcrypt');
       const mpinHash = await bcrypt.hash(String(mpin), 10);
-      // Prefer a member role; fallback to USER
-      const preferredRoles = ['HRCI_MEMBER','MEMBER','USER'];
+      // Require a member role (HRCI_MEMBER or MEMBER); do not fallback to USER/CITIZEN_REPORTER
+      const preferredRoles = ['HRCI_MEMBER','MEMBER'];
       const targetRole = await tx.role.findFirst({ where: { name: { in: preferredRoles as any } } });
       const lang = await tx.language.findFirst();
       if (!lang) throw new Error('CONFIG_MISSING');
+      if (!targetRole) throw new Error('CONFIG_MISSING: MEMBER role not configured');
       if (!user) {
-        user = await tx.user.create({ data: { mobileNumber: String(mobileNumber), mpin: null as any, mpinHash, roleId: targetRole?.id, languageId: lang.id, status: 'PENDING' } });
+        user = await tx.user.create({ data: { mobileNumber: String(mobileNumber), mpin: null as any, mpinHash, roleId: targetRole.id, languageId: lang.id, status: 'PENDING' } });
       } else {
         // Always set MPIN; upgrade role if low-privilege
         const currentRole = await tx.role.findUnique({ where: { id: user.roleId } });
-        const lowPrivilege = ['CITIZEN_REPORTER','GUEST'].includes(String(currentRole?.name || '').toUpperCase());
-        await tx.user.update({ where: { id: user.id }, data: { mpin: null as any, mpinHash, ...(lowPrivilege && targetRole ? { roleId: targetRole.id } : {}) } });
+        const currentName = String(currentRole?.name || '').toUpperCase();
+        const isMember = ['HRCI_MEMBER','MEMBER'].includes(currentName);
+        // Upgrade any non-member role (including USER, CITIZEN_REPORTER, GUEST) to MEMBER
+        await tx.user.update({ where: { id: user.id }, data: { mpin: null as any, mpinHash, ...(!isMember ? { roleId: targetRole.id } : {}) } });
       }
       await tx.userProfile.upsert({ where: { userId: user.id }, create: { userId: user.id, fullName }, update: { fullName } });
       
@@ -684,20 +687,20 @@ router.post('/admin/complete/:orderId', async (req, res) => {
 
     let createdNewUser = false;
     if (!user) {
-      // Create new user (prefer member role)
+      // Create new user (require member role)
       const mpinHash = await bcrypt.hash(String(mpin), 10);
-      const preferredRoles = ['HRCI_MEMBER','MEMBER','USER'];
+      const preferredRoles = ['HRCI_MEMBER','MEMBER'];
       const targetRole = await (prisma as any).role.findFirst({ where: { name: { in: preferredRoles as any } } });
       const lang = await (prisma as any).language.findFirst();
-      if (!lang) {
-        return res.status(500).json({ success: false, error: 'CONFIG_MISSING', message: 'System configuration missing' });
+      if (!lang || !targetRole) {
+        return res.status(500).json({ success: false, error: 'CONFIG_MISSING', message: 'MEMBER role or language not configured' });
       }
       user = await (prisma as any).user.create({
         data: {
           mobileNumber: String(mobile),
           mpin: null as any,
           mpinHash,
-          roleId: targetRole?.id,
+          roleId: targetRole.id,
           languageId: lang.id,
           status: 'PENDING'
         }
@@ -712,15 +715,16 @@ router.post('/admin/complete/:orderId', async (req, res) => {
         }
       });
     } else {
-      // Update existing user's MPIN and upgrade role if low-privilege
+      // Update existing user's MPIN and upgrade role to member if not already
       const mpinHash = await bcrypt.hash(String(mpin), 10);
       const currentRole = await (prisma as any).role.findUnique({ where: { id: user.roleId } });
-      const lowPrivilege = ['CITIZEN_REPORTER','GUEST'].includes(String(currentRole?.name || '').toUpperCase());
-      const preferredRoles = ['HRCI_MEMBER','MEMBER','USER'];
+      const currentName = String(currentRole?.name || '').toUpperCase();
+      const isMember = ['HRCI_MEMBER','MEMBER'].includes(currentName);
+      const preferredRoles = ['HRCI_MEMBER','MEMBER'];
       const targetRole = await (prisma as any).role.findFirst({ where: { name: { in: preferredRoles as any } } });
       await (prisma as any).user.update({
         where: { id: user.id },
-        data: { mpin: null as any, mpinHash, ...(lowPrivilege && targetRole ? { roleId: targetRole.id } : {}) }
+        data: { mpin: null as any, mpinHash, ...(!isMember && targetRole ? { roleId: targetRole.id } : {}) }
       });
 
       // Update user profile
