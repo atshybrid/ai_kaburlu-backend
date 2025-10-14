@@ -83,7 +83,10 @@ function validateGeoByLevel(level: string, body: any): { ok: boolean; error?: st
  *               cell: { type: string }
  *               designationCode: { type: string }
  *               level: { type: string, enum: [NATIONAL, ZONE, STATE, DISTRICT, MANDAL] }
- *               mobileNumber: { type: string, description: 'Mobile number for registration linking' }
+ *               mobileNumber:
+ *                 type: string
+ *                 description: 'Mobile number for registration linking'
+ *                 example: '9876543210'
  *               zone: { type: string, nullable: true, description: 'REQUIRED when level=ZONE' }
  *               hrcCountryId: { type: string, nullable: true, description: 'Optional unless you manage multiple countries' }
  *               hrcStateId: { type: string, nullable: true, description: 'REQUIRED when level=STATE' }
@@ -191,7 +194,7 @@ router.post('/orders', async (req, res) => {
  *             SuccessInternal:
  *               value: { orderId: 'cmgxxx', status: 'SUCCESS' }
  *             SuccessRazorpay:
- *               value: { orderId: 'cmgxxx', status: 'SUCCESS', provider: 'razorpay', razorpay_order_id: 'order_abc', razorpay_payment_id: 'pay_xyz', razorpay_signature: 'sig123' }
+ *               value: { orderId: 'cmgxxx', status: 'SUCCESS', provider: 'razorpay', razorpay_order_id: 'order_abc', razorpay_payment_id: 'pay_xyz', razorpay_signature: 'sig123', mobileNumber: '9876543210' }
  *             Failed:
  *               value: { orderId: 'cmgxxx', status: 'FAILED', providerRef: 'pay_xyz' }
  *     responses:
@@ -357,7 +360,9 @@ router.get('/lookup/razorpay/:providerOrderId', async (req, res) => {
  *             required: [orderId, mobileNumber, mpin, fullName]
  *             properties:
  *               orderId: { type: string }
- *               mobileNumber: { type: string }
+ *               mobileNumber:
+ *                 type: string
+ *                 example: '9876543210'
  *               mpin: { type: string }
  *               fullName: { type: string }
  *     responses:
@@ -449,7 +454,9 @@ router.post('/register', async (req, res) => {
  *             type: object
  *             required: [mobileNumber]
  *             properties:
- *               mobileNumber: { type: string }
+ *               mobileNumber:
+ *                 type: string
+ *                 example: '9876543210'
  *     responses:
  *       200:
  *         description: Mobile number payment status
