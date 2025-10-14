@@ -6,6 +6,21 @@ const router = Router();
 
 // KYC endpoints - using existing "Member APIs" tag from payfirst.routes.ts
 
+// Helper: pick the user's relevant membership (prefer ACTIVE else most recent)
+async function pickUserMembership(userId: string) {
+  const active = await prisma.membership.findFirst({
+    where: { userId, status: 'ACTIVE' as any },
+    orderBy: { updatedAt: 'desc' },
+    include: { designation: true },
+  });
+  if (active) return active;
+  return prisma.membership.findFirst({
+    where: { userId },
+    orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+    include: { designation: true },
+  });
+}
+
 /**
  * @swagger
  * /memberships/kyc/{membershipId}:
@@ -199,6 +214,106 @@ router.post('/', requireAuth, async (req, res) => {
     return res.json({ success: true, data: saved });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'KYC_SAVE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /memberships/kyc/me:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Get your KYC details (JWT required; membership auto-detected)
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Your KYC record (may be null)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   nullable: true
+ *       404:
+ *         description: No membership found for user
+ */
+router.get('/me', requireAuth, async (req, res) => {
+  try {
+    const user: any = (req as any).user;
+    const m = await pickUserMembership(user.id);
+    if (!m) return res.status(404).json({ success: false, error: 'NO_MEMBERSHIP' });
+    const kyc = await (prisma as any).membershipKyc.findUnique({ where: { membershipId: m.id } }).catch(() => null);
+    return res.json({ success: true, data: kyc || null, membershipId: m.id });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'KYC_ME_GET_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /memberships/kyc/me:
+ *   post:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Submit or update your KYC (JWT required; membership auto-detected)
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               aadhaarNumber: { type: string }
+ *               aadhaarFrontUrl: { type: string }
+ *               aadhaarBackUrl: { type: string }
+ *               panNumber: { type: string }
+ *               panCardUrl: { type: string }
+ *               llbRegistrationNumber: { type: string }
+ *               llbSupportDocUrl: { type: string }
+ *     responses:
+ *       200:
+ *         description: KYC upserted successfully
+ *       400:
+ *         description: Missing required fields
+ *       404:
+ *         description: No membership found for user
+ */
+router.post('/me', requireAuth, async (req, res) => {
+  try {
+    const user: any = (req as any).user;
+    const m = await pickUserMembership(user.id);
+    if (!m) return res.status(404).json({ success: false, error: 'NO_MEMBERSHIP' });
+
+    const { aadhaarNumber, aadhaarFrontUrl, aadhaarBackUrl, panNumber, panCardUrl, llbRegistrationNumber, llbSupportDocUrl } = req.body || {};
+    // Enforce LLB for Legal Secretary
+    const legalSec = (m as any).designation?.code && /LEGAL[_\s-]*SECRETARY/i.test((m as any).designation.code);
+    if (legalSec && (!llbRegistrationNumber || !llbSupportDocUrl)) {
+      return res.status(400).json({ success: false, error: 'LLB_REQUIRED', message: 'LLB registration number and support document are required for Legal Secretary' });
+    }
+
+    const data: any = {
+      membershipId: m.id,
+      aadhaarNumber: aadhaarNumber || null,
+      aadhaarFrontUrl: aadhaarFrontUrl || null,
+      aadhaarBackUrl: aadhaarBackUrl || null,
+      panNumber: panNumber || null,
+      panCardUrl: panCardUrl || null,
+      llbRegistrationNumber: llbRegistrationNumber || null,
+      llbSupportDocUrl: llbSupportDocUrl || null,
+    };
+
+    const existing = await (prisma as any).membershipKyc.findUnique({ where: { membershipId: m.id } }).catch(() => null);
+    const saved = existing
+      ? await (prisma as any).membershipKyc.update({ where: { membershipId: m.id }, data })
+      : await (prisma as any).membershipKyc.create({ data });
+
+    return res.json({ success: true, data: saved, membershipId: m.id });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'KYC_ME_SAVE_FAILED', message: e?.message });
   }
 });
 
