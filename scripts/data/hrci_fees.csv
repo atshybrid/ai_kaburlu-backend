@@ -1,0 +1,337 @@
+Zone name,Cell name,Designation name,Number of post available,Parent name,ID Card Amount,Validity ID card in days
+National ,General Body,Addi General Secretary,4,General Secretary,50000,730
+National ,General Body,Co-ordinator,4,Organizing Secretary,30000,730
+National ,General Body,Convenor,4,General Secretary,50000,730
+National ,General Body,Executive Member,23,President,25000,730
+National ,General Body,General Secretary,4,President,200000,730
+National ,General Body,Joint Convenor,4,Convenor,30000,730
+National ,General Body,Joint Secretary,4,General Secretary,30000,730
+National ,General Body,Legal Secretary,4,General Secretary,0,730
+National ,General Body,Organizing Secretary,4,General Secretary,30000,730
+National ,General Body,President,1,,500000,730
+National ,General Body,Program Secretary,4,General Secretary,30000,730
+National ,General Body,Spokes Person,4,President,30000,730
+National ,General Body,Vice President,4,President,100000,730
+National ,General Body,Welfare Secretary,4,General Secretary,30000,730
+National ,Women Port,Addi General Secretary,4,General Secretary,50000,730
+National ,Women Port,Co-ordinator,4,Organizing Secretary,30000,730
+National ,Women Port,Convenor,4,General Secretary,50000,730
+National ,Women Port,Executive Member,23,President,25000,730
+National ,Women Port,General Secretary,4,President,100000,730
+National ,Women Port,Joint Convenor,4,Convenor,30000,730
+National ,Women Port,Joint Secretary,4,General Secretary,30000,730
+National ,Women Port,Legal Secretary,4,General Secretary,0,730
+National ,Women Port,Organizing Secretary,4,General Secretary,30000,730
+National ,Women Port,President,1,,500000,730
+National ,Women Port,Program Secretary,4,General Secretary,30000,730
+National ,Women Port,Spokes Person,4,President,30000,730
+National ,Women Port,Vice President,4,President,100000,730
+National ,Women Port,Welfare Secretary,4,General Secretary,30000,730
+National ,Youth Wing,Addi General Secretary,4,General Secretary,50000,730
+National ,Youth Wing,Co-ordinator,4,Organizing Secretary,30000,730
+National ,Youth Wing,Convenor,4,General Secretary,30000,730
+National ,Youth Wing,Executive Member,23,President,25000,730
+National ,Youth Wing,General Secretary,4,President,200000,730
+National ,Youth Wing,Joint Convenor,4,Convenor,30000,730
+National ,Youth Wing,Joint Secretary,4,General Secretary,30000,730
+National ,Youth Wing,Legal Secretary,4,General Secretary,0,730
+National ,Youth Wing,Organizing Secretary,4,General Secretary,30000,730
+National ,Youth Wing,President,1,,200000,730
+National ,Youth Wing,Program Secretary,4,General Secretary,30000,730
+National ,Youth Wing,Spokes Person,4,President,30000,730
+National ,Youth Wing,Vice President,4,President,70000,730
+National ,Youth Wing,Welfare Secretary,4,General Secretary,30000,730
+South Zone,General Body,Addi General Secretary,4,General Secretary,25000,730
+South Zone,General Body,Co-ordinator,4,Organizing Secretary,25000,730
+South Zone,General Body,Convenor,4,General Secretary,30000,730
+South Zone,General Body,Executive Member,23,President,15000,730
+South Zone,General Body,General Secretary,4,President,50000,730
+South Zone,General Body,Joint Convenor,4,Convenor,25000,730
+South Zone,General Body,Joint Secretary,4,General Secretary,25000,730
+South Zone,General Body,Legal Secretary,4,General Secretary,0,730
+South Zone,General Body,Organizing Secretary,4,General Secretary,25000,730
+South Zone,General Body,President,1,,100000,730
+South Zone,General Body,Program Secretary,4,General Secretary,25000,730
+South Zone,General Body,Spokes Person,4,President,40000,730
+South Zone,General Body,Vice President,4,President,40000,730
+South Zone,General Body,Welfare Secretary,4,General Secretary,25000,730
+South Zone,Women Port,Addi General Secretary,4,General Secretary,15000,730
+South Zone,Women Port,Co-ordinator,4,Organizing Secretary,15000,730
+South Zone,Women Port,Convenor,4,General Secretary,20000,730
+South Zone,Women Port,Executive Member,23,President,10000,730
+South Zone,Women Port,General Secretary,4,President,30000,730
+South Zone,Women Port,Joint Convenor,4,Convenor,15000,730
+South Zone,Women Port,Joint Secretary,4,General Secretary,15000,730
+South Zone,Women Port,Legal Secretary,4,General Secretary,0,730
+South Zone,Women Port,Organizing Secretary,4,General Secretary,15000,730
+South Zone,Women Port,President,1,,50000,730
+South Zone,Women Port,Program Secretary,4,General Secretary,15000,730
+South Zone,Women Port,Spokes Person,4,President,15000,730
+South Zone,Women Port,Vice President,4,President,20000,730
+South Zone,Women Port,Welfare Secretary,4,General Secretary,15000,730
+South Zone,Youth Wing,Addi General Secretary,4,General Secretary,20000,730
+South Zone,Youth Wing,Co-ordinator,4,Organizing Secretary,20000,730
+South Zone,Youth Wing,Convenor,4,General Secretary,20000,730
+South Zone,Youth Wing,Executive Member,23,President,15000,730
+South Zone,Youth Wing,General Secretary,4,President,30000,730
+South Zone,Youth Wing,Joint Convenor,4,Convenor,20000,730
+South Zone,Youth Wing,Joint Secretary,4,General Secretary,20000,730
+South Zone,Youth Wing,Legal Secretary,4,General Secretary,0,730
+South Zone,Youth Wing,Organizing Secretary,4,General Secretary,20000,730
+South Zone,Youth Wing,President,1,,50000,730
+South Zone,Youth Wing,Program Secretary,4,General Secretary,20000,730
+South Zone,Youth Wing,Spokes Person,4,President,20000,730
+South Zone,Youth Wing,Vice President,4,President,25000,730
+South Zone,Youth Wing,Welfare Secretary,4,General Secretary,20000,730
+North Zone,General Body,Addi General Secretary,4,General Secretary,25000,730
+North Zone,General Body,Co-ordinator,4,Organizing Secretary,25000,730
+North Zone,General Body,Convenor,4,General Secretary,25000,730
+North Zone,General Body,Executive Member,23,President,15000,730
+North Zone,General Body,General Secretary,4,President,50000,730
+North Zone,General Body,Joint Convenor,4,Convenor,25000,730
+North Zone,General Body,Joint Secretary,4,General Secretary,25000,730
+North Zone,General Body,Legal Secretary,4,General Secretary,0,730
+North Zone,General Body,Organizing Secretary,4,General Secretary,25000,730
+North Zone,General Body,President,1,,100000,730
+North Zone,General Body,Program Secretary,4,General Secretary,25000,730
+North Zone,General Body,Spokes Person,4,President,25000,730
+North Zone,General Body,Vice President,4,President,40000,730
+North Zone,General Body,Welfare Secretary,4,General Secretary,25000,730
+North Zone,Women Port,Addi General Secretary,4,General Secretary,15000,730
+North Zone,Women Port,Co-ordinator,4,Organizing Secretary,15000,730
+North Zone,Women Port,Convenor,4,General Secretary,15000,730
+North Zone,Women Port,Executive Member,23,President,10000,730
+North Zone,Women Port,General Secretary,4,President,30000,730
+North Zone,Women Port,Joint Convenor,4,Convenor,20000,730
+North Zone,Women Port,Joint Secretary,4,General Secretary,15000,730
+North Zone,Women Port,Legal Secretary,4,General Secretary,0,730
+North Zone,Women Port,Organizing Secretary,4,General Secretary,15000,730
+North Zone,Women Port,President,1,,50000,730
+North Zone,Women Port,Program Secretary,4,General Secretary,15000,730
+North Zone,Women Port,Spokes Person,4,President,15000,730
+North Zone,Women Port,Vice President,4,President,20000,730
+North Zone,Women Port,Welfare Secretary,4,General Secretary,15000,730
+North Zone,Youth Wing,Addi General Secretary,4,General Secretary,20000,730
+North Zone,Youth Wing,Co-ordinator,4,Organizing Secretary,20000,730
+North Zone,Youth Wing,Convenor,4,General Secretary,25000,730
+North Zone,Youth Wing,Executive Member,23,President,15000,730
+North Zone,Youth Wing,General Secretary,4,President,30000,730
+North Zone,Youth Wing,Joint Convenor,4,Convenor,20000,730
+North Zone,Youth Wing,Joint Secretary,4,General Secretary,20000,730
+North Zone,Youth Wing,Legal Secretary,4,General Secretary,0,730
+North Zone,Youth Wing,Organizing Secretary,4,General Secretary,20000,730
+North Zone,Youth Wing,President,1,,50000,730
+North Zone,Youth Wing,Program Secretary,4,General Secretary,20000,730
+North Zone,Youth Wing,Spokes Person,4,President,20000,730
+North Zone,Youth Wing,Vice President,4,President,25000,730
+North Zone,Youth Wing,Welfare Secretary,4,General Secretary,20000,730
+East Zone,General Body,Addi General Secretary,4,General Secretary,25000,730
+East Zone,General Body,Co-ordinator,4,Organizing Secretary,25000,730
+East Zone,General Body,Convenor,4,General Secretary,30000,730
+East Zone,General Body,Executive Member,23,President,15000,730
+East Zone,General Body,General Secretary,4,President,50000,730
+East Zone,General Body,Joint Convenor,4,Convenor,25000,730
+East Zone,General Body,Joint Secretary,4,General Secretary,25000,730
+East Zone,General Body,Legal Secretary,4,General Secretary,0,730
+East Zone,General Body,Organizing Secretary,4,General Secretary,25000,730
+East Zone,General Body,President,1,,100000,730
+East Zone,General Body,Program Secretary,4,General Secretary,25000,730
+East Zone,General Body,Spokes Person,4,President,25000,730
+East Zone,General Body,Vice President,4,President,40000,730
+East Zone,General Body,Welfare Secretary,4,General Secretary,25000,730
+East Zone,Women Port,Addi General Secretary,4,General Secretary,15000,730
+East Zone,Women Port,Co-ordinator,4,Organizing Secretary,15000,730
+East Zone,Women Port,Convenor,4,General Secretary,20000,730
+East Zone,Women Port,Executive Member,23,President,10000,730
+East Zone,Women Port,General Secretary,4,President,30000,730
+East Zone,Women Port,Joint Convenor,4,Convenor,15000,730
+East Zone,Women Port,Joint Secretary,4,General Secretary,15000,730
+East Zone,Women Port,Legal Secretary,4,General Secretary,0,730
+East Zone,Women Port,Organizing Secretary,4,General Secretary,15000,730
+East Zone,Women Port,President,1,,50000,730
+East Zone,Women Port,Program Secretary,4,General Secretary,15000,730
+East Zone,Women Port,Spokes Person,4,President,15000,730
+East Zone,Women Port,Vice President,4,President,20000,730
+East Zone,Women Port,Welfare Secretary,4,General Secretary,15000,730
+East Zone,Youth Wing,Addi General Secretary,4,General Secretary,20000,730
+East Zone,Youth Wing,Co-ordinator,4,Organizing Secretary,20000,730
+East Zone,Youth Wing,Convenor,4,General Secretary,25000,730
+East Zone,Youth Wing,Executive Member,23,President,15000,730
+East Zone,Youth Wing,General Secretary,4,President,30000,730
+East Zone,Youth Wing,Joint Convenor,4,Convenor,15000,730
+East Zone,Youth Wing,Joint Secretary,4,General Secretary,15000,730
+East Zone,Youth Wing,Legal Secretary,4,General Secretary,0,730
+East Zone,Youth Wing,Organizing Secretary,4,General Secretary,15000,730
+East Zone,Youth Wing,President,1,,50000,730
+East Zone,Youth Wing,Program Secretary,4,General Secretary,15000,730
+East Zone,Youth Wing,Spokes Person,4,President,15000,730
+East Zone,Youth Wing,Vice President,4,President,25000,730
+East Zone,Youth Wing,Welfare Secretary,4,General Secretary,15000,730
+West Zone,General Body,Addi General Secretary,4,General Secretary,25000,730
+West Zone,General Body,Co-ordinator,4,Organizing Secretary,25000,730
+West Zone,General Body,Convenor,4,General Secretary,30000,730
+West Zone,General Body,Executive Member,23,President,15000,730
+West Zone,General Body,General Secretary,4,President,50000,730
+West Zone,General Body,Joint Convenor,4,Convenor,25000,730
+West Zone,General Body,Joint Secretary,4,General Secretary,25000,730
+West Zone,General Body,Legal Secretary,4,General Secretary,0,730
+West Zone,General Body,Organizing Secretary,4,General Secretary,25000,730
+West Zone,General Body,President,1,,100000,730
+West Zone,General Body,Program Secretary,4,General Secretary,25000,730
+West Zone,General Body,Spokes Person,4,President,25000,730
+West Zone,General Body,Vice President,4,President,40000,730
+West Zone,General Body,Welfare Secretary,4,General Secretary,25000,730
+West Zone,Women Port,Addi General Secretary,4,General Secretary,15000,730
+West Zone,Women Port,Co-ordinator,4,Organizing Secretary,15000,730
+West Zone,Women Port,Convenor,4,General Secretary,20000,730
+West Zone,Women Port,Executive Member,23,President,10000,730
+West Zone,Women Port,General Secretary,4,President,30000,730
+West Zone,Women Port,Joint Convenor,4,Convenor,15000,730
+West Zone,Women Port,Joint Secretary,4,General Secretary,15000,730
+West Zone,Women Port,Legal Secretary,4,General Secretary,0,730
+West Zone,Women Port,Organizing Secretary,4,General Secretary,15000,730
+West Zone,Women Port,President,1,,50000,730
+West Zone,Women Port,Program Secretary,4,General Secretary,15000,730
+West Zone,Women Port,Spokes Person,4,President,15000,730
+West Zone,Women Port,Vice President,4,President,20000,730
+West Zone,Women Port,Welfare Secretary,4,General Secretary,15000,730
+West Zone,Youth Wing,Addi General Secretary,4,General Secretary,20000,730
+West Zone,Youth Wing,Co-ordinator,4,Organizing Secretary,20000,730
+West Zone,Youth Wing,Convenor,4,General Secretary,25000,730
+West Zone,Youth Wing,Executive Member,23,President,15000,730
+West Zone,Youth Wing,General Secretary,4,President,30000,730
+West Zone,Youth Wing,Joint Convenor,4,Convenor,20000,730
+West Zone,Youth Wing,Joint Secretary,4,General Secretary,20000,730
+West Zone,Youth Wing,Legal Secretary,4,General Secretary,0,730
+West Zone,Youth Wing,Organizing Secretary,4,General Secretary,20000,730
+West Zone,Youth Wing,President,1,,50000,730
+West Zone,Youth Wing,Program Secretary,4,General Secretary,20000,730
+West Zone,Youth Wing,Spokes Person,4,President,20000,730
+West Zone,Youth Wing,Vice President,4,President,25000,730
+West Zone,Youth Wing,Welfare Secretary,4,General Secretary,20000,730
+State,General Body,Addi General Secretary,4,General Secretary,15000,730
+State,General Body,Co-ordinator,4,Organizing Secretary,15000,730
+State,General Body,Convenor,4,General Secretary,20000,730
+State,General Body,Executive Member,23,President,10000,730
+State,General Body,General Secretary,4,President,30000,730
+State,General Body,Joint Convenor,4,Convenor,15000,730
+State,General Body,Joint Secretary,4,General Secretary,15000,730
+State,General Body,Legal Secretary,4,General Secretary,0,730
+State,General Body,Organizing Secretary,4,General Secretary,15000,730
+State,General Body,President,1,,100,730
+State,General Body,Program Secretary,4,General Secretary,50000,730
+State,General Body,Spokes Person,4,President,15000,730
+State,General Body,Vice President,4,President,25000,730
+State,General Body,Welfare Secretary,4,General Secretary,15000,730
+State,Women Port,Addi General Secretary,4,General Secretary,10000,730
+State,Women Port,Co-ordinator,4,Organizing Secretary,10000,730
+State,Women Port,Convenor,4,General Secretary,15000,730
+State,Women Port,Executive Member,23,President,5000,730
+State,Women Port,General Secretary,4,President,30000,730
+State,Women Port,Joint Convenor,4,Convenor,10000,730
+State,Women Port,Joint Secretary,4,General Secretary,10000,730
+State,Women Port,Legal Secretary,4,General Secretary,0,730
+State,Women Port,Organizing Secretary,4,General Secretary,10000,730
+State,Women Port,President,1,,40000,730
+State,Women Port,Program Secretary,4,General Secretary,10000,730
+State,Women Port,Spokes Person,4,President,10000,730
+State,Women Port,Vice President,4,President,25000,730
+State,Women Port,Welfare Secretary,4,General Secretary,10000,730
+State,Youth Wing,Addi General Secretary,4,General Secretary,10000,730
+State,Youth Wing,Co-ordinator,4,Organizing Secretary,10000,730
+State,Youth Wing,Convenor,4,General Secretary,15000,730
+State,Youth Wing,Executive Member,23,President,5000,730
+State,Youth Wing,General Secretary,4,President,30000,730
+State,Youth Wing,Joint Convenor,4,Convenor,10000,730
+State,Youth Wing,Joint Secretary,4,General Secretary,10000,730
+State,Youth Wing,Legal Secretary,4,General Secretary,0,730
+State,Youth Wing,Organizing Secretary,4,General Secretary,10000,730
+State,Youth Wing,President,1,,40000,730
+State,Youth Wing,Program Secretary,4,General Secretary,10000,730
+State,Youth Wing,Spokes Person,4,President,10000,730
+State,Youth Wing,Vice President,4,President,25000,730
+State,Youth Wing,Welfare Secretary,4,General Secretary,10000,730
+District,General Body,Addi General Secretary,4,General Secretary,2000,730
+District,General Body,Co-ordinator,4,Organizing Secretary,2000,730
+District,General Body,Convenor,4,General Secretary,3000,730
+District,General Body,Executive Member,23,President,1500,730
+District,General Body,General Secretary,4,President,7000,730
+District,General Body,Joint Convenor,4,Convenor,2000,730
+District,General Body,Joint Secretary,4,General Secretary,2000,730
+District,General Body,Legal Secretary,4,General Secretary,0,730
+District,General Body,Organizing Secretary,4,General Secretary,2000,730
+District,General Body,President,1,,10000,730
+District,General Body,Program Secretary,4,General Secretary,2000,730
+District,General Body,Spokes Person,4,President,2000,730
+District,General Body,Vice President,4,President,5000,730
+District,General Body,Welfare Secretary,4,General Secretary,2000,730
+District,Women Port,Addi General Secretary,4,General Secretary,2000,730
+District,Women Port,Co-ordinator,4,Organizing Secretary,2000,730
+District,Women Port,Convenor,4,General Secretary,2000,730
+District,Women Port,Executive Member,23,President,1500,730
+District,Women Port,General Secretary,4,President,3000,730
+District,Women Port,Joint Convenor,4,Convenor,2000,730
+District,Women Port,Joint Secretary,4,General Secretary,2000,730
+District,Women Port,Legal Secretary,4,General Secretary,0,730
+District,Women Port,Organizing Secretary,4,General Secretary,2000,730
+District,Women Port,President,1,,5000,730
+District,Women Port,Program Secretary,4,General Secretary,2000,730
+District,Women Port,Spokes Person,4,President,2000,730
+District,Women Port,Vice President,4,President,2500,730
+District,Women Port,Welfare Secretary,4,General Secretary,2000,730
+District,Youth Wing,Addi General Secretary,4,General Secretary,2000,730
+District,Youth Wing,Co-ordinator,4,Organizing Secretary,2000,730
+District,Youth Wing,Convenor,4,General Secretary,2000,730
+District,Youth Wing,Executive Member,23,President,1500,730
+District,Youth Wing,General Secretary,4,President,3000,730
+District,Youth Wing,Joint Convenor,4,Convenor,2000,730
+District,Youth Wing,Joint Secretary,4,General Secretary,2000,730
+District,Youth Wing,Legal Secretary,4,General Secretary,0,730
+District,Youth Wing,Organizing Secretary,4,General Secretary,2000,730
+District,Youth Wing,President,1,,5000,730
+District,Youth Wing,Program Secretary,4,General Secretary,2000,730
+District,Youth Wing,Spokes Person,4,President,2000,730
+District,Youth Wing,Vice President,4,President,2500,730
+District,Youth Wing,Welfare Secretary,4,General Secretary,2000,730
+Mandal,General Body,Addi General Secretary,4,General Secretary,1100,730
+Mandal,General Body,Co-ordinator,4,Organizing Secretary,1100,730
+Mandal,General Body,Convenor,4,General Secretary,1200,730
+Mandal,General Body,Executive Member,23,President,1100,730
+Mandal,General Body,General Secretary,4,President,1500,730
+Mandal,General Body,Joint Convenor,4,Convenor,1100,730
+Mandal,General Body,Joint Secretary,4,General Secretary,1100,730
+Mandal,General Body,Legal Secretary,4,General Secretary,0,730
+Mandal,General Body,Organizing Secretary,4,General Secretary,1100,730
+Mandal,General Body,President,1,,2000,730
+Mandal,General Body,Program Secretary,4,General Secretary,1100,730
+Mandal,General Body,Spokes Person,4,President,1100,730
+Mandal,General Body,Vice President,4,President,1300,730
+Mandal,General Body,Welfare Secretary,4,General Secretary,1100,730
+Mandal,Women Port,Addi General Secretary,4,General Secretary,900,730
+Mandal,Women Port,Co-ordinator,4,Organizing Secretary,900,730
+Mandal,Women Port,Convenor,4,General Secretary,1100,730
+Mandal,Women Port,Executive Member,23,President,800,730
+Mandal,Women Port,General Secretary,4,President,1300,730
+Mandal,Women Port,Joint Convenor,4,Convenor,900,730
+Mandal,Women Port,Joint Secretary,4,General Secretary,900,730
+Mandal,Women Port,Legal Secretary,4,General Secretary,0,730
+Mandal,Women Port,Organizing Secretary,4,General Secretary,900,730
+Mandal,Women Port,President,1,,1500,730
+Mandal,Women Port,Program Secretary,4,General Secretary,900,730
+Mandal,Women Port,Spokes Person,4,President,900,730
+Mandal,Women Port,Vice President,4,President,1200,730
+Mandal,Women Port,Welfare Secretary,4,General Secretary,900,730
+Mandal,Youth Wing,Addi General Secretary,4,General Secretary,900,730
+Mandal,Youth Wing,Co-ordinator,4,Organizing Secretary,900,730
+Mandal,Youth Wing,Convenor,4,General Secretary,1100,730
+Mandal,Youth Wing,Executive Member,23,President,800,730
+Mandal,Youth Wing,General Secretary,4,President,1300,730
+Mandal,Youth Wing,Joint Convenor,4,Convenor,900,730
+Mandal,Youth Wing,Joint Secretary,4,General Secretary,900,730
+Mandal,Youth Wing,Legal Secretary,4,General Secretary,0,730
+Mandal,Youth Wing,Organizing Secretary,4,General Secretary,900,730
+Mandal,Youth Wing,President,1,,1500,730
+Mandal,Youth Wing,Program Secretary,4,General Secretary,900,730
+Mandal,Youth Wing,Spokes Person,4,President,900,730
+Mandal,Youth Wing,Vice President,4,President,1200,730
+Mandal,Youth Wing,Welfare Secretary,4,General Secretary,900,730

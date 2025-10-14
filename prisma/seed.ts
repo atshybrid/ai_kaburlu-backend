@@ -207,6 +207,7 @@ async function seedCoreUsers(roleMap: Record<string,string>, languageMap: Record
     const usersToCreate = [
         { mobileNumber: '8282868389', mpin: '1947', roleName: 'SUPER_ADMIN', language: 'en' },
         { mobileNumber: '9502337775', mpin: '1234', roleName: 'LANGUAGE_ADMIN', language: 'te' },
+          { mobileNumber: '8906189999', mpin: '1947', roleName: 'HRCI_ADMIN', language: 'en' },
     ];
     for (const u of usersToCreate) {
         const hashed = await bcrypt.hash(u.mpin, saltRounds);

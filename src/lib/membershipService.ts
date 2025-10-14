@@ -73,13 +73,25 @@ export async function getAvailability(q: AvailabilityQuery) {
       remaining: Math.max(0, levelCap.capacity - aggregateUsed)
     };
   }
+  // Resolve price from overrides (most-specific -> least-specific)
+  const price = await resolveDesignationPrice({
+    designationId: designation.id,
+    cellId: cell.id,
+    level: q.level,
+    zone: q.level === 'ZONE' ? q.zone : undefined,
+    hrcCountryId: q.hrcCountryId,
+    hrcStateId: q.hrcStateId,
+    hrcDistrictId: q.hrcDistrictId,
+    hrcMandalId: q.hrcMandalId
+  });
+
   return {
     designation: {
       capacity: designation.defaultCapacity,
       used,
       remaining: Math.max(0, designationRemaining),
-      fee: designation.idCardFee,
-      validityDays: designation.validityDays
+      fee: price.fee,
+      validityDays: price.validityDays ?? designation.validityDays
     },
     levelAggregate: aggregate || null
   };
@@ -133,7 +145,17 @@ export async function joinSeat(req: JoinRequest) {
       }
     }
 
-    const requiresPayment = designation.idCardFee > 0;
+    const price = await resolveDesignationPrice({
+      designationId: designation.id,
+      cellId: cell.id,
+      level: req.level,
+      zone: req.level === 'ZONE' ? req.zone : undefined,
+      hrcCountryId: req.hrcCountryId,
+      hrcStateId: req.hrcStateId,
+      hrcDistrictId: req.hrcDistrictId,
+      hrcMandalId: req.hrcMandalId
+    });
+    const requiresPayment = price.fee > 0;
 
     const membership = await tx.membership.create({
       data: {
@@ -155,11 +177,11 @@ export async function joinSeat(req: JoinRequest) {
 
     if (requiresPayment) {
       await tx.membershipPayment.create({
-        data: { membershipId: membership.id, amount: designation.idCardFee, status: 'PENDING' }
+        data: { membershipId: membership.id, amount: price.fee, status: 'PENDING' }
       });
     }
 
-    return { accepted: true, membershipId: membership.id, requiresPayment, fee: designation.idCardFee };
+    return { accepted: true, membershipId: membership.id, requiresPayment, fee: price.fee };
   });
 }
 
@@ -168,3 +190,48 @@ export const membershipService = {
   getAvailability,
   joinSeat
 };
+
+// Helper: resolve price by most-specific DesignationPrice override
+async function resolveDesignationPrice(args: {
+  designationId: string;
+  cellId?: string;
+  level?: OrgLevel;
+  zone?: HrcZone;
+  hrcCountryId?: string;
+  hrcStateId?: string;
+  hrcDistrictId?: string;
+  hrcMandalId?: string;
+}): Promise<{ fee: number; validityDays?: number }> {
+  // Gather all candidate overrides for the designation
+  const candidates = await p.designationPrice.findMany({
+    where: { designationId: args.designationId },
+    orderBy: [ { priority: 'desc' }, { createdAt: 'desc' } ]
+  });
+
+  // Scoring by specificity: exact matches (cell+level+geo) outrank broader ones
+  const score = (c: any) => {
+    let s = 0;
+    if (c.cellId && args.cellId && c.cellId === args.cellId) s += 8;
+    if (c.level && args.level && c.level === args.level) s += 4;
+    if (c.zone && args.zone && c.zone === args.zone) s += 2;
+    if (c.hrcStateId && args.hrcStateId && c.hrcStateId === args.hrcStateId) s += 2;
+    if (c.hrcDistrictId && args.hrcDistrictId && c.hrcDistrictId === args.hrcDistrictId) s += 2;
+    if (c.hrcMandalId && args.hrcMandalId && c.hrcMandalId === args.hrcMandalId) s += 3;
+    return s;
+  };
+
+  let best: any = null;
+  let bestScore = -1;
+  for (const c of candidates) {
+    const s = score(c);
+    if (s > bestScore) { best = c; bestScore = s; }
+  }
+
+  if (best && best.fee != null) {
+    return { fee: best.fee, validityDays: best.validityDays ?? undefined };
+  }
+
+  // Fallback to designation default if no override
+  const d = await p.designation.findUnique({ where: { id: args.designationId } });
+  return { fee: d?.idCardFee ?? 0, validityDays: d?.validityDays };
+}

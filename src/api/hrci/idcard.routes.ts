@@ -134,14 +134,16 @@ router.get('/:cardNumber/html', async (req, res) => {
   let designationName = (card as any).designationName || '';
   let cellName = (card as any).cellName || '';
   let mobileNumber = (card as any).mobileNumber || '';
+  let photoUrl: string | undefined;
   if (!fullName || !designationName || !cellName || !mobileNumber) {
     const m = await prisma.membership.findUnique({ where: { id: card.membershipId }, include: { designation: true, cell: true } });
     if (m) {
       try {
         // fetch from user and profile
-        const user = await prisma.user.findUnique({ where: { id: m.userId }, include: { profile: true } });
+        const user = await prisma.user.findUnique({ where: { id: m.userId }, include: { profile: { include: { profilePhotoMedia: true } } } as any }) as any;
         fullName = fullName || (user?.profile?.fullName || '');
         mobileNumber = mobileNumber || (user?.mobileNumber || '');
+        photoUrl = (user?.profile?.profilePhotoUrl || user?.profile?.profilePhotoMedia?.url || undefined) as any;
       } catch {}
       designationName = designationName || (m as any).designation?.name || '';
       cellName = cellName || (m as any).cell?.name || '';
@@ -154,6 +156,8 @@ router.get('/:cardNumber/html', async (req, res) => {
   <style>body{font-family:Arial;margin:0;padding:0;background:#f5f5f5} .card{width:360px;margin:16px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.12)} .hdr{background:${primary};color:#fff;padding:12px;text-align:center}
   .logo{height:48px;border-radius:50%;object-fit:cover}
   .blk{padding:12px;color:#212529}
+  .photo{display:flex;justify-content:center;margin-top:8px}
+  .photo img{width:90px;height:90px;border-radius:8px;object-fit:cover;border:3px solid ${secondary}33}
   .h1{font-size:18px;font-weight:700}
   .h2{font-size:14px;color:${secondary}}
   .row{display:flex;justify-content:space-between;margin-top:8px}
@@ -167,6 +171,7 @@ router.get('/:cardNumber/html', async (req, res) => {
      <div class="h2">${s?.frontH2 || ''}</div>
    </div>
    <div class="blk">
+     ${photoUrl ? `<div class="photo"><img src="${photoUrl}" alt="Photo"/></div>` : ''}
      <div><b>Name:</b> ${fullName}</div>
      <div><b>Designation:</b> ${designationName}</div>
      <div><b>Cell:</b> ${cellName}</div>

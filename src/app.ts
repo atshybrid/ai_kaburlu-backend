@@ -43,6 +43,7 @@ import membershipsPaymentsRoutes from './api/memberships/payments.routes';
 import membershipsPayFirstRoutes from './api/memberships/payfirst.routes';
 import membershipsRoutes from './api/memberships/memberships.routes';
 import membershipsAdminRoutes from './api/memberships/admin.routes';
+import membershipsSelfRoutes from './api/memberships/self.routes';
 import membershipsKycRoutes from './api/memberships/kyc.routes';
 import idcardRoutes from './api/hrci/idcard.routes';
 
@@ -173,6 +174,7 @@ app.use('/memberships/public/kyc', membershipsKycRoutes); // public KYC submit/g
 app.use('/memberships/payments', membershipsPaymentsRoutes); // open for front-end payment
 app.use('/memberships/payfirst', membershipsPayFirstRoutes); // pay-first flow (order first)
 app.use('/memberships/admin', membershipsAdminRoutes); // JWT + admin required
+app.use('/memberships', membershipsSelfRoutes); // self endpoints like /me/idcard
 // Lightweight schema drift health check (checks presence of key ShortNews columns)
 app.get('/health/schema', async (_req: Request, res: Response) => {
   try {
@@ -231,6 +233,7 @@ apiV1.use('/hrci/designations', hrciDesignationsRoutes);
 apiV1.use('/hrci/idcard', idcardRoutes);
 apiV1.use('/memberships', membershipsRoutes);
 apiV1.use('/memberships/admin', membershipsAdminRoutes);
+apiV1.use('/memberships', membershipsSelfRoutes);
 // Mirror public membership routes under /api/v1 for production base compatibility
 apiV1.use('/memberships/public', membershipsPublicRoutes);
 apiV1.use('/memberships/public/kyc', membershipsKycRoutes);

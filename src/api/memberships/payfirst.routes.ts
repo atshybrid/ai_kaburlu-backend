@@ -152,6 +152,11 @@ router.post('/orders', async (req, res) => {
     if (razorpayEnabled()) {
       const rp = await createRazorpayOrder({ amountPaise: amount * 100, currency: 'INR', receipt: intent.id, notes: { cell, designationCode, level } });
       providerOrderId = rp.id;
+      // Persist provider details for traceability
+      await (prisma as any).paymentIntent.update({
+        where: { id: intent.id },
+        data: { meta: { registrationMobile: String(mobileNumber), provider: 'razorpay', providerOrderId } }
+      });
     }
     return res.json({ success: true, data: { order: { orderId: intent.id, amount, currency: 'INR', provider: razorpayEnabled() ? 'razorpay' : null, providerOrderId: providerOrderId || null, providerKeyId: razorpayEnabled() ? getRazorpayKeyId() : null } } });
   } catch (e: any) {
@@ -159,13 +164,13 @@ router.post('/orders', async (req, res) => {
   }
 });
 
-// Confirm payment intent: atomically create membership on success
+// Confirm payment intent: mark payment successful and reserve seat (membership is created in /register)
 /**
  * @swagger
  * /memberships/payfirst/confirm:
  *   post:
  *     tags: [HRCI Membership - Member APIs]
- *     summary: Confirm payment success and create membership atomically
+ *     summary: Confirm payment success and reserve seat (membership is NOT created here)
  *     requestBody:
  *       required: true
  *       content:
@@ -296,12 +301,43 @@ router.get('/status/:orderId', async (req, res) => {
         status: intent.status, // PENDING, SUCCESS, FAILED, REFUND_REQUIRED
         amount: intent.amount,
         currency: intent.currency,
+        providerOrderId: intent?.meta?.providerOrderId || null,
         seatDetails,
         canRegister: intent.status === 'SUCCESS'
       }
     });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'STATUS_CHECK_FAILED', message: e?.message });
+  }
+});
+
+// Lookup internal orderId by Razorpay provider order id
+/**
+ * @swagger
+ * /memberships/payfirst/lookup/razorpay/{providerOrderId}:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Resolve internal orderId from Razorpay order id
+ *     parameters:
+ *       - name: providerOrderId
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Mapped order id
+ */
+router.get('/lookup/razorpay/:providerOrderId', async (req, res) => {
+  try {
+    const providerOrderId = String(req.params.providerOrderId);
+    const intent = await (prisma as any).paymentIntent.findFirst({
+      where: { meta: { path: ['providerOrderId'], equals: providerOrderId } }
+    });
+    if (!intent) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+    return res.json({ success: true, data: { orderId: intent.id, provider: 'razorpay', providerOrderId } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'LOOKUP_FAILED', message: e?.message });
   }
 });
 
@@ -339,6 +375,12 @@ router.post('/register', async (req, res) => {
     if (!intent) return res.status(404).json({ success: false, error: 'ORDER_NOT_FOUND' });
     if (intent.status !== 'SUCCESS') return res.status(400).json({ success: false, error: 'PAYMENT_NOT_COMPLETED' });
     if (intent.membershipId) return res.status(409).json({ success: false, error: 'ALREADY_REGISTERED', membershipId: intent.membershipId });
+
+    // Enforce that the registering mobile matches the one used during order (if present)
+    const linkedMobile = intent?.meta?.registrationMobile ? String(intent.meta.registrationMobile) : null;
+    if (linkedMobile && linkedMobile !== String(mobileNumber)) {
+      return res.status(400).json({ success: false, error: 'MOBILE_MISMATCH', message: 'Use the same mobile number used when creating the order' });
+    }
 
     const result = await (prisma as any).$transaction(async (tx: any) => {
       // 1) Upsert user with mpinHash

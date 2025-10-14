@@ -1,11 +1,17 @@
 
 import { Router } from 'express';
 import passport from 'passport';
+import multer from 'multer';
+import sharp from 'sharp';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { r2Client, R2_BUCKET, getPublicUrl } from '../../lib/r2';
+import prisma from '../../lib/prisma';
 import { validationMiddleware } from '../middlewares/validation.middleware';
 import { getProfileByUserId, createProfile, upsertProfile, updateProfile, deleteProfile, listProfiles } from './profiles.service';
 import { CreateProfileDto, UpdateProfileDto } from './profiles.dto';
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: Number(process.env.MEDIA_MAX_IMAGE_MB || 10) * 1024 * 1024 } });
 
 /**
  * @swagger
@@ -265,6 +271,82 @@ router.delete('/:userId', passport.authenticate('jwt', { session: false }), asyn
   } catch (e: any) {
     if (String(e.message || '').includes('not found')) return res.status(404).json({ error: e.message });
     return res.status(400).json({ error: 'Failed to delete profile.' });
+  }
+});
+
+/**
+ * @swagger
+ * /profiles/me/photo:
+ *   post:
+ *     summary: Upload or update your profile photo (used for ID card)
+ *     tags: [Profiles, Member APIs]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: Image file (JPEG/PNG/WebP). Will be optimized.
+ *     responses:
+ *       200:
+ *         description: Profile photo updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     profilePhotoUrl: { type: string }
+ */
+router.post('/me/photo', passport.authenticate('jwt', { session: false }), upload.single('file'), async (req: any, res) => {
+  try {
+    if (!R2_BUCKET) return res.status(500).json({ success: false, error: 'STORAGE_NOT_CONFIGURED' });
+    const file = req.file;
+    if (!file) return res.status(400).json({ success: false, error: 'file is required' });
+    const mime = (file.mimetype || '').toLowerCase();
+    if (!/^image\/(jpeg|png|webp|gif)$/.test(mime)) return res.status(400).json({ success: false, error: 'INVALID_IMAGE_TYPE' });
+
+    // Optimize and convert: keep PNG as PNG; otherwise convert to WebP
+    const isPng = mime === 'image/png';
+    const img = sharp(file.buffer).rotate();
+    const optimized = isPng ? await img.png({ compressionLevel: 9 }).toBuffer() : await img.webp({ quality: 85 }).toBuffer();
+    const ext = isPng ? 'png' : 'webp';
+
+    // Build key under profile-photos/YYYY/MM/DD
+    const d = new Date();
+    const datePath = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
+    const rand = Math.random().toString(36).slice(2, 8);
+    const key = `profile-photos/${datePath}/${req.user.id}-${Date.now()}-${rand}.${ext}`;
+
+    await r2Client.send(new PutObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: key,
+      Body: optimized,
+      ContentType: isPng ? 'image/png' : 'image/webp',
+      CacheControl: 'public, max-age=31536000, immutable',
+    }));
+    const publicUrl = getPublicUrl(key);
+
+    // Update profile: set URL and clear mediaId (mutually exclusive)
+    await (prisma as any).userProfile.upsert({
+      where: { userId: req.user.id },
+      create: { userId: req.user.id, profilePhotoUrl: publicUrl, profilePhotoMediaId: null },
+      update: { profilePhotoUrl: publicUrl, profilePhotoMediaId: null },
+    });
+
+    return res.json({ success: true, data: { profilePhotoUrl: publicUrl } });
+  } catch (e: any) {
+    console.error('profile photo upload failed', e);
+    return res.status(500).json({ success: false, error: 'UPLOAD_FAILED', message: e?.message });
   }
 });
 

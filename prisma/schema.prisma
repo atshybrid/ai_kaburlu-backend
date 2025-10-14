@@ -120,6 +120,7 @@ model Cell {
   updatedAt   DateTime @updatedAt
   memberships Membership[]
   levelCapacities CellLevelCapacity[]
+  designationPrices DesignationPrice[]
 }
 
 /// Organizational levels for membership slots
@@ -172,7 +173,33 @@ model Designation {
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   memberships    Membership[]
+  prices         DesignationPrice[]
   @@unique([name, parentId])
+}
+
+/// Price overrides for a designation by level/cell/geography (most specific match wins)
+model DesignationPrice {
+  id             String       @id @default(cuid())
+  designation    Designation  @relation(fields: [designationId], references: [id])
+  designationId  String
+  cell           Cell?        @relation(fields: [cellId], references: [id])
+  cellId         String?
+  level          OrgLevel?
+  zone           HrcZone?
+  hrcCountryId   String?
+  hrcStateId     String?
+  hrcDistrictId  String?
+  hrcMandalId    String?
+  fee            Int          @default(0)
+  validityDays   Int?
+  currency       String       @default("INR")
+  activeFrom     DateTime?
+  activeTo       DateTime?
+  priority       Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([designationId, cellId, level, zone, hrcStateId, hrcDistrictId, hrcMandalId])
 }
 
 /// Membership claiming a designation at a specific org level + geography + cell
