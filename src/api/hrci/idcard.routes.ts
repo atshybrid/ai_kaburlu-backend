@@ -65,78 +65,10 @@ const router = Router();
  *             examples:
  *               ok:
  *                 value: { success: true, data: [ { id: 'cuid', name: 'ID Card', isActive: true } ] }
- *   post:
- *     tags: [HRCI ID Cards]
- *     summary: Create an ID card setting (admin)
- *     security: [ { bearerAuth: [] } ]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               name: { type: string }
- *               isActive: { type: boolean }
- *               primaryColor: { type: string }
- *               secondaryColor: { type: string }
- *               frontH1: { type: string }
- *               frontH2: { type: string }
- *               frontH3: { type: string }
- *               frontH4: { type: string }
- *               frontLogoUrl: { type: string }
- *               secondLogoUrl: { type: string }
- *               hrciStampUrl: { type: string }
- *               authorSignUrl: { type: string }
- *               registerDetails: { type: string }
- *               frontFooterText: { type: string }
- *               headOfficeAddress: { type: string }
- *               terms: { type: array, items: { type: string } }
- *               qrLandingBaseUrl: { type: string }
- *     responses:
- *       200:
- *         description: Created setting
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success: { type: boolean }
- *                 data:
- *                   $ref: '#/components/schemas/IdCardSetting'
- *             examples:
- *               created:
- *                 value:
- *                   success: true
- *                   data:
- *                     id: 'cuid_123'
- *                     name: 'ID Card'
- *                     isActive: true
- *                     primaryColor: '#FFFFFF'
- *                     secondaryColor: '#BBBBBB'
- *       401:
- *         description: Unauthorized
- *       403:
- *         description: Forbidden (requires HRCI admin)
  */
 router.get('/settings', requireAuth, requireHrcAdmin, async (_req, res) => {
   const rows = await (prisma as any).idCardSetting.findMany({ orderBy: { updatedAt: 'desc' } });
   res.json({ success: true, data: rows });
-});
-
-router.post('/settings', requireAuth, requireHrcAdmin, async (req, res) => {
-  const body = req.body || {};
-  // Enforce singleton: if a setting exists, update it; otherwise create one
-  const existing = await (prisma as any).idCardSetting.findFirst();
-  const saved = existing
-    ? await (prisma as any).idCardSetting.update({ where: { id: existing.id }, data: body })
-    : await (prisma as any).idCardSetting.create({ data: body });
-
-  if (saved.isActive) {
-    // Deactivate any other rows (safety if historical duplicates exist)
-    await (prisma as any).idCardSetting.updateMany({ where: { id: { not: saved.id } }, data: { isActive: false } });
-  }
-  res.json({ success: true, data: saved });
 });
 
 /**

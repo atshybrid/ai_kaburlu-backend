@@ -201,6 +201,34 @@ async function seedPrompts() {
     }
 }
 
+async function seedIdCardSettings() {
+    // Ensure a default active IdCardSetting exists so that API can be PUT-only
+    try {
+        const p: any = prisma as any;
+        const existing = await (p.idCardSetting?.findFirst?.().catch(() => null));
+        if (existing) { log('idcard','settings exist – skip default seed'); return; }
+        const created = await (p.idCardSetting?.create?.({
+            data: {
+                name: 'default',
+                isActive: true,
+                primaryColor: '#0d6efd',
+                secondaryColor: '#6c757d',
+                frontH1: 'Human Rights & Civil Initiatives',
+                frontH2: 'Identity Card',
+                frontFooterText: 'This card remains property of HRCI and must be returned upon request.',
+                registerDetails: 'Registered under Societies Act. Valid for 12 months from issue date.'
+            }
+        }).catch(() => null));
+        if (created?.id) {
+            // Deactivate any other rows defensively
+            try { await p.idCardSetting.updateMany({ where: { id: { not: created.id } }, data: { isActive: false } }); } catch {}
+            log('idcard','seeded default IdCardSetting');
+        }
+    } catch (e: any) {
+        log('idcard', `skip seed (client missing or error): ${e?.message || e}`);
+    }
+}
+
 async function seedCoreUsers(roleMap: Record<string,string>, languageMap: Record<string,string>) {
     log('users','upserting core users');
     const saltRounds = 10;
@@ -365,6 +393,7 @@ async function main() {
     await seedCountryAndStates();
     await seedCategoriesAndTranslations(languageMap);
     await seedPrompts();
+    await seedIdCardSettings();
     await seedCoreUsers(roleMap, languageMap);
     await seedSampleContent(roleMap, languageMap);
     await seedDevices(roleMap, languageMap);
