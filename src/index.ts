@@ -8,15 +8,22 @@ const prisma = new PrismaClient();
 
 // ensure PORT is a number
 const port = Number(process.env.PORT) || 3001;
+const host = process.env.HOST || '0.0.0.0'; // Explicitly bind to all interfaces for Render/containers
+
+// Helper: wrap prisma connect with a timeout so boot isn't blocked indefinitely in PaaS
+async function prismaConnectWithTimeout(ms: number) {
+  const to = new Promise((_, reject) => setTimeout(() => reject(new Error(`Prisma connect timeout after ${ms}ms`)), ms));
+  return Promise.race([prisma.$connect(), to]);
+}
 
 async function start() {
   try {
     if (process.env.DATABASE_URL) {
       try {
-        await prisma.$connect();
+        await prismaConnectWithTimeout(Number(process.env.PRISMA_CONNECT_TIMEOUT_MS) || 10000);
         console.log('Prisma connected');
       } catch (e) {
-        console.error('Prisma connect failed on startup — continuing without DB connection:', (e as any)?.message || e);
+        console.error('Prisma connect failed/timed out on startup — continuing without DB connection:', (e as any)?.message || e);
       }
     } else {
       console.log('DATABASE_URL not set — skipping Prisma connect');
@@ -24,9 +31,9 @@ async function start() {
 
     const server = http.createServer(app);
 
-    server.listen(port, () => {
-      console.log(`Server is running on http://localhost:${port}`);
-  console.log(`Swagger is running on http://localhost:${port}/api/docs`);
+    server.listen(port, host, () => {
+      console.log(`Server is running on http://${host}:${port}`);
+      console.log(`Swagger is running on http://${host}:${port}/api/docs`);
     });
 
     // graceful shutdown
