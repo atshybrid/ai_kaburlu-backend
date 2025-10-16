@@ -66,9 +66,10 @@ export async function generateDonationReceiptPdf(org: OrgPublic, data: DonationR
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: ['networkidle0'] });
   await page.emulateMediaType('print');
-  const pdf = await page.pdf({ format: 'A4', printBackground: true, margin: { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' } });
+  const pdfData = await page.pdf({ format: 'A4', printBackground: true, margin: { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' } });
   await browser.close();
-  return pdf;
+  // Puppeteer returns a Uint8Array; ensure we return a Node Buffer
+  return Buffer.isBuffer(pdfData) ? pdfData : Buffer.from(pdfData);
 }
 
 function escapeHtml(s: string) {
