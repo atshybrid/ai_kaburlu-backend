@@ -310,6 +310,28 @@ export const createShortNews = async (req: Request, res: Response) => {
     let aiPlagiarism: any = null;
     let aiSensitive: any = null;
     let initialStatus: string = 'PENDING';
+
+    // Lenient moderation policy: maximize auto-approval (~90%)
+    function decideStatusLenient(opts: { decision?: string; plagiarism?: number | null; flags?: string[]; remark?: string | undefined }) {
+      const strictness = Number(process.env.SHORTNEWS_MODERATION_STRICTNESS || 0.5); // 0 to 1; lower => more lenient
+      const flags = (opts.flags || []).map(f => String(f).toLowerCase());
+      const plag = typeof opts.plagiarism === 'number' ? opts.plagiarism : null;
+      const severe = new Set(['child','csam','child sexual','terrorism','self-harm']);
+      const hasSevere = flags.some(f => Array.from(severe).some(s => f.includes(s)));
+      // Hard block: explicit severe categories
+      if (hasSevere) return { status: 'REJECTED', reason: 'Severe policy violation' };
+      // Plagiarism thresholds
+      // Very high plagiarism (>0.9) => desk review unless explicit ALLOW
+      if (plag !== null && plag > Math.max(0.9 - strictness * 0.2, 0.7)) {
+        return { status: 'DESK_PENDING', reason: 'High plagiarism' };
+      }
+      // Multiple sensitive flags => desk review
+      if (flags.length >= Math.max(3 - Math.floor(strictness * 2), 1)) {
+        return { status: 'DESK_PENDING', reason: 'Multiple sensitive flags' };
+      }
+      // Default: AI approved
+      return { status: 'AI_APPROVED', reason: 'Lenient auto-approval' };
+    }
     try {
       const apiKey = process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
       if (apiKey) {
@@ -317,22 +339,16 @@ export const createShortNews = async (req: Request, res: Response) => {
         const { GoogleGenerativeAI } = require('@google/generative-ai');
         const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-        const modPrompt = `Content moderation for news. Analyze the text below for plagiarism likelihood and sensitive content (violence, hate, adult, personal data). Provide STRICT JSON with keys: plagiarismScore (0-1), sensitiveFlags (string[]), decision ('ALLOW'|'REVIEW'|'BLOCK'), remark (short in ${languageCode}). Text: ${content.slice(0, 2000)}`;
+  const modPrompt = `Content moderation for news. Analyze the text for plagiarism likelihood and sensitive content (violence, hate, adult, personal data).\nReturn STRICT JSON: {"plagiarismScore": number (0-1), "sensitiveFlags": string[], "decision": "ALLOW"|"REVIEW"|"BLOCK", "remark": string (short, in ${languageCode})}.\nText: ${content.slice(0, 2000)}`;
         const modRes = await model.generateContent(modPrompt);
         const text = (modRes?.response?.text && modRes.response.text()) || '';
         const jsonText = text.trim().replace(/^```(json)?/i, '').replace(/```$/,'').trim();
         const parsed = JSON.parse(jsonText);
         aiPlagiarism = { score: parsed?.plagiarismScore ?? null };
         aiSensitive = { flags: Array.isArray(parsed?.sensitiveFlags) ? parsed.sensitiveFlags : [] };
-        if (parsed?.decision === 'BLOCK') {
-          initialStatus = 'REJECTED';
-          aiRemark = parsed?.remark || 'Blocked by AI';
-        } else if (parsed?.decision === 'REVIEW') {
-          initialStatus = 'DESK_PENDING';
-          aiRemark = parsed?.remark || 'Needs desk review';
-        } else {
-          initialStatus = 'AI_APPROVED';
-        }
+        const d = decideStatusLenient({ decision: parsed?.decision, plagiarism: aiPlagiarism?.score ?? null, flags: aiSensitive?.flags ?? [], remark: parsed?.remark });
+        initialStatus = d.status;
+        aiRemark = parsed?.remark || d.reason;
       } else {
         initialStatus = 'DESK_PENDING';
       }
@@ -351,11 +367,9 @@ export const createShortNews = async (req: Request, res: Response) => {
           const parsed = JSON.parse(jsonText);
           aiPlagiarism = { score: parsed?.plagiarismScore ?? null };
           aiSensitive = { flags: Array.isArray(parsed?.sensitiveFlags) ? parsed.sensitiveFlags : [] };
-          const decision = String(parsed?.decision || 'REVIEW').toUpperCase();
-          aiRemark = typeof parsed?.remark === 'string' ? parsed.remark : undefined;
-          if (decision === 'ALLOW') initialStatus = 'AI_APPROVED';
-          else if (decision === 'BLOCK') initialStatus = 'REJECTED';
-          else initialStatus = 'DESK_PENDING';
+          const d = decideStatusLenient({ decision: parsed?.decision, plagiarism: aiPlagiarism?.score ?? null, flags: aiSensitive?.flags ?? [], remark: parsed?.remark });
+          aiRemark = typeof parsed?.remark === 'string' ? parsed.remark : d.reason;
+          initialStatus = d.status;
         }
       }
     } catch {

@@ -8,11 +8,12 @@ const router = Router();
 function roleName(user: any): string { return (user?.role?.name || '').toUpperCase(); }
 function isReporterOrAbove(user: any): boolean {
 	const r = roleName(user);
-	return ['CITIZEN_REPORTER','REPORTER','NEWS_DESK','NEWS_DESK_ADMIN','LANGUAGE_ADMIN','SUPERADMIN','SUPER_ADMIN','ADMIN'].includes(r);
+	// Allow reporters and above, plus MEMBER and HRCI_ADMIN explicitly
+	return ['CITIZEN_REPORTER','REPORTER','NEWS_DESK','NEWS_DESK_ADMIN','LANGUAGE_ADMIN','SUPERADMIN','SUPER_ADMIN','ADMIN','MEMBER','HRCI_ADMIN'].includes(r);
 }
 function requireReporterOrAbove(req: any, res: any, next: any) {
 	if (isReporterOrAbove(req.user)) return next();
-	return res.status(403).json({ error: 'Forbidden: reporter required' });
+	return res.status(403).json({ error: 'Forbidden: reporter/member/HRCI admin required' });
 }
 
 /**

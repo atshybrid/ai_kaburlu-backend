@@ -77,6 +77,8 @@ export const login = async (loginDto: MpinLoginDto) => {
   // Fetch user profile and device data for enhanced response
   const userProfile = await prisma.userProfile.findUnique({ where: { userId: user.id } });
   const userLocation = await prisma.userLocation.findUnique({ where: { userId: user.id } });
+  // Resolve user's language details (id, code, name)
+  const userLanguage = user.languageId ? await prisma.language.findUnique({ where: { id: user.languageId } }) : null;
   const device = await prisma.device.findFirst({ 
     where: { userId: user.id }, 
     orderBy: { updatedAt: 'desc' } 
@@ -93,6 +95,7 @@ export const login = async (loginDto: MpinLoginDto) => {
       userId: user.id,
       role: role?.name,
       languageId: user.languageId,
+      language: userLanguage ? { id: userLanguage.id, code: (userLanguage as any).code || null, name: (userLanguage as any).name || null } : null,
       fullName: userProfile?.fullName || null,
       profilePhotoUrl: userProfile?.profilePhotoUrl || null
     },

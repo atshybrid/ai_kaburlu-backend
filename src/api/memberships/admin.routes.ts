@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
-import { requireAuth, requireAdmin } from '../middlewares/authz';
+import { requireAuth, requireAdmin, requireHrcAdmin } from '../middlewares/authz';
 import { generateNextIdCardNumber } from '../../lib/idCardNumber';
+// Redeem codes are no longer used in simplified policy
+import { membershipService } from '../../lib/membershipService';
 
 const router = Router();
 
@@ -88,7 +90,11 @@ router.get('/', requireAuth, requireAdmin, async (req, res) => {
  *       200: { description: Membership details }
  *       404: { description: Not found }
  */
-router.get('/:id', requireAuth, requireAdmin, async (req, res) => {
+// Important: avoid matching '/discounts' as ':id' to ensure HRCI discount routes work
+router.get('/:id', (req, res, next) => {
+  if (req.params.id === 'discounts') return next('route');
+  return next();
+}, requireAuth, requireAdmin, async (req, res) => {
   try {
     const m = await prisma.membership.findUnique({ where: { id: req.params.id }, include: { designation: true, cell: true, idCard: true, payments: true } });
     if (!m) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
@@ -129,7 +135,10 @@ router.get('/:id', requireAuth, requireAdmin, async (req, res) => {
  *     responses:
  *       200: { description: Status updated }
  */
-router.put('/:id/status', requireAuth, requireAdmin, async (req, res) => {
+router.put('/:id/status', (req, res, next) => {
+  if (req.params.id === 'discounts') return next('route');
+  return next();
+}, requireAuth, requireAdmin, async (req, res) => {
   try {
     const { status, expiresAt } = req.body || {};
     if (!status) return res.status(400).json({ success: false, error: 'STATUS_REQUIRED' });
@@ -182,6 +191,314 @@ router.post('/:id/idcard', requireAuth, requireAdmin, async (req, res) => {
     return res.json({ success: true, data: card });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'CARD_ISSUE_FAILED', message: e?.message });
+  }
+});
+
+// --------------------
+// Discount Management
+// --------------------
+
+function pickPercentOnly(d: any, baseAmount: number): { amount: number; type: 'PERCENT' | null; percent?: number | null } {
+  if (!d) return { amount: 0, type: null, percent: null };
+  const percentOk = typeof d.percentOff === 'number' && d.percentOff > 0;
+  if (percentOk) return { amount: Math.max(0, Math.floor((baseAmount * d.percentOff) / 100)), type: 'PERCENT', percent: d.percentOff };
+  return { amount: 0, type: null, percent: null };
+}
+
+function withinWindow(d: any): boolean {
+  const now = new Date();
+  if (d.activeFrom && new Date(d.activeFrom) > now) return false;
+  if (d.activeTo && new Date(d.activeTo) < now) return false;
+  return true;
+}
+
+/**
+ * @swagger
+ * /memberships/admin/discounts:
+ *   get:
+ *     tags: [HRCI Membership - Admin APIs]
+ *     summary: List discounts (admin)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema: { type: string }
+ *       - in: query
+ *         name: code
+ *         schema: { type: string }
+ *       - in: query
+ *         name: mobileNumber
+ *         schema: { type: string }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+ *       - in: query
+ *         name: cursor
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Discounts list }
+ */
+// Keep all /discounts routes defined before generic /:id routes
+router.get('/discounts', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const { status, code, mobileNumber } = req.query as any;
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 20));
+    const cursor = (req.query.cursor as string) || undefined;
+    const where: any = {};
+    if (status) where.status = String(status);
+    if (code) where.code = String(code);
+    if (mobileNumber) where.mobileNumber = String(mobileNumber);
+    const rows = await (prisma as any).discount.findMany({
+      where,
+      take: limit,
+      skip: cursor ? 1 : 0,
+      cursor: cursor ? { id: cursor } : undefined,
+      orderBy: { createdAt: 'desc' },
+    });
+    const nextCursor = rows.length === limit ? rows[rows.length - 1].id : null;
+    return res.json({ success: true, count: rows.length, nextCursor, data: rows });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'LIST_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /memberships/admin/discounts:
+ *   post:
+ *     tags: [HRCI Membership - Admin APIs]
+ *     summary: Create a discount (admin)
+ *     description: "Simplified policy: mobile-number-only and percentage-based discounts. Strict rule: only ONE ACTIVE or RESERVED discount per mobileNumber at any time."
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [mobileNumber, percentOff]
+ *             properties:
+ *               mobileNumber: { type: string }
+ *               percentOff: { type: integer, minimum: 1, maximum: 100 }
+ *               currency: { type: string, default: 'INR' }
+ *               maxRedemptions: { type: integer, default: 1 }
+ *               activeFrom: { type: string, format: date-time, nullable: true }
+ *               activeTo: { type: string, format: date-time, nullable: true }
+ *               status: { type: string, default: 'ACTIVE' }
+ *               reason: { type: string, nullable: true }
+ *     responses:
+ *       200: { description: Created }
+ */
+router.post('/discounts', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const { mobileNumber, percentOff, currency, maxRedemptions, activeFrom, activeTo, status, reason } = req.body || {};
+    if (!mobileNumber) return res.status(400).json({ success: false, error: 'mobileNumber required' });
+    if (typeof percentOff !== 'number' || percentOff <= 0) return res.status(400).json({ success: false, error: 'percentOff required and must be > 0' });
+
+    // Strict rule: only one ACTIVE/RESERVED discount per mobile
+    const desiredStatus = String(status || 'ACTIVE');
+    if (desiredStatus === 'ACTIVE' || desiredStatus === 'RESERVED') {
+      const existing = await (prisma as any).discount.findFirst({ where: { mobileNumber: String(mobileNumber), status: { in: ['ACTIVE','RESERVED'] } } });
+      if (existing) return res.status(409).json({ success: false, error: 'MOBILE_ALREADY_HAS_ACTIVE_DISCOUNT', message: 'Only one ACTIVE/RESERVED discount allowed per mobileNumber.' });
+    }
+
+    const user: any = (req as any).user;
+    const created = await (prisma as any).discount.create({
+      data: {
+        mobileNumber: String(mobileNumber),
+        code: null,
+        amountOff: null,
+        percentOff: percentOff,
+        currency: currency || 'INR',
+        maxRedemptions: Math.max(1, Number(maxRedemptions) || 1),
+        activeFrom: activeFrom ? new Date(activeFrom) : null,
+        activeTo: activeTo ? new Date(activeTo) : null,
+        status: status || 'ACTIVE',
+        cell: null,
+        designationCode: null,
+        level: null,
+        zone: null,
+        hrcCountryId: null,
+        hrcStateId: null,
+        hrcDistrictId: null,
+        hrcMandalId: null,
+        createdByUserId: user?.id || null,
+        reason: reason || null,
+      }
+    });
+    return res.json({ success: true, data: created });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'CREATE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /memberships/admin/discounts/{id}:
+ *   get:
+ *     tags: [HRCI Membership - Admin APIs]
+ *     summary: Get discount by ID (admin)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Discount }
+ *       404: { description: Not found }
+ */
+router.get('/discounts/:id', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const d = await (prisma as any).discount.findUnique({ where: { id: String(req.params.id) } });
+    if (!d) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+    return res.json({ success: true, data: d });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'GET_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /memberships/admin/discounts/{id}:
+ *   put:
+ *     tags: [HRCI Membership - Admin APIs]
+ *     summary: Update a discount (admin)
+ *     description: Only ACTIVE discounts should be edited; changes to REDEEMED or RESERVED may be rejected in future.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               percentOff: { type: integer, minimum: 1, maximum: 100, nullable: true }
+ *               currency: { type: string }
+ *               maxRedemptions: { type: integer }
+ *               activeFrom: { type: string, format: date-time, nullable: true }
+ *               activeTo: { type: string, format: date-time, nullable: true }
+ *               status: { type: string }
+ *               reason: { type: string, nullable: true }
+ *     responses:
+ *       200: { description: Updated }
+ */
+router.put('/discounts/:id', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const d = await (prisma as any).discount.findUnique({ where: { id: String(req.params.id) } });
+    if (!d) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+    const { percentOff } = req.body || {};
+    if ('percentOff' in req.body && (typeof percentOff !== 'number' || percentOff <= 0)) {
+      return res.status(400).json({ success: false, error: 'percentOff must be > 0 when provided' });
+    }
+    const data: any = {};
+    const fields = ['currency','maxRedemptions','status','reason'];
+    for (const f of fields) if (f in req.body) data[f] = req.body[f];
+    if ('activeFrom' in req.body) data.activeFrom = req.body.activeFrom ? new Date(req.body.activeFrom) : null;
+    if ('activeTo' in req.body) data.activeTo = req.body.activeTo ? new Date(req.body.activeTo) : null;
+    // Enforce percent-only
+    data.amountOff = null;
+    if ('percentOff' in req.body) data.percentOff = req.body.percentOff;
+
+    // Enforce strict rule on transition to ACTIVE/RESERVED
+    const targetStatus = 'status' in data ? String(data.status) : d.status;
+    const targetMobile = d.mobileNumber; // mobileNumber is immutable in current API; adjust if later made editable
+    if (targetStatus === 'ACTIVE' || targetStatus === 'RESERVED') {
+      const existing = await (prisma as any).discount.findFirst({ where: { mobileNumber: String(targetMobile), status: { in: ['ACTIVE','RESERVED'] }, NOT: { id: d.id } } });
+      if (existing) return res.status(409).json({ success: false, error: 'MOBILE_ALREADY_HAS_ACTIVE_DISCOUNT', message: 'Only one ACTIVE/RESERVED discount allowed per mobileNumber.' });
+    }
+    const updated = await (prisma as any).discount.update({ where: { id: d.id }, data });
+    return res.json({ success: true, data: updated });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'UPDATE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /memberships/admin/discounts/{id}/cancel:
+ *   post:
+ *     tags: [HRCI Membership - Admin APIs]
+ *     summary: Cancel a discount (admin)
+ *     description: Moves discount to CANCELLED if it is not redeemed. Reserved discounts not tied to a payment will be released.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Cancelled }
+ */
+router.post('/discounts/:id/cancel', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const d = await (prisma as any).discount.findUnique({ where: { id: String(req.params.id) } });
+    if (!d) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+    if (d.status === 'REDEEMED') return res.status(400).json({ success: false, error: 'ALREADY_REDEEMED' });
+    const updated = await (prisma as any).discount.update({ where: { id: d.id }, data: { status: 'CANCELLED', appliedToIntentId: null } });
+    return res.json({ success: true, data: updated });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'CANCEL_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /memberships/admin/discounts/preview:
+ *   post:
+ *     tags: [HRCI Membership - Admin APIs]
+ *     summary: Preview discount application for a seat (admin)
+ *     description: Computes baseAmount from designation fee and applies the latest active mobile-bound percentage discount if applicable.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [cell, designationCode, level, mobileNumber]
+ *             properties:
+ *               cell: { type: string }
+ *               designationCode: { type: string }
+ *               level: { type: string, enum: [NATIONAL, ZONE, STATE, DISTRICT, MANDAL] }
+ *               mobileNumber: { type: string }
+ *               zone: { type: string, nullable: true }
+ *               hrcCountryId: { type: string, nullable: true }
+ *               hrcStateId: { type: string, nullable: true }
+ *               hrcDistrictId: { type: string, nullable: true }
+ *               hrcMandalId: { type: string, nullable: true }
+ *     responses:
+ *       200: { description: Breakdown }
+ */
+router.post('/discounts/preview', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const { cell, designationCode, level, mobileNumber, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId } = req.body || {};
+    if (!cell || !designationCode || !level || !mobileNumber) return res.status(400).json({ success: false, error: 'cell, designationCode, level, mobileNumber required' });
+    const avail = await (membershipService as any).getAvailability({ cellCodeOrName: String(cell), designationCode: String(designationCode), level: String(level), zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId });
+    const baseAmount = (avail as any)?.designation?.fee ?? 0;
+    // Mobile-number-only, percent-only
+    let appliedDiscount: any | null = null;
+    const candidates = await (prisma as any).discount.findMany({ where: { mobileNumber: String(mobileNumber), status: 'ACTIVE' }, orderBy: { createdAt: 'desc' }, take: 3 });
+    for (const d of candidates) if (withinWindow(d)) { appliedDiscount = d; break; }
+    const picked = pickPercentOnly(appliedDiscount, baseAmount);
+    const discountAmount = picked.amount;
+    const discountPercent = picked.type === 'PERCENT' ? (picked.percent || null) : null;
+    const appliedType = picked.type;
+    const finalAmount = Math.max(0, baseAmount - discountAmount);
+    return res.json({ success: true, data: { baseAmount, discountAmount, discountPercent, appliedType, finalAmount, note: appliedDiscount ? 'Mobile-based percentage discount applied' : null } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'PREVIEW_FAILED', message: e?.message });
   }
 });
 

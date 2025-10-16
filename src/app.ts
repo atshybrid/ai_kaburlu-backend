@@ -38,6 +38,7 @@ import geoHrcRoutes from './api/hrci/geo.routes';
 import geoHrcAdminRoutes from './api/hrci/geo.admin.routes';
 import hrciCellsRoutes from './api/hrci/cells.routes';
 import hrciDesignationsRoutes from './api/hrci/designations.routes';
+import hrciCasesRoutes from './api/hrci/cases.routes';
 import membershipsPublicRoutes from './api/memberships/public.routes';
 import membershipsPaymentsRoutes from './api/memberships/payments.routes';
 import membershipsPayFirstRoutes from './api/memberships/payfirst.routes';
@@ -168,6 +169,7 @@ app.use('/hrci/geo', geoHrcRoutes); // expose HRCI geo reads without versioned b
 app.use('/hrci/geo/admin', geoHrcAdminRoutes); // protected via JWT + admin
 app.use('/hrci/cells', hrciCellsRoutes); // public cells listing
 app.use('/hrci/designations', hrciDesignationsRoutes); // public designations listing
+app.use('/hrci/cases', hrciCasesRoutes); // cases endpoints (JWT required inside)
 app.use('/hrci/idcard', idcardRoutes); // settings + public card JSON/HTML/QR
 app.use('/memberships/public', membershipsPublicRoutes); // open public
 // KYC: JWT required inside the router; mounted under member path. Public alias retained for backward compatibility.
@@ -232,6 +234,7 @@ apiV1.use('/legal', legalRoutes);
 apiV1.use('/hrci/geo', geoHrcRoutes);
 apiV1.use('/hrci/cells', hrciCellsRoutes);
 apiV1.use('/hrci/designations', hrciDesignationsRoutes);
+apiV1.use('/hrci/cases', hrciCasesRoutes);
 apiV1.use('/hrci/idcard', idcardRoutes);
 apiV1.use('/memberships', membershipsRoutes);
 apiV1.use('/memberships/admin', membershipsAdminRoutes);

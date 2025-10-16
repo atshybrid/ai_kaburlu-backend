@@ -41,6 +41,34 @@ async function getSeatDetails(intent: any) {
  */
 const router = Router();
 
+// --- Discount helpers ---
+// Simplified discount policy: mobile-only percentage discounts
+
+function withinWindow(d: any): boolean {
+  const now = new Date();
+  if (d.activeFrom && new Date(d.activeFrom) > now) return false;
+  if (d.activeTo && new Date(d.activeTo) < now) return false;
+  return true;
+}
+
+function matchesMobileOnly(d: any, mobileNumber: string): boolean {
+  return !d.mobileNumber || String(d.mobileNumber) === String(mobileNumber);
+}
+
+function pickDiscount(d: any, baseAmount: number): { amount: number; type: 'AMOUNT' | 'PERCENT' | null; percent?: number | null; amountOff?: number | null } {
+  if (!d) return { amount: 0, type: null, percent: null, amountOff: null };
+  const amountOffOk = typeof d.amountOff === 'number' && d.amountOff > 0;
+  const percentOk = typeof d.percentOff === 'number' && d.percentOff > 0;
+  if (amountOffOk) {
+    return { amount: Math.min(baseAmount, d.amountOff), type: 'AMOUNT', percent: null, amountOff: d.amountOff };
+  }
+  if (percentOk) {
+    const amt = Math.max(0, Math.floor((baseAmount * d.percentOff) / 100));
+    return { amount: amt, type: 'PERCENT', percent: d.percentOff, amountOff: null };
+  }
+  return { amount: 0, type: null, percent: null, amountOff: null };
+}
+
 // helper: validate location fields required by level
 function validateGeoByLevel(level: string, body: any): { ok: boolean; error?: string } {
   switch (String(level)) {
@@ -124,15 +152,24 @@ function validateGeoByLevel(level: string, body: any): { ok: boolean; error?: st
  *                         provider: { type: string, nullable: true }
  *                         providerOrderId: { type: string, nullable: true }
  *                         providerKeyId: { type: string, nullable: true }
+ *                         breakdown:
+ *                           type: object
+ *                           properties:
+ *                             baseAmount: { type: number }
+ *                             discountAmount: { type: number }
+ *                             discountPercent: { type: number, nullable: true }
+ *                             appliedType: { type: string, nullable: true, enum: [AMOUNT, PERCENT] }
+ *                             finalAmount: { type: number }
+ *                             note: { type: string, nullable: true, description: 'Informational note about applied discount policy' }
  *             examples:
  *               WithRazorpay:
- *                 value: { success: true, data: { order: { orderId: 'cmgxxx', amount: 100, currency: 'INR', provider: 'razorpay', providerOrderId: 'order_abc', providerKeyId: 'rzp_test_xxx' } } }
+ *                 value: { success: true, data: { order: { orderId: 'cmgxxx', amount: 900, currency: 'INR', provider: 'razorpay', providerOrderId: 'order_abc', providerKeyId: 'rzp_test_xxx', breakdown: { baseAmount: 1000, discountAmount: 100, finalAmount: 900, note: 'Mobile-based percentage discount applied' } } } }
  *               InternalOnly:
- *                 value: { success: true, data: { order: { orderId: 'cmgxxx', amount: 100, currency: 'INR', provider: null, providerOrderId: null } } }
+ *                 value: { success: true, data: { order: { orderId: 'cmgxxx', amount: 1000, currency: 'INR', provider: null, providerOrderId: null, breakdown: { baseAmount: 1000, discountAmount: 0, finalAmount: 1000 } } } }
  */
 router.post('/orders', async (req, res) => {
   try {
-    const { cell, designationCode, level, mobileNumber, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId } = req.body || {};
+  const { cell, designationCode, level, mobileNumber, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId } = req.body || {};
     if (!cell || !designationCode || !level || !mobileNumber) return res.status(400).json({ success: false, error: 'cell, designationCode, level, mobileNumber required' });
     const geoCheck = validateGeoByLevel(level, req.body || {});
     if (!geoCheck.ok) return res.status(400).json({ success: false, error: 'MISSING_LOCATION', message: geoCheck.error });
@@ -141,27 +178,70 @@ router.post('/orders', async (req, res) => {
       cellCodeOrName: String(cell), designationCode: String(designationCode), level: String(level) as any,
       zone: zone || undefined, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId
     } as any);
-    const amount = (avail as any).designation?.fee ?? 0;
+    const baseAmount = (avail as any).designation?.fee ?? 0;
+    // Find most recent active discount for this mobile (percentage-only policy)
+    let appliedDiscount: any | null = null;
+    const candidates = await (prisma as any).discount.findMany({
+      where: { mobileNumber: String(mobileNumber), status: 'ACTIVE' },
+      orderBy: { createdAt: 'desc' },
+      take: 3,
+    });
+    for (const d of candidates) {
+      if (withinWindow(d) && matchesMobileOnly(d, String(mobileNumber))) { appliedDiscount = d; break; }
+    }
+
+    const picked = pickDiscount(appliedDiscount, baseAmount);
+    const discountAmount = picked.amount;
+    const discountPercent = picked.type === 'PERCENT' ? (picked.percent || null) : null;
+    const appliedType = picked.type;
+    const finalAmount = Math.max(0, baseAmount - discountAmount);
     const intent = await (prisma as any).paymentIntent.create({
       data: {
         cellCodeOrName: String(cell), designationCode: String(designationCode), level: String(level),
         zone: zone || null, hrcCountryId: hrcCountryId || null, hrcStateId: hrcStateId || null, hrcDistrictId: hrcDistrictId || null, hrcMandalId: hrcMandalId || null,
-        amount, currency: 'INR', status: 'PENDING',
-        meta: { registrationMobile: String(mobileNumber) }
+        amount: finalAmount, currency: 'INR', status: finalAmount === 0 ? 'SUCCESS' : 'PENDING',
+        meta: {
+          registrationMobile: String(mobileNumber),
+          baseAmount,
+          discountAmount,
+          discountPercent,
+          appliedType,
+          finalAmount,
+          policy: 'MOBILE_PERCENT_ONLY',
+          ...(appliedDiscount ? { discountId: appliedDiscount.id } : {})
+        }
       }
     });
+    // If final amount is zero, no payment gateway is needed. Redeem discount immediately.
+    if (finalAmount === 0 && appliedDiscount) {
+      try {
+        const d = await (prisma as any).discount.findUnique({ where: { id: appliedDiscount.id } });
+        if (d) {
+          const newCount = (d.redeemedCount || 0) + 1;
+          await (prisma as any).discount.update({
+            where: { id: d.id },
+            data: {
+              redeemedCount: newCount,
+              status: newCount >= (d.maxRedemptions || 1) ? 'REDEEMED' : (d.status === 'RESERVED' ? 'ACTIVE' : d.status),
+              appliedToIntentId: intent.id,
+            },
+          });
+        }
+      } catch {}
+    }
+    // No code reservation in mobile-only policy
     // If Razorpay is configured, create a provider order, else return internal order only
     let providerOrderId: string | undefined;
-    if (razorpayEnabled()) {
-      const rp = await createRazorpayOrder({ amountPaise: amount * 100, currency: 'INR', receipt: intent.id, notes: { cell, designationCode, level } });
+    if (razorpayEnabled() && finalAmount > 0) {
+      const rp = await createRazorpayOrder({ amountPaise: finalAmount * 100, currency: 'INR', receipt: intent.id, notes: { cell, designationCode, level } });
       providerOrderId = rp.id;
       // Persist provider details for traceability
       await (prisma as any).paymentIntent.update({
         where: { id: intent.id },
-        data: { meta: { registrationMobile: String(mobileNumber), provider: 'razorpay', providerOrderId } }
+        data: { meta: { ...(intent.meta || {}), provider: 'razorpay', providerOrderId } }
       });
     }
-    return res.json({ success: true, data: { order: { orderId: intent.id, amount, currency: 'INR', provider: razorpayEnabled() ? 'razorpay' : null, providerOrderId: providerOrderId || null, providerKeyId: razorpayEnabled() ? getRazorpayKeyId() : null } } });
+  return res.json({ success: true, data: { order: { orderId: intent.id, amount: finalAmount, currency: 'INR', provider: razorpayEnabled() && finalAmount > 0 ? 'razorpay' : null, providerOrderId: providerOrderId || null, providerKeyId: razorpayEnabled() && finalAmount > 0 ? getRazorpayKeyId() : null, breakdown: { baseAmount, discountAmount, discountPercent, appliedType, finalAmount, note: appliedDiscount ? 'Mobile-based percentage discount applied' : null } } } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'ORDER_FAILED', message: e?.message });
   }
@@ -244,6 +324,16 @@ router.post('/confirm', async (req, res) => {
     }
 
     if (status === 'FAILED') {
+      // Release reserved discount (if any)
+      const discountId = (intent as any)?.meta?.discountId as string | undefined;
+      if (discountId) {
+        try {
+          const d = await (prisma as any).discount.findUnique({ where: { id: discountId } });
+          if (d && d.status === 'RESERVED' && d.appliedToIntentId === intent.id) {
+            await (prisma as any).discount.update({ where: { id: discountId }, data: { status: 'ACTIVE', appliedToIntentId: null } });
+          }
+        } catch {}
+      }
       await (prisma as any).paymentIntent.update({ where: { id: intent.id }, data: { status: 'FAILED', providerRef: providerRef || null } });
       return res.json({ success: true, data: { status: 'FAILED' } });
     }
@@ -254,9 +344,31 @@ router.post('/confirm', async (req, res) => {
         status: 'SUCCESS', 
         providerRef: providerRef || null,
         // Optionally link mobile for future registration
-        ...(mobileNumber && { meta: { registrationMobile: mobileNumber } })
+        ...(mobileNumber && { meta: { ...(intent.meta || {}), registrationMobile: mobileNumber } })
       } 
     });
+    // Redeem discount (if any)
+    try {
+      const meta = (intent as any)?.meta || {};
+      const discountId = meta.discountId as string | undefined;
+      if (discountId) {
+        const d = await (prisma as any).discount.findUnique({ where: { id: discountId } });
+        if (d) {
+          if (d.status === 'RESERVED' && d.appliedToIntentId === intent.id) {
+            await (prisma as any).discount.update({
+              where: { id: discountId },
+              data: { status: 'REDEEMED', redeemedCount: (d.redeemedCount || 0) + 1 },
+            });
+          } else if (d.status === 'ACTIVE') {
+            const newCount = (d.redeemedCount || 0) + 1;
+            await (prisma as any).discount.update({
+              where: { id: discountId },
+              data: { redeemedCount: newCount, status: newCount >= (d.maxRedemptions || 1) ? 'REDEEMED' : 'ACTIVE' },
+            });
+          }
+        }
+      }
+    } catch {}
     
     const seatDetails = await getSeatDetails(intent);
     return res.json({ 
@@ -290,6 +402,38 @@ router.post('/confirm', async (req, res) => {
  *     responses:
  *       200:
  *         description: Payment status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     orderId: { type: string }
+ *                     status: { type: string, enum: [PENDING, SUCCESS, FAILED, REFUND_REQUIRED, EXPIRED] }
+ *                     amount: { type: number }
+ *                     currency: { type: string }
+ *                     providerOrderId: { type: string, nullable: true }
+ *                     providerKeyId: { type: string, nullable: true }
+ *                     breakdown:
+ *                       type: object
+ *                       properties:
+ *                         baseAmount: { type: number }
+ *                         discountAmount: { type: number }
+ *                         discountPercent: { type: number, nullable: true }
+ *                         appliedType: { type: string, nullable: true, enum: [AMOUNT, PERCENT] }
+ *                         finalAmount: { type: number }
+ *                         note: { type: string, nullable: true }
+ *                     seatDetails:
+ *                       type: object
+ *                       properties:
+ *                         cell: { type: object }
+ *                         designation: { type: object }
+ *                         level: { type: string }
+ *                         location: { type: object, nullable: true }
+ *                     canRegister: { type: boolean }
  */
 router.get('/status/:orderId', async (req, res) => {
   try {
@@ -305,6 +449,15 @@ router.get('/status/:orderId', async (req, res) => {
         amount: intent.amount,
         currency: intent.currency,
         providerOrderId: intent?.meta?.providerOrderId || null,
+        providerKeyId: intent?.meta?.provider === 'razorpay' ? getRazorpayKeyId() : null,
+        breakdown: intent?.meta ? {
+          baseAmount: (intent as any).meta.baseAmount ?? intent.amount,
+          discountAmount: (intent as any).meta.discountAmount ?? 0,
+          discountPercent: (intent as any).meta.discountPercent ?? null,
+          appliedType: (intent as any).meta.appliedType ?? null,
+          finalAmount: (intent as any).meta.finalAmount ?? intent.amount,
+          note: (intent as any).meta.policy ? 'Mobile-based percentage discount policy' : null,
+        } : undefined,
         seatDetails,
         canRegister: intent.status === 'SUCCESS'
       }

@@ -7,24 +7,24 @@ model OtpLog {
 }
 
 model ShortNews {
-  id             String    @id @default(cuid())
+  id             String          @id @default(cuid())
   title          String
   slug           String?
   summary        String?
   content        String
   language       String?
-  author         User      @relation(fields: [authorId], references: [id])
+  author         User            @relation(fields: [authorId], references: [id])
   authorId       String
   categoryId     String
-  category       Category? @relation(fields: [categoryId], references: [id])
+  category       Category?       @relation(fields: [categoryId], references: [id])
   tags           String[]
   featuredImage  String?
   publishDate    DateTime?
   publishedAt    DateTime?
-  status         String    @default("PENDING")
+  status         String          @default("PENDING")
   notifiedAt     DateTime?
   seo            Json?
-  allowComments  Boolean   @default(true)
+  allowComments  Boolean         @default(true)
   mediaUrls      String[]
   latitude       Float?
   longitude      Float?
@@ -38,15 +38,15 @@ model ShortNews {
   aiRemark       String?
   aiPlagiarism   Json?
   aiSensitive    Json?
-  readCount      Int       @default(0)
-  commentCount   Int       @default(0)
-  likeCount      Int       @default(0)
-  dislikeCount   Int       @default(0)
-  isPinned       Boolean   @default(false)
-  priority       Int       @default(0)
-  isDeleted      Boolean   @default(false)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  readCount      Int             @default(0)
+  commentCount   Int             @default(0)
+  likeCount      Int             @default(0)
+  dislikeCount   Int             @default(0)
+  isPinned       Boolean         @default(false)
+  priority       Int             @default(0)
+  isDeleted      Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
   reads          ShortNewsRead[]
   comments       Comment[]
 
@@ -111,15 +111,15 @@ model Prompt {
 
 /// Organizational cells / wings (e.g., General Body, Women Wing, Youth Wing)
 model Cell {
-  id          String   @id @default(cuid())
-  name        String   @unique
-  code        String?  @unique
-  description String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  memberships Membership[]
-  levelCapacities CellLevelCapacity[]
+  id                String              @id @default(cuid())
+  name              String              @unique
+  code              String?             @unique
+  description       String?
+  isActive          Boolean             @default(true)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  memberships       Membership[]
+  levelCapacities   CellLevelCapacity[]
   designationPrices DesignationPrice[]
 }
 
@@ -134,11 +134,11 @@ enum OrgLevel {
 
 /// Status of a membership (seat claim lifecycle)
 enum MembershipStatus {
-  PENDING_PAYMENT   // reserved but awaiting payment (amount > 0)
-  PENDING_APPROVAL  // payment amount = 0; requires admin approval
-  ACTIVE            // active, card issued
-  EXPIRED           // id card validity ended
-  REVOKED           // manually revoked by admin
+  PENDING_PAYMENT // reserved but awaiting payment (amount > 0)
+  PENDING_APPROVAL // payment amount = 0; requires admin approval
+  ACTIVE // active, card issued
+  EXPIRED // id card validity ended
+  REVOKED // manually revoked by admin
 }
 
 /// Payment status for membership fees
@@ -160,91 +160,93 @@ enum IdCardStatus {
 
 /// Designation template (hierarchical) reused across all cells/levels
 model Designation {
-  id             String          @id @default(cuid())
-  name           String
-  code           String          @unique
-  parentId       String?         @db.VarChar(191)
-  parent         Designation?    @relation("DesignationHierarchy", fields: [parentId], references: [id])
-  children       Designation[]   @relation("DesignationHierarchy")
-  defaultCapacity Int            @default(0)
-  idCardFee      Int             @default(0) // amount in smallest currency unit (e.g., INR rupees)
-  validityDays   Int             @default(365)
-  orderRank      Int             @default(0)
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  memberships    Membership[]
-  prices         DesignationPrice[]
+  id              String             @id @default(cuid())
+  name            String
+  code            String             @unique
+  parentId        String?            @db.VarChar(191)
+  parent          Designation?       @relation("DesignationHierarchy", fields: [parentId], references: [id])
+  children        Designation[]      @relation("DesignationHierarchy")
+  defaultCapacity Int                @default(0)
+  idCardFee       Int                @default(0) // amount in smallest currency unit (e.g., INR rupees)
+  validityDays    Int                @default(365)
+  orderRank       Int                @default(0)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  memberships     Membership[]
+  prices          DesignationPrice[]
+
   @@unique([name, parentId])
 }
 
 /// Price overrides for a designation by level/cell/geography (most specific match wins)
 model DesignationPrice {
-  id             String       @id @default(cuid())
-  designation    Designation  @relation(fields: [designationId], references: [id])
-  designationId  String
-  cell           Cell?        @relation(fields: [cellId], references: [id])
-  cellId         String?
-  level          OrgLevel?
-  zone           HrcZone?
-  hrcCountryId   String?
-  hrcStateId     String?
-  hrcDistrictId  String?
-  hrcMandalId    String?
-  fee            Int          @default(0)
-  validityDays   Int?
-  currency       String       @default("INR")
-  activeFrom     DateTime?
-  activeTo       DateTime?
-  priority       Int          @default(0)
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  id            String      @id @default(cuid())
+  designation   Designation @relation(fields: [designationId], references: [id])
+  designationId String
+  cell          Cell?       @relation(fields: [cellId], references: [id])
+  cellId        String?
+  level         OrgLevel?
+  zone          HrcZone?
+  hrcCountryId  String?
+  hrcStateId    String?
+  hrcDistrictId String?
+  hrcMandalId   String?
+  fee           Int         @default(0)
+  validityDays  Int?
+  currency      String      @default("INR")
+  activeFrom    DateTime?
+  activeTo      DateTime?
+  priority      Int         @default(0)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
 
   @@index([designationId, cellId, level, zone, hrcStateId, hrcDistrictId, hrcMandalId])
 }
 
 /// Membership claiming a designation at a specific org level + geography + cell
 model Membership {
-  id             String            @id @default(cuid())
-  userId         String            // future relation to User (kept as scalar now to avoid circular edits)
-  cell           Cell              @relation(fields: [cellId], references: [id])
-  cellId         String
-  designation    Designation       @relation(fields: [designationId], references: [id])
-  designationId  String
-  level          OrgLevel
-  zone           HrcZone?          // used only when level = ZONE
+  id            String                  @id @default(cuid())
+  userId        String // future relation to User (kept as scalar now to avoid circular edits)
+  cell          Cell                    @relation(fields: [cellId], references: [id])
+  cellId        String
+  designation   Designation             @relation(fields: [designationId], references: [id])
+  designationId String
+  level         OrgLevel
+  zone          HrcZone? // used only when level = ZONE
   // Geographic scoping fields (only one or chain relevant depending on level)
-  hrcCountryId   String?           // for NATIONAL / fallback
-  hrcStateId     String?           // for STATE
-  hrcDistrictId  String?           // for DISTRICT
-  hrcMandalId    String?           // for MANDAL
-  status         MembershipStatus  @default(PENDING_PAYMENT)
-  paymentStatus  MembershipPaymentStatus     @default(NOT_REQUIRED)
-  idCardStatus   IdCardStatus      @default(NOT_CREATED)
-  seatSequence   Int               @default(1) // 1..capacity if we enumerate seats
-  lockedAt       DateTime?         // when seat reserved pre-payment
-  activatedAt    DateTime?
-  expiresAt      DateTime?
-  revokedAt      DateTime?
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
-  payments       MembershipPayment[]
-  idCard         IDCard?
-  kyc            MembershipKyc?
-  @@index([cellId, designationId, level])
+  hrcCountryId  String? // for NATIONAL / fallback
+  hrcStateId    String? // for STATE
+  hrcDistrictId String? // for DISTRICT
+  hrcMandalId   String? // for MANDAL
+  status        MembershipStatus        @default(PENDING_PAYMENT)
+  paymentStatus MembershipPaymentStatus @default(NOT_REQUIRED)
+  idCardStatus  IdCardStatus            @default(NOT_CREATED)
+  seatSequence  Int                     @default(1) // 1..capacity if we enumerate seats
+  lockedAt      DateTime? // when seat reserved pre-payment
+  activatedAt   DateTime?
+  expiresAt     DateTime?
+  revokedAt     DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+  payments      MembershipPayment[]
+  idCard        IDCard?
+  kyc           MembershipKyc?
+
   @@unique([cellId, designationId, level, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId, seatSequence])
+  @@index([cellId, designationId, level])
 }
 
 /// Payment records linked to a membership
 model MembershipPayment {
-  id             String         @id @default(cuid())
-  membership     Membership     @relation(fields: [membershipId], references: [id])
-  membershipId   String
-  amount         Int            @default(0)
-  status         MembershipPaymentStatus  @default(PENDING)
-  providerRef    String?        // gateway transaction id
-  meta           Json?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  id           String                  @id @default(cuid())
+  membership   Membership              @relation(fields: [membershipId], references: [id])
+  membershipId String
+  amount       Int                     @default(0)
+  status       MembershipPaymentStatus @default(PENDING)
+  providerRef  String? // gateway transaction id
+  meta         Json?
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
 }
 
 /// Payment Intent to support pay-first flow (no membership row until payment success)
@@ -257,73 +259,74 @@ enum PaymentIntentStatus {
 }
 
 model PaymentIntent {
-  id            String               @id @default(cuid())
+  id              String              @id @default(cuid())
   // Seat specification at the time of order creation
-  cellCodeOrName String
+  cellCodeOrName  String
   designationCode String
-  level          OrgLevel
-  zone           HrcZone?
-  hrcCountryId   String?
-  hrcStateId     String?
-  hrcDistrictId  String?
-  hrcMandalId    String?
+  level           OrgLevel
+  zone            HrcZone?
+  hrcCountryId    String?
+  hrcStateId      String?
+  hrcDistrictId   String?
+  hrcMandalId     String?
   // Payment details
-  amount        Int                  @default(0)
-  currency      String               @default("INR")
-  status        PaymentIntentStatus  @default(PENDING)
-  providerRef   String?
-  meta          Json?
+  amount          Int                 @default(0)
+  currency        String              @default("INR")
+  status          PaymentIntentStatus @default(PENDING)
+  providerRef     String?
+  meta            Json?
   // Result linkage (after success)
-  membershipId  String?
+  membershipId    String?
   // Optional expiry for the intent
-  expiresAt     DateTime?
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
+  expiresAt       DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
 }
 
 /// Aggregate capacity per Cell + OrgLevel (independent of designation) to enforce
 /// a hard upper bound like: each cell can have at most 72 NATIONAL posts total (sum of all designations).
 model CellLevelCapacity {
-  id        String   @id @default(cuid())
-  cell      Cell     @relation(fields: [cellId], references: [id])
-  cellId    String
-  level     OrgLevel
+  id            String   @id @default(cuid())
+  cell          Cell     @relation(fields: [cellId], references: [id])
+  cellId        String
+  level         OrgLevel
   // Optional zone when level = ZONE
-  zone      HrcZone?
+  zone          HrcZone?
   // Optional geo scoping when level is DISTRICT / MANDAL (mirrors Membership)
   hrcStateId    String?
   hrcDistrictId String?
   hrcMandalId   String?
-  capacity  Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  capacity      Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
   @@unique([cellId, level, zone, hrcStateId, hrcDistrictId, hrcMandalId])
 }
 
 /// Generated ID Card details (simple JSON metadata can expand later)
 model IDCard {
-  id            String        @id @default(cuid())
-  membership    Membership    @relation(fields: [membershipId], references: [id])
-  membershipId  String        @unique
-  cardNumber    String        @unique
-  issuedAt      DateTime      @default(now())
-  expiresAt     DateTime
-  meta          Json?
-  status        IdCardStatus  @default(GENERATED)
+  id              String       @id @default(cuid())
+  membership      Membership   @relation(fields: [membershipId], references: [id])
+  membershipId    String       @unique
+  cardNumber      String       @unique
+  issuedAt        DateTime     @default(now())
+  expiresAt       DateTime
+  meta            Json?
+  status          IdCardStatus @default(GENERATED)
   // Snapshot fields for convenience (immutable at issuance time)
-  fullName         String?
-  designationName  String?
-  cellName         String?
-  mobileNumber     String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  fullName        String?
+  designationName String?
+  cellName        String?
+  mobileNumber    String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 }
 
 /// KYC details linked to a membership. Stores document URLs uploaded via Media API.
 model MembershipKyc {
   id                    String     @id @default(cuid())
-  membership            Membership  @relation(fields: [membershipId], references: [id])
-  membershipId          String      @unique
+  membership            Membership @relation(fields: [membershipId], references: [id])
+  membershipId          String     @unique
   // Aadhaar details
   aadhaarNumber         String?
   aadhaarFrontUrl       String?
@@ -335,35 +338,181 @@ model MembershipKyc {
   llbRegistrationNumber String?
   llbSupportDocUrl      String?
   // Meta/status
-  status                String?     // e.g., PENDING, UNDER_REVIEW, APPROVED, REJECTED
+  status                String? // e.g., PENDING, UNDER_REVIEW, APPROVED, REJECTED
   remarks               String?
-  createdAt             DateTime    @default(now())
-  updatedAt             DateTime    @updatedAt
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
 }
 
 /// Global (or scoped in future) HRCI ID Card visual/settings configuration
 model IdCardSetting {
-  id               String   @id @default(cuid())
-  name             String   @default("default")
-  isActive         Boolean  @default(false)
-  primaryColor     String?
-  secondaryColor   String?
-  frontH1          String?
-  frontH2          String?
-  frontH3          String?
-  frontH4          String?
-  frontLogoUrl     String?
-  secondLogoUrl    String?
-  hrciStampUrl     String?
-  authorSignUrl    String?
-  registerDetails  String?   // plain text or small markdown
-  frontFooterText  String?
+  id                String   @id @default(cuid())
+  name              String   @default("default")
+  isActive          Boolean  @default(false)
+  primaryColor      String?
+  secondaryColor    String?
+  frontH1           String?
+  frontH2           String?
+  frontH3           String?
+  frontH4           String?
+  frontLogoUrl      String?
+  secondLogoUrl     String?
+  hrciStampUrl      String?
+  authorSignUrl     String?
+  registerDetails   String? // plain text or small markdown
+  frontFooterText   String?
   headOfficeAddress String?
-  terms            Json?     // array of strings
-  qrLandingBaseUrl String?   // base to compose verify URL, else derived from request
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  terms             Json? // array of strings
+  qrLandingBaseUrl  String? // base to compose verify URL, else derived from request
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
   @@index([isActive])
+}
+
+/// HRCI Case Management
+enum CaseStatus {
+  NEW
+  TRIAGED
+  IN_PROGRESS
+  LEGAL_REVIEW
+  ACTION_TAKEN
+  RESOLVED
+  REJECTED
+  CLOSED
+  ESCALATED
+}
+
+enum CasePriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum CaseVisibility {
+  PRIVATE
+  PUBLIC_LINK
+}
+
+enum LegalStatus {
+  NOT_REQUIRED
+  ADVISED
+  FILED
+  IN_COURT
+}
+
+model HrcCase {
+  id                String         @id @default(cuid())
+  caseNumber        String         @unique
+  title             String
+  description       String
+  incidentAt        DateTime?
+  // Complainant (member/victim) and creator
+  complainantUserId String?
+  createdByUserId   String
+  // HRCI geography scoping to route by jurisdiction
+  hrcCountryId      String?
+  hrcStateId        String?
+  hrcDistrictId     String?
+  hrcMandalId       String?
+  // Optional precise location
+  latitude          Float?
+  longitude         Float?
+  address           String?
+  // Classification and workflow
+  category          String?
+  priority          CasePriority   @default(MEDIUM)
+  status            CaseStatus     @default(NEW)
+  visibility        CaseVisibility @default(PRIVATE)
+  // Assignment and legal
+  assignedToUserId  String?
+  assignedRoleHint  String?
+  legalSuggestion   String?
+  legalStatus       LegalStatus    @default(NOT_REQUIRED)
+  // AI assist (optional)
+  aiCategoryGuess   String?
+  aiSeverityScore   Float?
+  aiSummary         String?
+  // Meta
+  source            String? // MOBILE | WEB | ADMIN
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  comments     HrcCaseComment[]
+  attachments  HrcCaseAttachment[]
+  events       HrcCaseEvent[]
+  categoryMaps HrcCaseCategoryMap[]
+
+  @@index([status, priority, createdAt])
+  @@index([hrcStateId, hrcDistrictId, hrcMandalId, status])
+}
+
+model HrcCaseComment {
+  id           String   @id @default(cuid())
+  case         HrcCase  @relation(fields: [caseId], references: [id])
+  caseId       String
+  authorUserId String
+  body         String
+  visibility   String   @default("EXTERNAL") // EXTERNAL | INTERNAL
+  createdAt    DateTime @default(now())
+}
+
+model HrcCaseAttachment {
+  id        String   @id @default(cuid())
+  case      HrcCase  @relation(fields: [caseId], references: [id])
+  caseId    String
+  media     Media    @relation("HrcCaseAttachment_media", fields: [mediaId], references: [id])
+  mediaId   String
+  fileName  String?
+  mime      String?
+  size      Int?
+  createdAt DateTime @default(now())
+}
+
+model HrcCaseEvent {
+  id          String   @id @default(cuid())
+  case        HrcCase  @relation(fields: [caseId], references: [id])
+  caseId      String
+  type        String // CREATED | STATUS_CHANGE | ASSIGNED | COMMENT_INTERNAL | COMMENT_EXTERNAL | ATTACHMENT_ADDED | ESCALATED | LEGAL_SUGGESTION
+  data        Json?
+  actorUserId String?
+  createdAt   DateTime @default(now())
+}
+
+/// HRCI Case Categories (hierarchical)
+model HrcCaseCategory {
+  id        String               @id @default(cuid())
+  code      String               @unique
+  name      String
+  parentId  String?
+  parent    HrcCaseCategory?     @relation("HrcCaseCategoryHierarchy", fields: [parentId], references: [id])
+  children  HrcCaseCategory[]    @relation("HrcCaseCategoryHierarchy")
+  order     Int                  @default(0)
+  isActive  Boolean              @default(true)
+  icon      String?
+  color     String?
+  meta      Json?
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  caseMaps  HrcCaseCategoryMap[]
+
+  @@index([parentId])
+  @@index([isActive, order])
+}
+
+/// Many-to-many mapping between cases and categories (supports multi-category per case)
+model HrcCaseCategoryMap {
+  caseId     String
+  categoryId String
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  case     HrcCase         @relation(fields: [caseId], references: [id])
+  category HrcCaseCategory @relation(fields: [categoryId], references: [id])
+
+  @@id([caseId, categoryId])
+  @@index([categoryId])
 }
 
 model Role {
@@ -450,24 +599,24 @@ enum HrcZone {
 
 /// Dedicated HRCI country table (decoupled from generic Country for future divergence)
 model HrcCountry {
-  id        String      @id @default(cuid())
-  name      String      @unique
-  code      String?     @unique
+  id        String     @id @default(cuid())
+  name      String     @unique
+  code      String?    @unique
   states    HrcState[]
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 }
 
 model HrcState {
-  id        String       @id @default(cuid())
-  name      String       @unique
-  code      String?      @unique
+  id        String        @id @default(cuid())
+  name      String        @unique
+  code      String?       @unique
   zone      HrcZone
-  country   HrcCountry   @relation(fields: [countryId], references: [id])
+  country   HrcCountry    @relation(fields: [countryId], references: [id])
   countryId String
   districts HrcDistrict[]
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
 }
 
 model HrcDistrict {
@@ -478,16 +627,18 @@ model HrcDistrict {
   mandals   HrcMandal[]
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
+
   @@unique([stateId, name])
 }
 
 model HrcMandal {
-  id          String      @id @default(cuid())
-  name        String
-  district    HrcDistrict @relation(fields: [districtId], references: [id])
-  districtId  String
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id         String      @id @default(cuid())
+  name       String
+  district   HrcDistrict @relation(fields: [districtId], references: [id])
+  districtId String
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
   @@unique([districtId, name])
 }
 
@@ -743,19 +894,20 @@ model Comment {
 }
 
 model Media {
-  id            String        @id @default(cuid())
-  key           String        @unique
-  url           String
-  name          String
-  contentType   String
-  size          Int
-  kind          String // image | video | other
-  folder        String?
-  owner         User?         @relation(fields: [ownerId], references: [id])
-  ownerId       String?
-  profilePhotos UserProfile[] @relation("UserProfile_profilePhotoMedia")
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id              String              @id @default(cuid())
+  key             String              @unique
+  url             String
+  name            String
+  contentType     String
+  size            Int
+  kind            String // image | video | other
+  folder          String?
+  owner           User?               @relation(fields: [ownerId], references: [id])
+  ownerId         String?
+  profilePhotos   UserProfile[]       @relation("UserProfile_profilePhotoMedia")
+  caseAttachments HrcCaseAttachment[] @relation("HrcCaseAttachment_media")
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
 }
 
 /// User profile details separated from the core User
@@ -848,16 +1000,16 @@ model PushNotificationLog {
 
 /// Terms and Conditions management
 model TermsAndConditions {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   title       String
-  content     String   @db.Text // HTML content
-  version     String   @default("1.0")
-  isActive    Boolean  @default(false)
-  language    String   @default("en") // Language code (en, te, hi, etc.)
+  content     String    @db.Text // HTML content
+  version     String    @default("1.0")
+  isActive    Boolean   @default(false)
+  language    String    @default("en") // Language code (en, te, hi, etc.)
   effectiveAt DateTime?
-  createdBy   String?  // Admin user ID
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdBy   String? // Admin user ID
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@index([isActive])
   @@index([language])
@@ -866,18 +1018,52 @@ model TermsAndConditions {
 
 /// Privacy Policy management  
 model PrivacyPolicy {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   title       String
-  content     String   @db.Text // HTML content
-  version     String   @default("1.0")
-  isActive    Boolean  @default(false)
-  language    String   @default("en") // Language code (en, te, hi, etc.)
+  content     String    @db.Text // HTML content
+  version     String    @default("1.0")
+  isActive    Boolean   @default(false)
+  language    String    @default("en") // Language code (en, te, hi, etc.)
   effectiveAt DateTime?
-  createdBy   String?  // Admin user ID
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdBy   String? // Admin user ID
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@index([isActive])
   @@index([language])
   @@index([version])
+}
+
+/// Discount for membership fee (applied in pay-first flow)
+model Discount {
+  id                String    @id @default(cuid())
+  code              String?   @unique
+  mobileNumber      String
+  // Seat filters (optional): if provided, must match request to apply
+  cell              String?
+  designationCode   String?
+  level             OrgLevel?
+  zone              HrcZone?
+  hrcCountryId      String?
+  hrcStateId        String?
+  hrcDistrictId     String?
+  hrcMandalId       String?
+  // Discount values: provide either amountOff or percentOff
+  amountOff         Int?
+  percentOff        Int?
+  currency          String    @default("INR")
+  maxRedemptions    Int       @default(1)
+  redeemedCount     Int       @default(0)
+  activeFrom        DateTime?
+  activeTo          DateTime?
+  status            String    @default("ACTIVE") // ACTIVE | RESERVED | REDEEMED | CANCELLED | EXPIRED
+  appliedToIntentId String?
+  createdByUserId   String?
+  reason            String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([mobileNumber, status])
+  @@index([designationCode, level])
+  @@index([hrcStateId, hrcDistrictId, hrcMandalId])
 }

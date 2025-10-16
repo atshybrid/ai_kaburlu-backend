@@ -218,3 +218,65 @@ router.post('/register', async (req, res) => {
 });
 
 export default router;
+
+// --------------------
+// Public Discount Preview (Simplified: mobile-only, percent-only)
+// --------------------
+
+function withinWindow(d: any): boolean {
+  const now = new Date();
+  if (d.activeFrom && new Date(d.activeFrom) > now) return false;
+  if (d.activeTo && new Date(d.activeTo) < now) return false;
+  return true;
+}
+
+function pickPercentOnly(d: any, baseAmount: number): { amount: number; type: 'PERCENT' | null; percent?: number | null } {
+  if (!d) return { amount: 0, type: null, percent: null };
+  const percentOk = typeof d.percentOff === 'number' && d.percentOff > 0;
+  if (percentOk) return { amount: Math.max(0, Math.floor((baseAmount * d.percentOff) / 100)), type: 'PERCENT', percent: d.percentOff };
+  return { amount: 0, type: null, percent: null };
+}
+
+/**
+ * @swagger
+ * /memberships/public/discounts/preview:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Public preview of applicable discount by mobile
+ *     description: "Returns applicable discount percent for a mobile number (no seat parameters). Policy: mobile-number-only and percentage-based discount."
+ *     parameters:
+ *       - in: query
+ *         name: mobileNumber
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Discount preview
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     discountPercent: { type: number, nullable: true }
+ *                     appliedType: { type: string, nullable: true, enum: [PERCENT] }
+ *                     note: { type: string, nullable: true }
+ */
+router.get('/discounts/preview', async (req, res) => {
+  try {
+    const { mobileNumber } = req.query as any;
+    if (!mobileNumber) return res.status(400).json({ success: false, error: 'mobileNumber required' });
+    // Mobile-number-only, percent-only
+    let appliedDiscount: any | null = null;
+    const candidates = await (prisma as any).discount.findMany({ where: { mobileNumber: String(mobileNumber), status: 'ACTIVE' }, orderBy: { createdAt: 'desc' }, take: 3 });
+    for (const d of candidates) if (withinWindow(d)) { appliedDiscount = d; break; }
+    const discountPercent = appliedDiscount?.percentOff || null;
+    const appliedType = discountPercent ? 'PERCENT' : null;
+    return res.json({ success: true, data: { discountPercent, appliedType, note: appliedDiscount ? 'Mobile-based percentage discount applied' : null } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'PREVIEW_FAILED', message: e?.message });
+  }
+});

@@ -26,7 +26,11 @@
     "seed:hrci:samples": "npx ts-node scripts/seed_hrci_samples.ts",
     "seed:designation:prices": "npx ts-node scripts/seed_designation_prices.ts",
     "verify:hrci:mandals": "npx ts-node scripts/verify_hrci_mandals.ts",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "db:hrci:apply": "npx prisma db execute --file scripts/sql/add_hrci_case_enums.sql --schema prisma/schema.prisma && npx prisma db execute --file scripts/sql/add_hrci_case_tables.sql --schema prisma/schema.prisma",
+    "db:hrci:categories:apply": "npx prisma db execute --file scripts/sql/add_hrci_case_categories.sql --schema prisma/schema.prisma",
+    "seed:hrci:case-categories": "npx ts-node scripts/seed_hrci_case_categories.ts",
+    "db:discounts:apply": "npx prisma db execute --file scripts/sql/add_discount_table.sql --schema prisma/schema.prisma"
   },
   "engines": {
     "node": ">=18.0.0"
