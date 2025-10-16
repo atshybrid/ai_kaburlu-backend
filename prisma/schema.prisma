@@ -67,6 +67,31 @@ generator client {
   binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
+/// Organization settings for receipts (80G etc.)
+model OrgSetting {
+  id                        String   @id @default(cuid())
+  orgName                   String
+  addressLine1              String?
+  addressLine2              String?
+  city                      String?
+  state                     String?
+  pincode                   String?
+  country                   String?  @default("India")
+  pan                       String?
+  eightyGNumber             String?  // e.g., AAATK1234L/80G/05/2024-25
+  eightyGValidFrom          DateTime?
+  eightyGValidTo            DateTime?
+  email                     String?
+  phone                     String?
+  website                   String?
+  authorizedSignatoryName   String?
+  authorizedSignatoryTitle  String?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  @@index([orgName])
+}
+
 model User {
   id                   String                @id @default(cuid())
   mobileNumber         String?               @unique
@@ -258,12 +283,17 @@ enum PaymentIntentStatus {
   EXPIRED
 }
 
+enum PaymentIntentType {
+  MEMBERSHIP
+  DONATION
+}
+
 model PaymentIntent {
   id              String              @id @default(cuid())
   // Seat specification at the time of order creation
-  cellCodeOrName  String
-  designationCode String
-  level           OrgLevel
+  cellCodeOrName  String?
+  designationCode String?
+  level           OrgLevel?
   zone            HrcZone?
   hrcCountryId    String?
   hrcStateId      String?
@@ -273,6 +303,7 @@ model PaymentIntent {
   amount          Int                 @default(0)
   currency        String              @default("INR")
   status          PaymentIntentStatus @default(PENDING)
+  intentType      PaymentIntentType   @default(MEMBERSHIP)
   providerRef     String?
   meta            Json?
   // Result linkage (after success)
@@ -281,6 +312,65 @@ model PaymentIntent {
   expiresAt       DateTime?
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
+}
+
+/// Donation campaigns/events
+model DonationEvent {
+  id               String   @id @default(cuid())
+  title            String
+  description      String?
+  coverImageUrl    String?
+  goalAmount       Int?
+  currency         String   @default("INR")
+  startAt          DateTime?
+  endAt            DateTime?
+  status           String   @default("DRAFT") // DRAFT | ACTIVE | PAUSED | ENDED
+  presets          Int[]
+  allowCustom      Boolean  @default(true)
+  collectedAmount  Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  donations        Donation[]
+
+  @@index([status, startAt, endAt])
+}
+
+/// Individual donation records
+model Donation {
+  id               String         @id @default(cuid())
+  event            DonationEvent  @relation(fields: [eventId], references: [id])
+  eventId          String
+  amount           Int
+  currency         String         @default("INR")
+  donorName        String?
+  donorMobile      String?
+  donorEmail       String?
+  donorPan         String?
+  isAnonymous      Boolean        @default(false)
+  referrerUserId   String?
+  status           String         @default("PENDING") // PENDING | SUCCESS | FAILED | REFUND
+  providerOrderId  String?
+  providerPaymentId String?
+  paymentIntentId  String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@index([eventId, status])
+}
+
+/// Member-share links for donation attribution
+model DonationShareLink {
+  id               String        @id @default(cuid())
+  event            DonationEvent @relation(fields: [eventId], references: [id])
+  eventId          String
+  createdByUserId  String
+  code             String        @unique
+  active           Boolean       @default(true)
+  clicksCount      Int           @default(0)
+  ordersCount      Int           @default(0)
+  successCount     Int           @default(0)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 }
 
 /// Aggregate capacity per Cell + OrgLevel (independent of designation) to enforce

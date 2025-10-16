@@ -47,6 +47,8 @@ import membershipsAdminRoutes from './api/memberships/admin.routes';
 import membershipsSelfRoutes from './api/memberships/self.routes';
 import membershipsKycRoutes from './api/memberships/kyc.routes';
 import idcardRoutes from './api/hrci/idcard.routes';
+import orgSettingsRoutes from './api/org/settings.routes';
+import donationsRoutes from './api/donations/donations.routes';
 
 const app = express();
 
@@ -164,6 +166,8 @@ app.use('/notifications', notificationsRoutes);
 app.use('/prompts', promptsRoutes);
 app.use('/preferences', preferencesRoutes);
 app.use('/legal', legalRoutes);
+app.use('/org/settings', orgSettingsRoutes);
+app.use('/donations', donationsRoutes);
 // Public joining endpoints (no version prefix per request)
 app.use('/hrci/geo', geoHrcRoutes); // expose HRCI geo reads without versioned base
 app.use('/hrci/geo/admin', geoHrcAdminRoutes); // protected via JWT + admin
@@ -231,6 +235,8 @@ apiV1.use('/notifications', notificationsRoutes);
 apiV1.use('/prompts', promptsRoutes);
 apiV1.use('/preferences', preferencesRoutes);
 apiV1.use('/legal', legalRoutes);
+apiV1.use('/org/settings', orgSettingsRoutes);
+apiV1.use('/donations', donationsRoutes);
 apiV1.use('/hrci/geo', geoHrcRoutes);
 apiV1.use('/hrci/cells', hrciCellsRoutes);
 apiV1.use('/hrci/designations', hrciDesignationsRoutes);

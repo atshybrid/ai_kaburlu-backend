@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Donation Receipt</title>
+  <style>
+    :root {
+      --ink: #0f172a; /* slate-900 */
+      --muted: #475569; /* slate-600 */
+      --line: #e2e8f0; /* slate-200 */
+      --brand: #0ea5e9; /* sky-500 */
+      --bg: #ffffff;
+      --pill: #f1f5f9;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; color: var(--ink); background: var(--bg); }
+    .sheet { max-width: 900px; margin: 24px auto; background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: 0 6px 24px rgba(15,23,42,.06); }
+    .header { display: flex; gap: 20px; padding: 24px; border-bottom: 1px solid var(--line); background: linear-gradient(90deg, #fff 0%, #f8fbff 100%); }
+    .brand { flex: 1; }
+    .brand h1 { margin: 0; font-size: 24px; letter-spacing: .2px; }
+    .brand p { margin: 4px 0 0; color: var(--muted); }
+    .meta { text-align: right; }
+    .meta .pill { display: inline-block; padding: 6px 10px; font-size: 12px; color: #0369a1; background: var(--pill); border-radius: 999px; border: 1px dashed #bae6fd; }
+    .meta .row { margin-top: 8px; font-size: 13px; color: var(--muted); }
+
+    .content { padding: 24px; display: grid; grid-template-columns: 1fr 360px; gap: 24px; }
+    .left h2 { margin: 0 0 8px; font-size: 18px; }
+    .left .donor { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .left .donor .name { font-weight: 600; }
+    .left .donor .minor { color: var(--muted); font-size: 13px; margin-top: 6px; }
+    .left .amount { margin-top: 12px; font-size: 20px; font-weight: 700; color: #065f46; }
+    .left .note { margin-top: 6px; color: var(--muted); font-size: 13px; }
+    .left .purpose { margin-top: 10px; color: var(--muted); font-size: 14px; }
+
+    .right { padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: #fafcff; }
+    .right h3 { margin: 0 0 8px; font-size: 16px; }
+    .right p { margin: 6px 0; font-size: 13px; color: var(--ink); }
+    .right .muted { color: var(--muted); font-size: 12px; }
+
+    .signature { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-top: 1px solid var(--line); background: #fff; }
+    .signature .box { width: 240px; height: 64px; border-bottom: 1px solid var(--line); }
+    .signature .label { margin-top: 6px; font-size: 12px; color: var(--muted); }
+    .footer { padding: 12px 24px; border-top: 1px dashed var(--line); font-size: 12px; color: var(--muted); text-align: center; background: #fcfdff; }
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="header">
+      <div class="brand">
+        <h1 id="orgName">Kaburlu Foundation</h1>
+        <p id="orgAddress">[Address Line 1], [Address Line 2], [City], [State] [PIN], [Country]</p>
+      </div>
+      <div class="meta">
+        <div class="pill">Donation Receipt</div>
+        <div class="row">Receipt No: <strong id="receiptNo">RF-0001</strong></div>
+        <div class="row">Date: <strong id="receiptDate">01/01/2025</strong></div>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="left">
+        <h2>Donor</h2>
+        <div class="donor">
+          <div class="name" id="donorName">[DONOR NAME]</div>
+          <div class="minor" id="donorAddress">[Donor Address – optional]</div>
+          <div class="minor" id="donorPan">PAN: [ABCDE1234F]</div>
+        </div>
+        <div class="amount">Amount: ₹ <span id="amount">10,000</span></div>
+        <div class="note" id="mode">Mode: UPI / Bank Transfer</div>
+        <div class="purpose">Purpose: <span id="purpose">General Donation</span></div>
+        <p class="note" style="margin-top:14px">Note: Cash donations above ₹2,000 are not permitted for 80G claims. Please retain this receipt and the bank transaction proof for income tax purposes.</p>
+      </div>
+      <div class="right">
+        <h3>Trust Details</h3>
+        <p><strong>Trust Name:</strong> <span id="tName">Kaburlu Foundation</span></p>
+        <p><strong>PAN:</strong> <span id="tPan">AAATK1234L</span></p>
+        <p><strong>80G Registration:</strong> <span id="t80g">AAATK/80G/2024-25</span></p>
+        <p class="muted" id="t80gValidity">Valid from [dd/mm/yyyy] to [dd/mm/yyyy]</p>
+        <p><strong>Authorized Signatory:</strong> <span id="signName">[Name]</span> <span class="muted" id="signTitle">[Title]</span></p>
+      </div>
+    </div>
+
+    <div class="signature">
+      <div>
+        <div class="box"></div>
+        <div class="label">Signature & Seal</div>
+      </div>
+      <div class="label">This is a computer-generated receipt and does not require a physical signature.</div>
+    </div>
+
+    <div class="footer">
+      Donation eligible for deduction under Section 80G of the Income-tax Act, 1961 (if trust is registered and valid at the time of receipt).
+    </div>
+  </div>
+</body>
+</html>

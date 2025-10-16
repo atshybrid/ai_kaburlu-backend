@@ -45,6 +45,7 @@ const swaggerDefinition = {
   { name: 'Admin APIs', description: 'Admin management for memberships and KYC approvals (legacy grouping)' },
   { name: 'HRCI Membership - Member APIs', description: 'Member registration, pay-first orders, and payment confirmation (with discount support)' },
   { name: 'HRCI Membership - Admin APIs', description: 'Admin management for memberships, KYC, and discount issuance' },
+    { name: 'Donations', description: 'Donations events, orders, confirmation, and receipts' },
     { name: 'DEPRECATED APIs', description: 'Deprecated endpoints' }
   ],
   components: {
