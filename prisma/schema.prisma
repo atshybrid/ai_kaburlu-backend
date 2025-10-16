@@ -86,6 +86,10 @@ model OrgSetting {
   website                   String?
   authorizedSignatoryName   String?
   authorizedSignatoryTitle  String?
+  // New branding and docs
+  hrciLogoUrl               String?  // HRCI logo image (URL)
+  stampRoundUrl             String?  // Round stamp PNG URL
+  documents                 Json?    // Arbitrary documents metadata: { title, url, type }[]
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
 
@@ -331,6 +335,8 @@ model DonationEvent {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   donations        Donation[]
+  shareLinks       DonationShareLink[]
+  images           DonationEventImage[]
 
   @@index([status, startAt, endAt])
 }
@@ -371,6 +377,21 @@ model DonationShareLink {
   successCount     Int           @default(0)
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
+}
+
+/// Gallery images per donation event (for mobile sliders)
+model DonationEventImage {
+  id        String         @id @default(cuid())
+  event     DonationEvent  @relation(fields: [eventId], references: [id])
+  eventId   String
+  url       String
+  caption   String?
+  order     Int            @default(0)
+  isActive  Boolean        @default(true)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@index([eventId, isActive, order])
 }
 
 /// Aggregate capacity per Cell + OrgLevel (independent of designation) to enforce

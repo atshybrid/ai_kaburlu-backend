@@ -2,7 +2,8 @@ import { Router } from 'express';
 import prisma from '../../lib/prisma';
 import { createRazorpayOrder, getRazorpayKeyId, razorpayEnabled, verifyRazorpaySignature } from '../../lib/razorpay';
 import { generateDonationReceiptPdf } from '../../lib/pdf/generateDonationReceipt';
-import { requireAuth } from '../middlewares/authz';
+import { requireAuth, requireHrcAdmin } from '../middlewares/authz';
+import { randomUUID } from 'crypto';
 
 const router = Router();
 
@@ -31,7 +32,25 @@ function withinWindow(ev: any): boolean {
  *         name: limit
  *         schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
  *     responses:
- *       200: { description: Events list }
+ *       200:
+ *         description: Events list
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 count: { type: integer }
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id: { type: string }
+ *                       title: { type: string }
+ *                       status: { type: string }
+ *                       startAt: { type: string, format: date-time, nullable: true }
+ *                       endAt: { type: string, format: date-time, nullable: true }
  */
 router.get('/events', async (req, res) => {
   try {
@@ -60,7 +79,15 @@ router.get('/events', async (req, res) => {
  *         required: true
  *         schema: { type: string }
  *     responses:
- *       200: { description: Event details }
+ *       200:
+ *         description: Event details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data: { type: object }
  *       404: { description: Not found }
  */
 router.get('/events/:id', async (req, res) => {
@@ -70,6 +97,345 @@ router.get('/events/:id', async (req, res) => {
     return res.json({ success: true, data: ev });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'EVENT_GET_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/events/{id}/gallery:
+ *   get:
+ *     tags: [Donations]
+ *     summary: List gallery images for an event (public)
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Images }
+ */
+router.get('/events/:id/gallery', async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const rows = await prisma.$queryRaw<any[]>`
+      SELECT id, "eventId", url, caption, "order", "isActive", "createdAt", "updatedAt"
+      FROM "DonationEventImage"
+      WHERE "eventId" = ${id} AND "isActive" = true
+      ORDER BY "order" ASC
+    `;
+    return res.json({ success: true, count: rows.length, data: rows });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'GALLERY_LIST_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/admin/events:
+ *   get:
+ *     tags: [Donations - Admin]
+ *     summary: List donation events (admin)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema: { type: string }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+ *       - in: query
+ *         name: cursor
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Events list (admin)
+ */
+router.get('/admin/events', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const { status } = req.query as any;
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 20));
+    const cursor = (req.query.cursor as string) || undefined;
+    const where: any = {};
+    if (status) where.status = String(status);
+    const rows = await (prisma as any).donationEvent.findMany({
+      where,
+      take: limit,
+      skip: cursor ? 1 : 0,
+      cursor: cursor ? { id: cursor } : undefined,
+      orderBy: { createdAt: 'desc' }
+    });
+    const nextCursor = rows.length === limit ? rows[rows.length - 1].id : null;
+    return res.json({ success: true, count: rows.length, nextCursor, data: rows });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'ADMIN_EVENTS_LIST_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/events:
+ *   post:
+ *     tags: [Donations - Admin]
+ *     summary: Create donation event (admin)
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [title]
+ *             properties:
+ *               title: { type: string }
+ *               description: { type: string }
+ *               coverImageUrl: { type: string }
+ *               goalAmount: { type: integer }
+ *               currency: { type: string, default: 'INR' }
+ *               startAt: { type: string, format: date-time }
+ *               endAt: { type: string, format: date-time }
+ *               status: { type: string, enum: [DRAFT, ACTIVE, PAUSED, ENDED], default: DRAFT }
+ *               presets: { type: array, items: { type: integer } }
+ *               allowCustom: { type: boolean, default: true }
+ *     responses:
+ *       200: { description: Created }
+ */
+router.post('/events', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.title) return res.status(400).json({ success: false, error: 'TITLE_REQUIRED' });
+    const data: any = {
+      title: String(b.title),
+      description: b.description || null,
+      coverImageUrl: b.coverImageUrl || null,
+      goalAmount: typeof b.goalAmount === 'number' ? b.goalAmount : null,
+      currency: b.currency || 'INR',
+      status: b.status || 'DRAFT',
+      presets: Array.isArray(b.presets) ? b.presets : [],
+      allowCustom: typeof b.allowCustom === 'boolean' ? b.allowCustom : true,
+    };
+    if (b.startAt) data.startAt = new Date(b.startAt);
+    if (b.endAt) data.endAt = new Date(b.endAt);
+    const created = await (prisma as any).donationEvent.create({ data });
+    return res.json({ success: true, data: created });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'EVENT_CREATE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/events/{id}:
+ *   put:
+ *     tags: [Donations - Admin]
+ *     summary: Update donation event (admin)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title: { type: string }
+ *               description: { type: string }
+ *               coverImageUrl: { type: string }
+ *               goalAmount: { type: integer }
+ *               currency: { type: string }
+ *               startAt: { type: string, format: date-time }
+ *               endAt: { type: string, format: date-time }
+ *               status: { type: string, enum: [DRAFT, ACTIVE, PAUSED, ENDED] }
+ *               presets: { type: array, items: { type: integer } }
+ *               allowCustom: { type: boolean }
+ *     responses:
+ *       200: { description: Updated }
+ */
+router.put('/events/:id', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const data: any = { ...b };
+    if ('startAt' in b) data.startAt = b.startAt ? new Date(b.startAt) : null;
+    if ('endAt' in b) data.endAt = b.endAt ? new Date(b.endAt) : null;
+    if ('presets' in b && !Array.isArray(b.presets)) data.presets = [];
+    const updated = await (prisma as any).donationEvent.update({ where: { id: String(req.params.id) }, data });
+    return res.json({ success: true, data: updated });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'EVENT_UPDATE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/events/{id}/status:
+ *   patch:
+ *     tags: [Donations - Admin]
+ *     summary: Update event status (admin)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [status]
+ *             properties:
+ *               status: { type: string, enum: [DRAFT, ACTIVE, PAUSED, ENDED] }
+ *     responses:
+ *       200: { description: Status updated }
+ */
+router.patch('/events/:id/status', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const { status } = req.body || {};
+    if (!status) return res.status(400).json({ success: false, error: 'STATUS_REQUIRED' });
+    const updated = await (prisma as any).donationEvent.update({ where: { id: String(req.params.id) }, data: { status: String(status) } });
+    return res.json({ success: true, data: updated });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'EVENT_STATUS_UPDATE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/admin/events/{id}/gallery:
+ *   post:
+ *     tags: [Donations - Admin]
+ *     summary: Add image to event gallery (admin)
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [url]
+ *             properties:
+ *               url: { type: string }
+ *               caption: { type: string }
+ *               order: { type: integer, default: 0 }
+ *               isActive: { type: boolean, default: true }
+ *     responses:
+ *       200: { description: Created }
+ */
+router.post('/admin/events/:id/gallery', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const b = req.body || {};
+    if (!b.url) return res.status(400).json({ success: false, error: 'URL_REQUIRED' });
+    const itemId = randomUUID();
+    const rows = await prisma.$queryRaw<any[]>`
+      INSERT INTO "DonationEventImage" (id, "eventId", url, caption, "order", "isActive")
+      VALUES (${itemId}, ${id}, ${String(b.url)}, ${b.caption || null}, ${Number(b.order) || 0}, ${typeof b.isActive === 'boolean' ? b.isActive : true})
+      RETURNING id, "eventId", url, caption, "order", "isActive", "createdAt", "updatedAt"
+    `;
+    const created = rows[0];
+    return res.json({ success: true, data: created });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'GALLERY_CREATE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/admin/events/{id}/gallery/{imageId}:
+ *   put:
+ *     tags: [Donations - Admin]
+ *     summary: Update an event gallery image (admin)
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *       - in: path
+ *         name: imageId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               url: { type: string }
+ *               caption: { type: string }
+ *               order: { type: integer }
+ *               isActive: { type: boolean }
+ *     responses:
+ *       200: { description: Updated }
+ */
+router.put('/admin/events/:id/gallery/:imageId', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const imageId = String(req.params.imageId);
+    const existingRows = await prisma.$queryRaw<any[]>`
+      SELECT id, "eventId", url, caption, "order", "isActive" FROM "DonationEventImage" WHERE id = ${imageId}
+    `;
+    const curr = existingRows[0];
+    if (!curr) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+    const b = req.body || {};
+    const url = 'url' in b ? (b.url ?? null) : curr.url;
+    const caption = 'caption' in b ? (b.caption ?? null) : curr.caption;
+    const order = 'order' in b ? (b.order ?? curr.order) : curr.order;
+    const isActive = 'isActive' in b ? (b.isActive ?? curr.isActive) : curr.isActive;
+    const rows = await prisma.$queryRaw<any[]>`
+      UPDATE "DonationEventImage"
+      SET url = ${url}, caption = ${caption}, "order" = ${order}, "isActive" = ${isActive}, "updatedAt" = NOW()
+      WHERE id = ${imageId}
+      RETURNING id, "eventId", url, caption, "order", "isActive", "createdAt", "updatedAt"
+    `;
+    return res.json({ success: true, data: rows[0] });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'GALLERY_UPDATE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/admin/events/{id}/gallery/{imageId}:
+ *   delete:
+ *     tags: [Donations - Admin]
+ *     summary: Delete an event gallery image (admin)
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *       - in: path
+ *         name: imageId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Deleted }
+ */
+router.delete('/admin/events/:id/gallery/:imageId', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const imageId = String(req.params.imageId);
+    const result: any = await prisma.$executeRaw`
+      DELETE FROM "DonationEventImage" WHERE id = ${imageId}
+    `;
+    // result is number of rows affected in recent Prisma versions
+    return res.json({ success: true, deleted: Number(result) || 0 });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'GALLERY_DELETE_FAILED', message: e?.message });
   }
 });
 
@@ -91,7 +457,20 @@ router.get('/events/:id', async (req, res) => {
  *             properties:
  *               eventId: { type: string }
  *     responses:
- *       200: { description: Created share link }
+ *       200:
+ *         description: Created share link
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id: { type: string }
+ *                     code: { type: string }
+ *                     eventId: { type: string }
  */
 router.post('/share-links', requireAuth, async (req, res) => {
   try {
@@ -120,7 +499,19 @@ router.post('/share-links', requireAuth, async (req, res) => {
  *         required: true
  *         schema: { type: string }
  *     responses:
- *       200: { description: Share link info }
+ *       200:
+ *         description: Share link info
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     link: { type: object }
+ *                     event: { type: object }
  *       404: { description: Not found }
  */
 router.get('/share-links/:code', async (req, res) => {
@@ -161,6 +552,24 @@ router.get('/share-links/:code', async (req, res) => {
  *     responses:
  *       200:
  *         description: Order created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     order:
+ *                       type: object
+ *                       properties:
+ *                         orderId: { type: string }
+ *                         amount: { type: integer }
+ *                         currency: { type: string }
+ *                         provider: { type: string, nullable: true }
+ *                         providerOrderId: { type: string, nullable: true }
+ *                         providerKeyId: { type: string, nullable: true }
  */
 router.post('/orders', async (req, res) => {
   try {
@@ -186,14 +595,13 @@ router.post('/orders', async (req, res) => {
 
     // Create a PaymentIntent of type DONATION
     const intent = await prisma.paymentIntent.create({
-      data: {
+      data: ({
         amount: amt,
         currency: 'INR',
         status: amt === 0 ? 'SUCCESS' : 'PENDING',
-        // @ts-expect-error: intentType is available in schema; cast to any to avoid stale client type errors
-        intentType: 'DONATION' as any,
+  intentType: 'DONATION' as any,
         meta: { donorName, donorMobile, donorEmail, donorPan, isAnonymous: !!isAnonymous, eventId: ev?.id || null },
-      }
+      } as any)
     });
 
     // Create donation record linked to intent
@@ -248,7 +656,19 @@ router.post('/orders', async (req, res) => {
  *               razorpay_payment_id: { type: string, nullable: true }
  *               razorpay_signature: { type: string, nullable: true }
  *     responses:
- *       200: { description: Confirmation result }
+ *       200:
+ *         description: Confirmation result
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     status: { type: string }
+ *                     donationId: { type: string }
  */
 router.post('/confirm', async (req, res) => {
   try {
@@ -310,7 +730,13 @@ router.post('/confirm', async (req, res) => {
  *         required: true
  *         schema: { type: string }
  *     responses:
- *       200: { description: PDF }
+ *       200:
+ *         description: PDF
+ *         content:
+ *           application/pdf:
+ *             schema:
+ *               type: string
+ *               format: binary
  *       404: { description: Not found }
  */
 router.get('/receipt/:id', async (req, res) => {
@@ -340,6 +766,8 @@ router.get('/receipt/:id', async (req, res) => {
       eightyGValidTo: org.eightyGValidTo,
       authorizedSignatoryName: org.authorizedSignatoryName,
       authorizedSignatoryTitle: org.authorizedSignatoryTitle,
+      hrciLogoUrl: org.hrciLogoUrl,
+      stampRoundUrl: org.stampRoundUrl,
     }, {
       receiptNo,
       receiptDate,

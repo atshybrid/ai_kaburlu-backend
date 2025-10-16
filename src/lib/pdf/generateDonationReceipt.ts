@@ -15,6 +15,8 @@ export type OrgPublic = {
   eightyGValidTo?: Date | null;
   authorizedSignatoryName?: string | null;
   authorizedSignatoryTitle?: string | null;
+  hrciLogoUrl?: string | null;
+  stampRoundUrl?: string | null;
 };
 
 export type DonationReceiptData = {
@@ -62,6 +64,16 @@ export async function generateDonationReceiptPdf(org: OrgPublic, data: DonationR
   replace('signName', escapeHtml(org.authorizedSignatoryName || ''));
   replace('signTitle', escapeHtml(org.authorizedSignatoryTitle || ''));
 
+  // Inject logo and stamp if provided (toggle display via setting src and removing display:none)
+  if (org.hrciLogoUrl) {
+    html = html.replace('id="orgLogo" class="logo" src=""', `id="orgLogo" class="logo" src="${escapeAttr(org.hrciLogoUrl)}"`)
+               .replace('id="orgLogo" class="logo" src="', 'id="orgLogo" class="logo" style="" src="');
+  }
+  if (org.stampRoundUrl) {
+    html = html.replace('id="stampRound" class="stamp" src=""', `id="stampRound" class="stamp" src="${escapeAttr(org.stampRoundUrl)}"`)
+               .replace('id="stampRound" class="stamp" src="', 'id="stampRound" class="stamp" style="" src="');
+  }
+
   const browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] });
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: ['networkidle0'] });
@@ -74,6 +86,9 @@ export async function generateDonationReceiptPdf(org: OrgPublic, data: DonationR
 
 function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escapeAttr(s: string) {
+  return s.replace(/"/g, '&quot;');
 }
 function formatDate(d: Date) {
   const dt = new Date(d);

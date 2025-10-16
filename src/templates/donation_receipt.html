@@ -16,10 +16,11 @@
     * { box-sizing: border-box; }
     body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; color: var(--ink); background: var(--bg); }
     .sheet { max-width: 900px; margin: 24px auto; background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: 0 6px 24px rgba(15,23,42,.06); }
-    .header { display: flex; gap: 20px; padding: 24px; border-bottom: 1px solid var(--line); background: linear-gradient(90deg, #fff 0%, #f8fbff 100%); }
+  .header { display: flex; gap: 20px; padding: 24px; border-bottom: 1px solid var(--line); background: linear-gradient(90deg, #fff 0%, #f8fbff 100%); }
     .brand { flex: 1; }
     .brand h1 { margin: 0; font-size: 24px; letter-spacing: .2px; }
     .brand p { margin: 4px 0 0; color: var(--muted); }
+  .brand .logo { max-height: 48px; margin-bottom: 6px; }
     .meta { text-align: right; }
     .meta .pill { display: inline-block; padding: 6px 10px; font-size: 12px; color: #0369a1; background: var(--pill); border-radius: 999px; border: 1px dashed #bae6fd; }
     .meta .row { margin-top: 8px; font-size: 13px; color: var(--muted); }
@@ -38,9 +39,10 @@
     .right p { margin: 6px 0; font-size: 13px; color: var(--ink); }
     .right .muted { color: var(--muted); font-size: 12px; }
 
-    .signature { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-top: 1px solid var(--line); background: #fff; }
+  .signature { position: relative; display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-top: 1px solid var(--line); background: #fff; }
     .signature .box { width: 240px; height: 64px; border-bottom: 1px solid var(--line); }
     .signature .label { margin-top: 6px; font-size: 12px; color: var(--muted); }
+  .signature .stamp { position: absolute; right: 24px; bottom: 12px; width: 88px; height: 88px; opacity: 0.85; }
     .footer { padding: 12px 24px; border-top: 1px dashed var(--line); font-size: 12px; color: var(--muted); text-align: center; background: #fcfdff; }
   </style>
 </head>
@@ -48,6 +50,7 @@
   <div class="sheet">
     <div class="header">
       <div class="brand">
+        <img id="orgLogo" class="logo" src="" alt="Organization Logo" style="display:none" />
         <h1 id="orgName">Kaburlu Foundation</h1>
         <p id="orgAddress">[Address Line 1], [Address Line 2], [City], [State] [PIN], [Country]</p>
       </div>
@@ -87,6 +90,7 @@
         <div class="label">Signature & Seal</div>
       </div>
       <div class="label">This is a computer-generated receipt and does not require a physical signature.</div>
+      <img id="stampRound" class="stamp" src="" alt="Round Stamp" style="display:none" />
     </div>
 
     <div class="footer">

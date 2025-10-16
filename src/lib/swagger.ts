@@ -14,7 +14,7 @@ const swaggerDefinition = {
       description: 'Local server (root)'
     },
     {
-      url: 'https://app.hrcitodaynews.in/api/v1',
+      url: 'https://app.hrcitodaynews.in',
       description: 'Render server (root)'
     },
     {
@@ -45,7 +45,7 @@ const swaggerDefinition = {
   { name: 'Admin APIs', description: 'Admin management for memberships and KYC approvals (legacy grouping)' },
   { name: 'HRCI Membership - Member APIs', description: 'Member registration, pay-first orders, and payment confirmation (with discount support)' },
   { name: 'HRCI Membership - Admin APIs', description: 'Admin management for memberships, KYC, and discount issuance' },
-    { name: 'Donations', description: 'Donations events, orders, confirmation, and receipts' },
+  { name: 'Donations', description: 'Public donations: events, orders, confirmations, receipts, and share links' },
     { name: 'DEPRECATED APIs', description: 'Deprecated endpoints' }
   ],
   components: {
