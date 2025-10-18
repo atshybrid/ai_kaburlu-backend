@@ -41,6 +41,7 @@ const swaggerDefinition = {
     { name: 'Engagement - Comments' },
     { name: 'HRCI' },
     { name: 'HRCI Admin' },
+    { name: 'HRCI Cases', description: 'Case management APIs: create, list, summary, assignment, assignee lookup' },
   { name: 'Member APIs', description: 'Member registration and payment APIs (legacy grouping)' },
   { name: 'Admin APIs', description: 'Admin management for memberships and KYC approvals (legacy grouping)' },
   { name: 'HRCI Membership - Member APIs', description: 'Member registration, pay-first orders, and payment confirmation (with discount support)' },

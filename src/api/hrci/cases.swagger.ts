@@ -329,6 +329,10 @@
  * /hrci/cases/{id}/legal:
  *   patch:
  *     summary: Update legal status/suggestion
+ *     description: |
+ *       Allowed callers:
+ *       - Admin roles: HRCI_ADMIN, ADMIN, SUPERADMIN, SUPER_ADMIN
+ *       - Members holding LEGAL_SECRETARY designation (ACTIVE)
  *     tags: [HRCI Cases]
  *     security:
  *       - bearerAuth: []
@@ -345,6 +349,24 @@
  *     responses:
  *       200:
  *         description: Legal updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id: { type: string }
+ *                     caseNumber: { type: string }
+ *                     legalStatus: { type: string, enum: [NOT_REQUIRED, ADVISED, FILED, IN_COURT] }
+ *                     legalSuggestion: { type: string, nullable: true }
+ *                     updatedAt: { type: string, format: date-time }
+ *       403:
+ *         description: Forbidden (insufficient role/designation)
+ *       404:
+ *         description: Case not found
  *
  * /hrci/cases/{id}/timeline:
  *   get:
