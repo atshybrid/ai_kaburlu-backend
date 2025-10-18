@@ -44,6 +44,16 @@ const router = Router();
 // --- Discount helpers ---
 // Simplified discount policy: mobile-only percentage discounts
 
+// Normalize Indian mobile numbers (strip non-digits, drop leading +, 0, 91)
+function normalizeMobile(m: any): string {
+  const digits = String(m || '').replace(/\D+/g, '');
+  if (!digits) return '';
+  // Remove leading country codes or trunk prefixes
+  if (digits.startsWith('91') && digits.length > 10) return digits.slice(-10);
+  if (digits.startsWith('0') && digits.length > 10) return digits.slice(-10);
+  return digits.length > 10 ? digits.slice(-10) : digits;
+}
+
 function withinWindow(d: any): boolean {
   const now = new Date();
   if (d.activeFrom && new Date(d.activeFrom) > now) return false;
@@ -52,7 +62,10 @@ function withinWindow(d: any): boolean {
 }
 
 function matchesMobileOnly(d: any, mobileNumber: string): boolean {
-  return !d.mobileNumber || String(d.mobileNumber) === String(mobileNumber);
+  if (!d.mobileNumber) return true; // global discount
+  const a = normalizeMobile(d.mobileNumber);
+  const b = normalizeMobile(mobileNumber);
+  return !!(a && b && a === b);
 }
 
 function pickDiscount(d: any, baseAmount: number): { amount: number; type: 'AMOUNT' | 'PERCENT' | null; percent?: number | null; amountOff?: number | null } {
@@ -169,7 +182,10 @@ function validateGeoByLevel(level: string, body: any): { ok: boolean; error?: st
  */
 router.post('/orders', async (req, res) => {
   try {
-  const { cell, designationCode, level, mobileNumber, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId } = req.body || {};
+  const { cell, designationCode, level, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId } = req.body || {};
+    // Accept aliases for mobile for backward compatibility
+    const mobileNumberRaw = (req.body && (req.body.mobileNumber || req.body.mobile || req.body.phone)) || '';
+    const mobileNumber = String(mobileNumberRaw || '').trim();
     if (!cell || !designationCode || !level || !mobileNumber) return res.status(400).json({ success: false, error: 'cell, designationCode, level, mobileNumber required' });
     const geoCheck = validateGeoByLevel(level, req.body || {});
     if (!geoCheck.ok) return res.status(400).json({ success: false, error: 'MISSING_LOCATION', message: geoCheck.error });
@@ -179,12 +195,23 @@ router.post('/orders', async (req, res) => {
       zone: zone || undefined, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId
     } as any);
     const baseAmount = (avail as any).designation?.fee ?? 0;
-    // Find most recent active discount for this mobile (percentage-only policy)
+    // Find most recent active discount for this mobile (percentage/amount policy)
     let appliedDiscount: any | null = null;
+    const norm = normalizeMobile(mobileNumber);
+    const variants = Array.from(new Set([
+      String(mobileNumber),
+      norm,
+      norm ? '91' + norm : null,
+      norm ? '+91' + norm : null,
+      norm ? '0' + norm : null,
+    ].filter(Boolean))) as string[];
     const candidates = await (prisma as any).discount.findMany({
-      where: { mobileNumber: String(mobileNumber), status: 'ACTIVE' },
+      where: {
+        status: 'ACTIVE',
+        OR: variants.map(v => ({ mobileNumber: v }))
+      },
       orderBy: { createdAt: 'desc' },
-      take: 3,
+      take: 5,
     });
     for (const d of candidates) {
       if (withinWindow(d) && matchesMobileOnly(d, String(mobileNumber))) { appliedDiscount = d; break; }
@@ -212,7 +239,7 @@ router.post('/orders', async (req, res) => {
         }
       }
     });
-    // If final amount is zero, no payment gateway is needed. Redeem discount immediately.
+  // If final amount is zero, no payment gateway is needed. Redeem discount immediately.
     if (finalAmount === 0 && appliedDiscount) {
       try {
         const d = await (prisma as any).discount.findUnique({ where: { id: appliedDiscount.id } });
@@ -241,7 +268,7 @@ router.post('/orders', async (req, res) => {
         data: { meta: { ...(intent.meta || {}), provider: 'razorpay', providerOrderId } }
       });
     }
-  return res.json({ success: true, data: { order: { orderId: intent.id, amount: finalAmount, currency: 'INR', provider: razorpayEnabled() && finalAmount > 0 ? 'razorpay' : null, providerOrderId: providerOrderId || null, providerKeyId: razorpayEnabled() && finalAmount > 0 ? getRazorpayKeyId() : null, breakdown: { baseAmount, discountAmount, discountPercent, appliedType, finalAmount, note: appliedDiscount ? 'Mobile-based percentage discount applied' : null } } } });
+  return res.json({ success: true, data: { order: { orderId: intent.id, amount: finalAmount, priceAfterDiscount: finalAmount, baseAmount, currency: 'INR', provider: razorpayEnabled() && finalAmount > 0 ? 'razorpay' : null, providerOrderId: providerOrderId || null, providerKeyId: razorpayEnabled() && finalAmount > 0 ? getRazorpayKeyId() : null, breakdown: { baseAmount, discountAmount, discountPercent, appliedType, finalAmount, note: appliedDiscount ? (appliedType === 'PERCENT' ? 'Mobile-based percentage discount applied' : 'Mobile-based amount discount applied') : null } } } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'ORDER_FAILED', message: e?.message });
   }
