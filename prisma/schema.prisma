@@ -69,29 +69,29 @@ generator client {
 
 /// Organization settings for receipts (80G etc.)
 model OrgSetting {
-  id                        String   @id @default(cuid())
-  orgName                   String
-  addressLine1              String?
-  addressLine2              String?
-  city                      String?
-  state                     String?
-  pincode                   String?
-  country                   String?  @default("India")
-  pan                       String?
-  eightyGNumber             String?  // e.g., AAATK1234L/80G/05/2024-25
-  eightyGValidFrom          DateTime?
-  eightyGValidTo            DateTime?
-  email                     String?
-  phone                     String?
-  website                   String?
-  authorizedSignatoryName   String?
-  authorizedSignatoryTitle  String?
+  id                       String    @id @default(cuid())
+  orgName                  String
+  addressLine1             String?
+  addressLine2             String?
+  city                     String?
+  state                    String?
+  pincode                  String?
+  country                  String?   @default("India")
+  pan                      String?
+  eightyGNumber            String? // e.g., AAATK1234L/80G/05/2024-25
+  eightyGValidFrom         DateTime?
+  eightyGValidTo           DateTime?
+  email                    String?
+  phone                    String?
+  website                  String?
+  authorizedSignatoryName  String?
+  authorizedSignatoryTitle String?
   // New branding and docs
-  hrciLogoUrl               String?  // HRCI logo image (URL)
-  stampRoundUrl             String?  // Round stamp PNG URL
-  documents                 Json?    // Arbitrary documents metadata: { title, url, type }[]
-  createdAt                 DateTime @default(now())
-  updatedAt                 DateTime @updatedAt
+  hrciLogoUrl              String? // HRCI logo image (URL)
+  stampRoundUrl            String? // Round stamp PNG URL
+  documents                Json? // Arbitrary documents metadata: { title, url, type }[]
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   @@index([orgName])
 }
@@ -290,6 +290,7 @@ enum PaymentIntentStatus {
 enum PaymentIntentType {
   MEMBERSHIP
   DONATION
+  AD
 }
 
 model PaymentIntent {
@@ -312,84 +313,131 @@ model PaymentIntent {
   meta            Json?
   // Result linkage (after success)
   membershipId    String?
+  adId            String?
   // Optional expiry for the intent
   expiresAt       DateTime?
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 }
 
+/// Sponsor Ads for in-feed display
+enum AdStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  EXPIRED
+  ARCHIVED
+}
+
+enum AdMediaType {
+  IMAGE
+  GIF
+  VIDEO
+}
+
+model Ad {
+  id              String      @id @default(cuid())
+  title           String
+  status          AdStatus    @default(DRAFT)
+  mediaType       AdMediaType
+  mediaUrl        String
+  posterUrl       String?
+  clickUrl        String?
+  weight          Int         @default(1)
+  languageId      String?     @map("language")
+  language        Language?   @relation(fields: [languageId], references: [id], onDelete: SetNull)
+  // Optional geo targeting
+  latitude        Float?
+  longitude       Float?
+  radiusKm        Float? // if set with lat/lon, ad targets within this radius
+  state           String? // admin-friendly filters (case-insensitive compare in code)
+  district        String?
+  mandal          String?
+  pincode         String?
+  startAt         DateTime?
+  endAt           DateTime?
+  createdByUserId String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([status, startAt, endAt])
+  @@index([languageId, status])
+  @@index([latitude, longitude])
+}
+
 /// Donation campaigns/events
 model DonationEvent {
-  id               String   @id @default(cuid())
-  title            String
-  description      String?
-  coverImageUrl    String?
-  goalAmount       Int?
-  currency         String   @default("INR")
-  startAt          DateTime?
-  endAt            DateTime?
-  status           String   @default("DRAFT") // DRAFT | ACTIVE | PAUSED | ENDED
-  presets          Int[]
-  allowCustom      Boolean  @default(true)
-  collectedAmount  Int      @default(0)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  donations        Donation[]
-  shareLinks       DonationShareLink[]
-  images           DonationEventImage[]
+  id              String               @id @default(cuid())
+  title           String
+  description     String?
+  coverImageUrl   String?
+  goalAmount      Int?
+  currency        String               @default("INR")
+  startAt         DateTime?
+  endAt           DateTime?
+  status          String               @default("DRAFT") // DRAFT | ACTIVE | PAUSED | ENDED
+  presets         Int[]
+  allowCustom     Boolean              @default(true)
+  collectedAmount Int                  @default(0)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  donations       Donation[]
+  shareLinks      DonationShareLink[]
+  images          DonationEventImage[]
 
   @@index([status, startAt, endAt])
 }
 
 /// Individual donation records
 model Donation {
-  id               String         @id @default(cuid())
-  event            DonationEvent  @relation(fields: [eventId], references: [id])
-  eventId          String
-  amount           Int
-  currency         String         @default("INR")
-  donorName        String?
-  donorMobile      String?
-  donorEmail       String?
-  donorPan         String?
-  isAnonymous      Boolean        @default(false)
-  referrerUserId   String?
-  status           String         @default("PENDING") // PENDING | SUCCESS | FAILED | REFUND
-  providerOrderId  String?
+  id                String        @id @default(cuid())
+  event             DonationEvent @relation(fields: [eventId], references: [id])
+  eventId           String
+  amount            Int
+  currency          String        @default("INR")
+  donorName         String?
+  donorAddress      String?
+  donorMobile       String?
+  donorEmail        String?
+  donorPan          String?
+  isAnonymous       Boolean       @default(false)
+  referrerUserId    String?
+  status            String        @default("PENDING") // PENDING | SUCCESS | FAILED | REFUND
+  providerOrderId   String?
   providerPaymentId String?
-  paymentIntentId  String?
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  paymentIntentId   String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   @@index([eventId, status])
 }
 
 /// Member-share links for donation attribution
 model DonationShareLink {
-  id               String        @id @default(cuid())
-  event            DonationEvent @relation(fields: [eventId], references: [id])
-  eventId          String
-  createdByUserId  String
-  code             String        @unique
-  active           Boolean       @default(true)
-  clicksCount      Int           @default(0)
-  ordersCount      Int           @default(0)
-  successCount     Int           @default(0)
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  id              String        @id @default(cuid())
+  event           DonationEvent @relation(fields: [eventId], references: [id])
+  eventId         String
+  createdByUserId String
+  code            String        @unique
+  active          Boolean       @default(true)
+  clicksCount     Int           @default(0)
+  ordersCount     Int           @default(0)
+  successCount    Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 }
 
 /// Gallery images per donation event (for mobile sliders)
 model DonationEventImage {
-  id        String         @id @default(cuid())
-  event     DonationEvent  @relation(fields: [eventId], references: [id])
+  id        String        @id @default(cuid())
+  event     DonationEvent @relation(fields: [eventId], references: [id])
   eventId   String
   url       String
   caption   String?
-  order     Int            @default(0)
-  isActive  Boolean        @default(true)
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
+  order     Int           @default(0)
+  isActive  Boolean       @default(true)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
 
   @@index([eventId, isActive, order])
 }
@@ -646,6 +694,7 @@ model Language {
   users      User[]
   articles   Article[]
   devices    Device[]
+  ads        Ad[]
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 }
