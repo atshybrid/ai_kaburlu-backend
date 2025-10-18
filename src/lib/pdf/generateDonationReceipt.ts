@@ -28,12 +28,17 @@ export type DonationReceiptData = {
   amount: string; // formatted amount e.g., 10,000
   mode: string; // UPI / Bank Transfer / Cheque
   purpose: string;
+  qrDataUrl?: string; // data:image/png;base64,... for receipt verification
 };
 
-export async function generateDonationReceiptPdf(org: OrgPublic, data: DonationReceiptData): Promise<Buffer> {
-  // Lazy import puppeteer only when needed
-  const puppeteer = await import('puppeteer');
-  const templatePath = path.resolve(__dirname, '../../templates/donation_receipt.html');
+export function buildDonationReceiptHtml(org: OrgPublic, data: DonationReceiptData): string {
+  // Resolve template path for both dev (src) and prod (dist)
+  const distPath = path.resolve(__dirname, '../../templates/donation_receipt.html');
+  const srcPath = path.resolve(process.cwd(), 'src/templates/donation_receipt.html');
+  const templatePath = fs.existsSync(distPath) ? distPath : (fs.existsSync(srcPath) ? srcPath : distPath);
+  if (!fs.existsSync(templatePath)) {
+    throw new Error(`Receipt template not found at ${templatePath}`);
+  }
   let html = fs.readFileSync(templatePath, 'utf8');
 
   const fullAddress = [org.addressLine1, org.addressLine2, org.city, org.state && String(org.state).toUpperCase(), org.pincode, org.country]
@@ -58,21 +63,27 @@ export async function generateDonationReceiptPdf(org: OrgPublic, data: DonationR
   replace('tName', escapeHtml(org.orgName || ''));
   replace('tPan', escapeHtml(org.pan || ''));
   replace('t80g', escapeHtml(org.eightyGNumber || ''));
-  const vFrom = org.eightyGValidFrom ? formatDate(org.eightyGValidFrom) : '';
-  const vTo = org.eightyGValidTo ? formatDate(org.eightyGValidTo) : '';
-  replace('t80gValidity', vFrom || vTo ? `Valid from ${vFrom} to ${vTo}` : '');
-  replace('signName', escapeHtml(org.authorizedSignatoryName || ''));
-  replace('signTitle', escapeHtml(org.authorizedSignatoryTitle || ''));
 
   // Inject logo and stamp if provided (toggle display via setting src and removing display:none)
   if (org.hrciLogoUrl) {
-    html = html.replace('id="orgLogo" class="logo" src=""', `id="orgLogo" class="logo" src="${escapeAttr(org.hrciLogoUrl)}"`)
-               .replace('id="orgLogo" class="logo" src="', 'id="orgLogo" class="logo" style="" src="');
+    html = html.replace('id="orgLogo" class="logo" src=""', `id="orgLogo" class="logo" src="${escapeAttr(org.hrciLogoUrl)}"`);
   }
   if (org.stampRoundUrl) {
-    html = html.replace('id="stampRound" class="stamp" src=""', `id="stampRound" class="stamp" src="${escapeAttr(org.stampRoundUrl)}"`)
-               .replace('id="stampRound" class="stamp" src="', 'id="stampRound" class="stamp" style="" src="');
+    html = html.replace('id="stampRound" class="stamp" src=""', `id="stampRound" class="stamp" src="${escapeAttr(org.stampRoundUrl)}"`);
   }
+
+  // Inject QR code if provided
+  if (data.qrDataUrl) {
+    html = html.replace('id="qrCode" class="qr" src=""', `id="qrCode" class="qr" src="${escapeAttr(data.qrDataUrl)}"`);
+  }
+
+  return html;
+}
+
+export async function generateDonationReceiptPdf(org: OrgPublic, data: DonationReceiptData): Promise<Buffer> {
+  // Lazy import puppeteer only when needed
+  const puppeteer = await import('puppeteer');
+  let html = buildDonationReceiptHtml(org, data);
 
   const browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] });
   const page = await browser.newPage();

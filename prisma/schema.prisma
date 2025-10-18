@@ -34,6 +34,7 @@ model ShortNews {
   timestampUtc   DateTime?
   placeId        String?
   placeName      String?
+
   source         String?
   aiRemark       String?
   aiPlagiarism   Json?
@@ -1226,4 +1227,61 @@ model Discount {
   @@index([mobileNumber, status])
   @@index([designationCode, level])
   @@index([hrcStateId, hrcDistrictId, hrcMandalId])
+}
+
+// Online meetings (Jitsi-based)
+enum MeetingStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+  CANCELLED
+}
+
+model Meeting {
+  id              String         @id @default(cuid())
+  title           String
+  provider        String         @default("JITSI") // JITSI for now
+  domain          String         @default("meet.jit.si")
+  roomName        String
+  password        String?
+  // Scope (who can join): level + cell + optional geo
+  level           OrgLevel       // NATIONAL | ZONE | STATE | DISTRICT | MANDAL
+  cellId          String
+  includeChildren Boolean        @default(false) // if true, children of the level/cell can join
+  zone            HrcZone?
+  hrcCountryId    String?
+  hrcStateId      String?
+  hrcDistrictId   String?
+  hrcMandalId     String?
+  scheduledAt     DateTime?
+  endsAt          DateTime?
+  status          MeetingStatus  @default(SCHEDULED)
+  createdByUserId String
+  meta            Json?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  createdBy       User           @relation(fields: [createdByUserId], references: [id])
+  cell            Cell           @relation(fields: [cellId], references: [id])
+  participants    MeetingParticipant[]
+
+  @@index([level, cellId])
+  @@index([status, scheduledAt])
+}
+
+model MeetingParticipant {
+  id          String   @id @default(cuid())
+  meetingId   String
+  userId      String?
+  role        String   // HOST | GUEST
+  displayName String?
+  invitedAt   DateTime @default(now())
+  joinedAt    DateTime?
+  leftAt      DateTime?
+
+  meeting     Meeting  @relation(fields: [meetingId], references: [id])
+  user        User?    @relation(fields: [userId], references: [id])
+
+  @@index([meetingId])
+  @@index([userId])
 }

@@ -1,9 +1,34 @@
 import { Router } from 'express';
+import axios from 'axios';
 import { randomUUID } from 'crypto';
 import prisma from '../../lib/prisma';
 import { requireAuth, requireHrcAdmin } from '../middlewares/authz';
 
 const router = Router();
+
+// Normalize asset URLs (logo/stamp) to absolute so they can be used on HTML pages and PDFs
+function toAbsoluteAssetUrl(url: any, origin?: string): string {
+  const raw = (url ?? '').toString().trim();
+  if (!raw) return '';
+  if (/^(https?:)?\/\//i.test(raw) || /^data:/i.test(raw)) return raw; // already absolute or data URL
+  const r2Base = process.env.R2_PUBLIC_BASE_URL && String(process.env.R2_PUBLIC_BASE_URL).trim();
+  const base = (r2Base || origin || '').replace(/\/$/, '');
+  if (!base) return raw;
+  const path = raw.replace(/^\//, '');
+  return `${base}/${path}`;
+}
+
+function parseDataUrl(dataUrl: string): { mime: string; buffer: Buffer } | null {
+  const m = /^data:([^;]+);base64,(.*)$/i.exec(dataUrl);
+  if (!m) return null;
+  try {
+    const mime = m[1];
+    const buffer = Buffer.from(m[2], 'base64');
+    return { mime, buffer };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * @swagger
@@ -42,6 +67,120 @@ router.get('/public', async (_req, res) => {
     return res.json({ success: true, data: pub });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'GET_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /org/settings/branding:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Get branding assets (logo and stamp) with absolute URLs
+ *     responses:
+ *       200: { description: Branding URLs }
+ */
+router.get('/branding', async (req, res) => {
+  try {
+    const s = await (prisma as any).orgSetting.findFirst({ orderBy: { createdAt: 'desc' } });
+    if (!s) return res.json({ success: true, data: { hrciLogoUrl: '', stampRoundUrl: '', logoApi: '/org/settings/logo', stampApi: '/org/settings/stamp' } });
+    const origin = `${req.protocol}://${req.get('host')}`;
+    const logoAbs = toAbsoluteAssetUrl(s.hrciLogoUrl, origin);
+    const stampAbs = toAbsoluteAssetUrl(s.stampRoundUrl, origin);
+    return res.json({
+      success: true,
+      data: {
+        hrciLogoUrl: logoAbs,
+        stampRoundUrl: stampAbs,
+        // API endpoints (no redirect issues when consumed as <img src>)
+        logoApi: `${origin}/org/settings/logo`,
+        stampApi: `${origin}/org/settings/stamp`,
+      }
+    });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'BRANDING_GET_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /org/settings/logo:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Redirect to organization logo image (absolute URL)
+ *     responses:
+ *       302: { description: Redirects to logo }
+ *       404: { description: Not configured }
+ */
+router.get('/logo', async (req, res) => {
+  try {
+    const s = await (prisma as any).orgSetting.findFirst({ orderBy: { createdAt: 'desc' } });
+    if (!s?.hrciLogoUrl) return res.status(404).send('LOGO_NOT_CONFIGURED');
+    const origin = `${req.protocol}://${req.get('host')}`;
+    const url = toAbsoluteAssetUrl(s.hrciLogoUrl, origin);
+    if (/^data:/i.test(url)) {
+      const parsed = parseDataUrl(url);
+      if (!parsed) return res.status(400).send('INVALID_DATA_URL');
+      res.setHeader('Content-Type', parsed.mime || 'application/octet-stream');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      return res.send(parsed.buffer);
+    }
+    // Proxy the image to avoid redirects/CORS issues in Swagger/fetch
+    try {
+      const resp = await axios.get(url, { responseType: 'arraybuffer', maxRedirects: 5, validateStatus: () => true });
+      const status = resp.status;
+      if (status >= 200 && status < 400) {
+        const ctype = resp.headers['content-type'] || 'image/png';
+        res.setHeader('Content-Type', ctype);
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        return res.send(Buffer.from(resp.data));
+      }
+      return res.status(502).send('IMAGE_FETCH_FAILED');
+    } catch (e) {
+      return res.status(502).send('IMAGE_FETCH_FAILED');
+    }
+  } catch (e: any) {
+    return res.status(500).send('LOGO_RESOLVE_FAILED');
+  }
+});
+
+/**
+ * @swagger
+ * /org/settings/stamp:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Redirect to organization round stamp image (absolute URL)
+ *     responses:
+ *       302: { description: Redirects to stamp }
+ *       404: { description: Not configured }
+ */
+router.get('/stamp', async (req, res) => {
+  try {
+    const s = await (prisma as any).orgSetting.findFirst({ orderBy: { createdAt: 'desc' } });
+    if (!s?.stampRoundUrl) return res.status(404).send('STAMP_NOT_CONFIGURED');
+    const origin = `${req.protocol}://${req.get('host')}`;
+    const url = toAbsoluteAssetUrl(s.stampRoundUrl, origin);
+    if (/^data:/i.test(url)) {
+      const parsed = parseDataUrl(url);
+      if (!parsed) return res.status(400).send('INVALID_DATA_URL');
+      res.setHeader('Content-Type', parsed.mime || 'application/octet-stream');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      return res.send(parsed.buffer);
+    }
+    try {
+      const resp = await axios.get(url, { responseType: 'arraybuffer', maxRedirects: 5, validateStatus: () => true });
+      const status = resp.status;
+      if (status >= 200 && status < 400) {
+        const ctype = resp.headers['content-type'] || 'image/png';
+        res.setHeader('Content-Type', ctype);
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        return res.send(Buffer.from(resp.data));
+      }
+      return res.status(502).send('IMAGE_FETCH_FAILED');
+    } catch (e) {
+      return res.status(502).send('IMAGE_FETCH_FAILED');
+    }
+  } catch (e: any) {
+    return res.status(500).send('STAMP_RESOLVE_FAILED');
   }
 });
 

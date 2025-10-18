@@ -1,11 +1,30 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
-import { createRazorpayOrder, getRazorpayKeyId, razorpayEnabled, verifyRazorpaySignature } from '../../lib/razorpay';
-import { generateDonationReceiptPdf } from '../../lib/pdf/generateDonationReceipt';
+import { createRazorpayOrder, getRazorpayKeyId, razorpayEnabled, verifyRazorpaySignature, createRazorpayPaymentLink, getRazorpayPaymentLink, getRazorpayOrderPayments } from '../../lib/razorpay';
+import { generateDonationReceiptPdf, buildDonationReceiptHtml } from '../../lib/pdf/generateDonationReceipt';
 import { requireAuth, requireHrcAdmin } from '../middlewares/authz';
 import { randomUUID } from 'crypto';
+import multer from 'multer';
+import sharp from 'sharp';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { r2Client, R2_BUCKET, getPublicUrl } from '../../lib/r2';
+import QRCode from 'qrcode';
 
 const router = Router();
+
+// Ensure asset URLs are absolute so images load in browsers and Puppeteer
+function toAbsoluteAssetUrl(url: any, fallbackOrigin?: string): string {
+  const raw = (url ?? '').toString().trim();
+  if (!raw) return '';
+  if (/^(https?:)?\/\//i.test(raw) || /^data:/i.test(raw)) return raw; // absolute or data URL
+  const r2Base = process.env.R2_PUBLIC_BASE_URL && String(process.env.R2_PUBLIC_BASE_URL).trim();
+  const base = r2Base && r2Base.replace(/\/$/, '');
+  const origin = base || (fallbackOrigin ? fallbackOrigin.replace(/\/$/, '') : '');
+  if (!origin) return raw; // last resort: return as-is
+  const path = raw.replace(/^\//, '');
+  return `${origin}/${path}`;
+}
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: Number(process.env.MEDIA_MAX_IMAGE_MB || 15) * 1024 * 1024 } });
 
 function withinWindow(ev: any): boolean {
   const now = new Date();
@@ -354,6 +373,277 @@ router.post('/admin/events/:id/gallery', requireAuth, requireHrcAdmin, async (re
 
 /**
  * @swagger
+ * /donations/admin/events/{id}/gallery:
+ *   get:
+ *     tags: [Donations - Admin]
+ *     summary: List gallery images for an event (admin)
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Gallery list }
+ */
+router.get('/admin/events/:id/gallery', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const rows = await prisma.$queryRaw<any[]>`
+      SELECT id, "eventId", url, caption, "order", "isActive", "createdAt", "updatedAt"
+      FROM "DonationEventImage" WHERE "eventId" = ${id} ORDER BY "order" ASC, "createdAt" DESC
+    `;
+    return res.json({ success: true, count: rows.length, data: rows });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'GALLERY_LIST_FAILED', message: e?.message });
+  }
+});
+
+// =========================
+// Member Donation Payment Links (Razorpay) – external payment flow
+// =========================
+/**
+ * @swagger
+ * /donations/members/payment-links:
+ *   post:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Create a Razorpay Payment Link for a donation (member flow)
+ *     description: Creates a Donation and a PaymentIntent, then generates a Razorpay Payment Link for external payment.
+ *     security: [ { bearerAuth: [] } ]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [amount]
+ *             properties:
+ *               amount: { type: integer, description: 'Amount in INR rupees', example: 500 }
+ *               eventId: { type: string, nullable: true }
+ *               donorName: { type: string, nullable: true }
+ *               donorAddress: { type: string, nullable: true }
+ *               donorMobile: { type: string, nullable: true }
+ *               donorEmail: { type: string, nullable: true }
+ *               donorPan: { type: string, nullable: true }
+ *               isAnonymous: { type: boolean, default: false }
+ *               shareCode: { type: string, nullable: true }
+ *               callbackUrl: { type: string, nullable: true }
+ *     responses:
+ *       200:
+ *         description: Payment link created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     donationId: { type: string }
+ *                     intentId: { type: string }
+ *                     linkId: { type: string }
+ *                     shortUrl: { type: string }
+ */
+router.post('/members/payment-links', requireAuth, async (req: any, res) => {
+  try {
+    if (!razorpayEnabled()) return res.status(400).json({ success: false, error: 'RAZORPAY_DISABLED' });
+    const user = req.user;
+    const { eventId, amount, donorName, donorAddress, donorMobile, donorEmail, donorPan, isAnonymous, shareCode, callbackUrl } = req.body || {};
+    const amt = Number(amount);
+    if (!amt || amt <= 0) return res.status(400).json({ success: false, error: 'INVALID_AMOUNT' });
+    const panUpper = (donorPan ? String(donorPan) : '').trim().toUpperCase();
+    if (amt > 10000 && !panUpper) return res.status(400).json({ success: false, error: 'PAN_REQUIRED_FOR_HIGH_VALUE_DONATION' });
+    let ev: any = null;
+    if (eventId) {
+      ev = await (prisma as any).donationEvent.findUnique({ where: { id: String(eventId) } });
+      if (!ev) return res.status(404).json({ success: false, error: 'EVENT_NOT_FOUND' });
+      if (ev.status !== 'ACTIVE' || !withinWindow(ev)) return res.status(400).json({ success: false, error: 'EVENT_NOT_ACTIVE' });
+    }
+
+    // Optional: resolve share code
+    let referrerUserId: string | undefined;
+    if (shareCode) {
+      const link = await (prisma as any).donationShareLink.findUnique({ where: { code: String(shareCode) } }).catch(() => null);
+      if (link && link.active) {
+        referrerUserId = link.createdByUserId;
+        await (prisma as any).donationShareLink.update({ where: { id: link.id }, data: { ordersCount: { increment: 1 } } }).catch(() => null);
+      }
+    }
+
+    const intent = await prisma.paymentIntent.create({
+      data: ({
+        amount: amt,
+        currency: 'INR',
+        status: 'PENDING',
+        intentType: 'DONATION' as any,
+        cellCodeOrName: ev?.title || 'DONATION',
+        designationCode: 'DONATION',
+        level: 'NATIONAL' as any,
+        meta: { donorName, donorAddress, donorMobile, donorEmail, donorPan: panUpper || null, isAnonymous: !!isAnonymous, eventId: ev?.id || null, shareCode: shareCode || null, createdByUserId: user?.id || null },
+      } as any)
+    });
+
+    const donation = await (prisma as any).donation.create({
+      data: {
+        eventId: ev?.id || (await ensureDefaultEvent()),
+        amount: amt,
+        donorName: donorName || null,
+        donorAddress: donorAddress || null,
+        donorMobile: donorMobile || null,
+        donorEmail: donorEmail || null,
+        donorPan: panUpper || null,
+        isAnonymous: !!isAnonymous,
+        referrerUserId: referrerUserId || null,
+        status: 'PENDING',
+        paymentIntentId: intent.id,
+      }
+    });
+
+    const pl = await createRazorpayPaymentLink({
+      amountPaise: amt * 100,
+      currency: 'INR',
+      description: `Donation for ${ev?.title || 'General Donation'}`,
+      reference_id: donation.id,
+      customer: donorMobile || donorEmail ? { name: donorName, contact: donorMobile, email: donorEmail } : undefined,
+      callback_url: callbackUrl,
+      notes: { type: 'DONATION', donationId: donation.id, eventId: donation.eventId },
+    });
+
+    await prisma.paymentIntent.update({ where: { id: intent.id }, data: { meta: { ...(intent.meta as any || {}), provider: 'razorpay', payment_link_id: pl.id } } });
+    await (prisma as any).donation.update({ where: { id: donation.id }, data: { providerOrderId: pl.id } });
+
+    return res.json({ success: true, data: { donationId: donation.id, intentId: intent.id, linkId: pl.id, shortUrl: (pl as any).short_url || null } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'DONATION_PAYMENT_LINK_CREATE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/members/payment-links/{id}:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Get Razorpay Payment Link status (member flow)
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Payment link status }
+ */
+router.get('/members/payment-links/:id', requireAuth, async (req, res) => {
+  try {
+    if (!razorpayEnabled()) return res.status(400).json({ success: false, error: 'RAZORPAY_DISABLED' });
+    const linkId = String(req.params.id);
+    const pl = await getRazorpayPaymentLink(linkId);
+    return res.json({ success: true, data: pl });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'DONATION_PAYMENT_LINK_GET_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/members/payment-links/{id}:
+ *   delete:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Cancel Razorpay Payment Link (member flow)
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Payment link cancelled }
+ */
+
+/**
+ * @swagger
+ * /donations/admin/events/{id}/gallery/upload:
+ *   post:
+ *     tags: [Donations - Admin]
+ *     summary: Upload multiple images to event gallery (admin)
+ *     description: Accepts multipart/form-data with field name `images` (one or more files). Images are converted to WebP and stored in object storage.
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               images:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *               caption:
+ *                 type: string
+ *                 description: Optional caption to apply to all images (or send per-image in a future enhancement)
+ *               isActive:
+ *                 type: boolean
+ *                 default: true
+ *     responses:
+ *       200: { description: Images uploaded }
+ */
+router.post('/admin/events/:id/gallery/upload', requireAuth, requireHrcAdmin, upload.array('images'), async (req: any, res) => {
+  try {
+    const id = String(req.params.id);
+    const files: Express.Multer.File[] = req.files || [];
+    const { caption } = req.body || {};
+    // Parse boolean from multipart body
+    const isActiveRaw = (req.body?.isActive ?? 'true');
+    const isActive = String(isActiveRaw).toLowerCase() === 'true' || String(isActiveRaw) === '1';
+    if (!files.length) return res.status(400).json({ success: false, error: 'IMAGES_REQUIRED' });
+    if (!R2_BUCKET) return res.status(500).json({ success: false, error: 'STORAGE_NOT_CONFIGURED' });
+    const createdItems: any[] = [];
+    let skipped = 0;
+    let orderBase = 0;
+    const existingMaxOrder = await prisma.$queryRaw<any[]>`
+      SELECT COALESCE(MAX("order"), 0) as max_order FROM "DonationEventImage" WHERE "eventId" = ${id}
+    `;
+    orderBase = Number(existingMaxOrder?.[0]?.max_order || 0) + 1;
+    const d = new Date();
+    const datePath = `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const rand = Math.random().toString(36).slice(2, 8);
+      const originalName = (file.originalname || 'image').replace(/[^a-zA-Z0-9._-]/g, '_');
+      if (!((file.mimetype || '').startsWith('image/'))) { skipped++; continue; }
+      // Convert to webp
+      let buf = file.buffer;
+      let mime = 'image/webp';
+      try { buf = await sharp(file.buffer).webp({ quality: 80 }).toBuffer(); } catch { /* keep original buffer if sharp fails */ }
+      const safeName = originalName.replace(/\.[^.]+$/, '') + '.webp';
+      const key = `donations/${id}/${datePath}/${Date.now()}-${rand}-${safeName}`;
+      await r2Client.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: buf, ContentType: mime, CacheControl: 'public, max-age=31536000' }));
+      const url = getPublicUrl(key);
+      const itemId = randomUUID();
+      const rows = await prisma.$queryRaw<any[]>`
+        INSERT INTO "DonationEventImage" (id, "eventId", url, caption, "order", "isActive")
+        VALUES (${itemId}, ${id}, ${url}, ${caption || null}, ${orderBase + i}, ${isActive})
+        RETURNING id, "eventId", url, caption, "order", "isActive", "createdAt", "updatedAt"
+      `;
+      createdItems.push(rows[0]);
+    }
+    if (!createdItems.length) return res.status(400).json({ success: false, error: 'NO_VALID_IMAGES' });
+    return res.json({ success: true, count: createdItems.length, skipped, data: createdItems });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'GALLERY_MULTI_UPLOAD_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
  * /donations/admin/events/{id}/gallery/{imageId}:
  *   put:
  *     tags: [Donations - Admin]
@@ -544,6 +834,7 @@ router.get('/share-links/:code', async (req, res) => {
  *               eventId: { type: string, nullable: true }
  *               amount: { type: integer, description: 'Amount in INR rupees', example: 500 }
  *               donorName: { type: string, nullable: true }
+ *               donorAddress: { type: string, nullable: true }
  *               donorMobile: { type: string, nullable: true }
  *               donorEmail: { type: string, nullable: true }
  *               donorPan: { type: string, nullable: true }
@@ -552,6 +843,8 @@ router.get('/share-links/:code', async (req, res) => {
  *     responses:
  *       200:
  *         description: Order created
+ *       400:
+ *         description: Validation error (e.g., invalid amount or PAN missing for high value donation > 10,000 INR)
  *         content:
  *           application/json:
  *             schema:
@@ -573,9 +866,14 @@ router.get('/share-links/:code', async (req, res) => {
  */
 router.post('/orders', async (req, res) => {
   try {
-    const { eventId, amount, donorName, donorMobile, donorEmail, donorPan, isAnonymous, shareCode } = req.body || {};
+  const { eventId, amount, donorName, donorAddress, donorMobile, donorEmail, donorPan, isAnonymous, shareCode } = req.body || {};
     const amt = Number(amount);
     if (!amt || amt <= 0) return res.status(400).json({ success: false, error: 'INVALID_AMOUNT' });
+    // PAN normalization and presence check only for high-value
+    const panUpper = (donorPan ? String(donorPan) : '').trim().toUpperCase();
+    if (amt > 10000 && !panUpper) {
+      return res.status(400).json({ success: false, error: 'PAN_REQUIRED_FOR_HIGH_VALUE_DONATION', message: 'PAN is required for donations above 10,000 INR' });
+    }
     let ev: any = null;
     if (eventId) {
   ev = await (prisma as any).donationEvent.findUnique({ where: { id: String(eventId) } });
@@ -600,7 +898,11 @@ router.post('/orders', async (req, res) => {
         currency: 'INR',
         status: amt === 0 ? 'SUCCESS' : 'PENDING',
   intentType: 'DONATION' as any,
-        meta: { donorName, donorMobile, donorEmail, donorPan, isAnonymous: !!isAnonymous, eventId: ev?.id || null },
+        // Satisfy not-null PaymentIntent fields used by membership flows
+        cellCodeOrName: ev?.title || 'DONATION',
+        designationCode: 'DONATION',
+  level: 'NATIONAL' as any,
+  meta: { donorName, donorAddress, donorMobile, donorEmail, donorPan: panUpper || null, isAnonymous: !!isAnonymous, eventId: ev?.id || null, shareCode: shareCode || null },
       } as any)
     });
 
@@ -610,9 +912,10 @@ router.post('/orders', async (req, res) => {
         eventId: ev?.id || (await ensureDefaultEvent()),
         amount: amt,
         donorName: donorName || null,
-        donorMobile: donorMobile || null,
+  donorAddress: donorAddress || null,
+  donorMobile: donorMobile || null,
         donorEmail: donorEmail || null,
-        donorPan: donorPan || null,
+        donorPan: panUpper || null,
         isAnonymous: !!isAnonymous,
         referrerUserId: referrerUserId || null,
         status: amt === 0 ? 'SUCCESS' : 'PENDING',
@@ -720,10 +1023,92 @@ router.post('/confirm', async (req, res) => {
 
 /**
  * @swagger
+ * /donations/manual-verify:
+ *   post:
+ *     tags: [Donations]
+ *     summary: Manually verify a donation payment when webhook/confirm is missed
+ *     description: |
+ *       - Use either providerOrderId (Razorpay Order ID) or payment_link_id (Razorpay Payment Link ID) to verify status.
+ *       - On success, marks PaymentIntent and Donation as SUCCESS and updates event collectedAmount and share successCount.
+ *     security: [ { bearerAuth: [] } ]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               donationId: { type: string }
+ *               providerOrderId: { type: string, nullable: true, description: 'Razorpay Order ID' }
+ *               payment_link_id: { type: string, nullable: true, description: 'Razorpay Payment Link ID' }
+ *     responses:
+ *       200: { description: Verification result }
+ */
+router.post('/manual-verify', requireAuth, async (req, res) => {
+  try {
+    if (!razorpayEnabled()) return res.status(400).json({ success: false, error: 'RAZORPAY_DISABLED' });
+    const { donationId, providerOrderId, payment_link_id } = req.body || {};
+    if (!donationId) return res.status(400).json({ success: false, error: 'DONATION_ID_REQUIRED' });
+    const donation = await (prisma as any).donation.findUnique({ where: { id: String(donationId) } });
+    if (!donation) return res.status(404).json({ success: false, error: 'DONATION_NOT_FOUND' });
+    if (donation.status === 'SUCCESS') return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id } });
+    const intent = await prisma.paymentIntent.findUnique({ where: { id: String(donation.paymentIntentId) } });
+    if (!intent) return res.status(404).json({ success: false, error: 'INTENT_NOT_FOUND' });
+
+    let paid = false;
+    let providerPaymentId: string | undefined;
+
+    // Prefer explicit params; else use stored meta
+    const linkId = payment_link_id || (intent.meta as any)?.payment_link_id || null;
+    const orderId = providerOrderId || donation.providerOrderId || (intent.meta as any)?.providerOrderId || null;
+
+    if (linkId) {
+      const pl = await getRazorpayPaymentLink(String(linkId));
+      if (String(pl.status).toLowerCase() === 'paid') {
+        paid = true;
+      }
+    } else if (orderId) {
+      const resPay = await getRazorpayOrderPayments(String(orderId));
+      const successPayment = resPay.items.find(p => String(p.status).toLowerCase() === 'captured' || String(p.status).toLowerCase() === 'authorized');
+      if (successPayment) {
+        paid = true;
+        providerPaymentId = successPayment.id;
+      }
+    } else {
+      return res.status(400).json({ success: false, error: 'MISSING_VERIFICATION_REFERENCE' });
+    }
+
+    if (!paid) {
+      return res.json({ success: true, data: { status: 'PENDING', donationId: donation.id } });
+    }
+
+    // Mark success and apply side-effects
+    await prisma.paymentIntent.update({ where: { id: intent.id }, data: { status: 'SUCCESS' } });
+    await prisma.$transaction(async (tx) => {
+      const anyTx = tx as any;
+      const d = await anyTx.donation.update({ where: { id: donation.id }, data: { status: 'SUCCESS', providerPaymentId: providerPaymentId || donation.providerPaymentId } });
+      await anyTx.donationEvent.update({ where: { id: d.eventId }, data: { collectedAmount: { increment: d.amount } } }).catch(() => null);
+      // Share link success count
+      const meta: any = intent.meta || {};
+      const code = (meta && meta.shareCode) || null;
+      if (code) {
+        const link = await anyTx.donationShareLink.findUnique({ where: { code } }).catch(() => null);
+        if (link) await anyTx.donationShareLink.update({ where: { id: link.id }, data: { successCount: { increment: 1 } } });
+      }
+    });
+    return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'DONATION_MANUAL_VERIFY_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
  * /donations/receipt/{id}:
  *   get:
  *     tags: [Donations]
  *     summary: Get donation receipt PDF
+ *     description: Includes donor address (if provided). QR is embedded to verify this receipt URL.
  *     parameters:
  *       - in: path
  *         name: id
@@ -752,7 +1137,11 @@ router.get('/receipt/:id', async (req, res) => {
     const receiptDate = new Date(donation.createdAt).toLocaleDateString('en-IN');
     const donorName = donation.isAnonymous ? 'Anonymous Donor' : (donation.donorName || 'Donor');
 
-    const pdf = await generateDonationReceiptPdf({
+    // Force absolute origin for QR to production domain
+    const origin = 'https://app.hrcitodaynews.in'.replace(/\/$/, '');
+    const qrUrl = `${origin}/donations/receipt/${donation.id}/html`;
+  const qrDataUrl = await QRCode.toDataURL(qrUrl).catch(() => undefined);
+  const pdf = await generateDonationReceiptPdf({
       orgName: org.orgName,
       addressLine1: org.addressLine1,
       addressLine2: org.addressLine2,
@@ -766,17 +1155,19 @@ router.get('/receipt/:id', async (req, res) => {
       eightyGValidTo: org.eightyGValidTo,
       authorizedSignatoryName: org.authorizedSignatoryName,
       authorizedSignatoryTitle: org.authorizedSignatoryTitle,
-      hrciLogoUrl: org.hrciLogoUrl,
-      stampRoundUrl: org.stampRoundUrl,
+      // Always fetch branding via public endpoints under the app domain
+      hrciLogoUrl: `${origin}/org/settings/logo`,
+      stampRoundUrl: `${origin}/org/settings/stamp`,
     }, {
       receiptNo,
       receiptDate,
       donorName,
-      donorAddress: '',
+      donorAddress: donation.donorAddress || '',
       donorPan: donation.donorPan || undefined,
       amount: amountFmt,
       mode: donation.providerPaymentId ? 'UPI/Card/NetBanking' : 'Cash/Manual',
       purpose: 'Donation',
+      qrDataUrl,
     });
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -784,6 +1175,165 @@ router.get('/receipt/:id', async (req, res) => {
     return res.send(Buffer.from(pdf));
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'RECEIPT_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/receipt/{id}/html:
+ *   get:
+ *     tags: [Donations]
+ *     summary: View donation receipt as HTML (for QR verification)
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: HTML
+ *         content:
+ *           text/html:
+ *             schema:
+ *               type: string
+ *       400: { description: Receipt available only after payment success }
+ *       404: { description: Not found }
+ */
+router.get('/receipt/:id/html', async (req, res) => {
+  try {
+    const donation = await (prisma as any).donation.findUnique({ where: { id: String(req.params.id) } });
+    if (!donation) return res.status(404).send('Not Found');
+    if (donation.status !== 'SUCCESS') return res.status(400).send('Receipt available after success');
+    const org = await (prisma as any).orgSetting.findFirst({ orderBy: { updatedAt: 'desc' } });
+    if (!org) return res.status(400).send('Organization settings required');
+
+    const amountFmt = (donation.amount || 0).toLocaleString('en-IN');
+    const receiptNo = `DN-${donation.id.slice(-8).toUpperCase()}`;
+    const receiptDate = new Date(donation.createdAt).toLocaleDateString('en-IN');
+    const donorName = donation.isAnonymous ? 'Anonymous Donor' : (donation.donorName || 'Donor');
+    // Force absolute origin for QR to production domain
+    const origin = 'https://app.hrcitodaynews.in'.replace(/\/$/, '');
+    const qrUrl = `${origin}/donations/receipt/${donation.id}/html`;
+    const qrDataUrl = await QRCode.toDataURL(qrUrl).catch(() => undefined);
+    const html = buildDonationReceiptHtml({
+      orgName: org.orgName,
+      addressLine1: org.addressLine1,
+      addressLine2: org.addressLine2,
+      city: org.city,
+      state: org.state,
+      pincode: org.pincode,
+      country: org.country,
+      pan: org.pan,
+      eightyGNumber: org.eightyGNumber,
+      eightyGValidFrom: org.eightyGValidFrom,
+      eightyGValidTo: org.eightyGValidTo,
+      authorizedSignatoryName: org.authorizedSignatoryName,
+      authorizedSignatoryTitle: org.authorizedSignatoryTitle,
+      // Use base-relative endpoints so it works on any host
+      hrciLogoUrl: `/org/settings/logo`,
+      stampRoundUrl: `/org/settings/stamp`,
+    }, {
+      receiptNo,
+      receiptDate,
+      donorName,
+      donorAddress: donation.donorAddress || '',
+      donorPan: donation.donorPan || undefined,
+      amount: amountFmt,
+      mode: donation.providerPaymentId ? 'UPI/Card/NetBanking' : 'Cash/Manual',
+      purpose: 'Donation',
+      qrDataUrl,
+    });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(html);
+  } catch (e: any) {
+    return res.status(500).send('Failed to render receipt');
+  }
+});
+
+/**
+ * @swagger
+ * /donations/receipt/{id}/url:
+ *   get:
+ *     tags: [Donations]
+ *     summary: Generate donation receipt and return a public download URL
+ *     description: Generates the PDF, uploads to storage, and returns a public URL. PDF includes donor address (if provided) and a QR to verify this receipt URL.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Receipt URL
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     url: { type: string }
+ *       400: { description: Receipt available only after payment success }
+ *       404: { description: Donation not found }
+ */
+router.get('/receipt/:id/url', async (req, res) => {
+  try {
+    const donation = await (prisma as any).donation.findUnique({ where: { id: String(req.params.id) } });
+    if (!donation) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+    if (donation.status !== 'SUCCESS') return res.status(400).json({ success: false, error: 'RECEIPT_AVAILABLE_AFTER_SUCCESS' });
+    const org = await (prisma as any).orgSetting.findFirst({ orderBy: { updatedAt: 'desc' } });
+    if (!org) return res.status(400).json({ success: false, error: 'ORG_SETTINGS_REQUIRED', message: 'Set organization settings first from admin' });
+
+    const amountFmt = (donation.amount || 0).toLocaleString('en-IN');
+    const receiptNo = `DN-${donation.id.slice(-8).toUpperCase()}`;
+    const receiptDate = new Date(donation.createdAt).toLocaleDateString('en-IN');
+    const donorName = donation.isAnonymous ? 'Anonymous Donor' : (donation.donorName || 'Donor');
+
+  // Force absolute origin for QR to production domain
+  const origin = 'https://app.hrcitodaynews.in'.replace(/\/$/, '');
+  const qrUrl = `${origin}/donations/receipt/${donation.id}/html`;
+  const qrDataUrl = await QRCode.toDataURL(qrUrl).catch(() => undefined);
+  // Use the same app domain for branding endpoints
+  const appOrigin = 'https://app.hrcitodaynews.in'.replace(/\/$/, '');
+  const pdf = await generateDonationReceiptPdf({
+      orgName: org.orgName,
+      addressLine1: org.addressLine1,
+      addressLine2: org.addressLine2,
+      city: org.city,
+      state: org.state,
+      pincode: org.pincode,
+      country: org.country,
+      pan: org.pan,
+      eightyGNumber: org.eightyGNumber,
+      eightyGValidFrom: org.eightyGValidFrom,
+      eightyGValidTo: org.eightyGValidTo,
+      authorizedSignatoryName: org.authorizedSignatoryName,
+      authorizedSignatoryTitle: org.authorizedSignatoryTitle,
+  hrciLogoUrl: `${appOrigin}/org/settings/logo`,
+  stampRoundUrl: `${appOrigin}/org/settings/stamp`,
+    }, {
+      receiptNo,
+      receiptDate,
+      donorName,
+      donorAddress: donation.donorAddress || '',
+      donorPan: donation.donorPan || undefined,
+      amount: amountFmt,
+      mode: donation.providerPaymentId ? 'UPI/Card/NetBanking' : 'Cash/Manual',
+      purpose: 'Donation',
+      qrDataUrl,
+    });
+
+    if (!R2_BUCKET) return res.status(500).json({ success: false, error: 'STORAGE_NOT_CONFIGURED' });
+    const d = new Date(donation.createdAt);
+    const datePath = `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
+    const key = `donations/receipts/${datePath}/${receiptNo}.pdf`;
+    await r2Client.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: Buffer.from(pdf), ContentType: 'application/pdf', CacheControl: 'public, max-age=31536000' }));
+    const url = getPublicUrl(key);
+    return res.json({ success: true, data: { url } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'RECEIPT_URL_FAILED', message: e?.message });
   }
 });
 

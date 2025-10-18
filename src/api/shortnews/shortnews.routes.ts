@@ -475,6 +475,10 @@ router.get('/:id/jsonld', shortNewsController.getShortNewsJsonLd);
  * /shortnews/public:
  *   get:
  *     summary: Public feed - approved only (AI_APPROVED and DESK_APPROVED)
+ *     description: |
+ *       Returns a paginated list of approved short news items. When the ADS feature is enabled, the feed includes sponsor ads injected approximately every 2 items.
+ *       Each item has a discriminant field `kind` which is either `news` or `ad`.
+ *       Clients should handle both shapes. Ads are included only when their status is ACTIVE and within their configured date window.
  *     tags: [ShortNews]
  *     parameters:
  *       - in: query
@@ -511,7 +515,7 @@ router.get('/:id/jsonld', shortNewsController.getShortNewsJsonLd);
  *         description: Optional longitude. If both latitude and longitude are provided, results are filtered to within ~30 km radius.
  *     responses:
  *       200:
- *         description: Approved short news list enriched with categoryName, author (object), authorName (legacy), place/address, lat/lon, canonicalUrl, jsonLd, primary media, and optional isOwner/isRead flags if bearer token supplied.
+ *         description: Approved short news list enriched with categoryName, author (object), authorName (legacy), place/address, lat/lon, canonicalUrl, jsonLd, primary media, and optional isOwner/isRead flags if bearer token supplied. May include injected ads when feature flag ADS_ENABLED is true.
  *         content:
  *           application/json:
  *             schema:
@@ -527,24 +531,38 @@ router.get('/:id/jsonld', shortNewsController.getShortNewsJsonLd);
  *                 data:
  *                   type: array
  *                   items:
- *                     type: object
- *                     properties:
- *                       id: { type: string }
- *                       title: { type: string }
- *                       slug: { type: string }
- *                       authorName: { type: string, nullable: true }
- *                       author:
- *                         type: object
+ *                     oneOf:
+ *                       - type: object
+ *                         description: ShortNews item
  *                         properties:
- *                           id: { type: string, nullable: true }
- *                           fullName: { type: string, nullable: true }
- *                           profilePhotoUrl: { type: string, nullable: true }
- *                           email: { type: string, nullable: true }
- *                           mobileNumber: { type: string, nullable: true }
- *                           roleName: { type: string, nullable: true }
- *                           reporterType: { type: string, nullable: true }
- *                       isOwner: { type: boolean }
- *                       isRead: { type: boolean }
+ *                           kind: { type: string, enum: [news] }
+ *                           id: { type: string }
+ *                           title: { type: string }
+ *                           slug: { type: string }
+ *                           authorName: { type: string, nullable: true }
+ *                           author:
+ *                             type: object
+ *                             properties:
+ *                               id: { type: string, nullable: true }
+ *                               fullName: { type: string, nullable: true }
+ *                               profilePhotoUrl: { type: string, nullable: true }
+ *                               email: { type: string, nullable: true }
+ *                               mobileNumber: { type: string, nullable: true }
+ *                               roleName: { type: string, nullable: true }
+ *                               reporterType: { type: string, nullable: true }
+ *                           isOwner: { type: boolean }
+ *                           isRead: { type: boolean }
+ *                       - type: object
+ *                         description: Injected sponsor ad
+ *                         properties:
+ *                           kind: { type: string, enum: [ad] }
+ *                           id: { type: string }
+ *                           title: { type: string }
+ *                           mediaType: { type: string, enum: [IMAGE, GIF, VIDEO] }
+ *                           mediaUrl: { type: string }
+ *                           posterUrl: { type: string, nullable: true }
+ *                           clickUrl: { type: string, nullable: true }
+ *                           languageId: { type: string, nullable: true }
  */
 router.get('/public', shortNewsController.listApprovedShortNews);
 

@@ -109,6 +109,12 @@
  *         mime: { type: string, nullable: true }
  *         size: { type: integer, nullable: true }
  *         createdAt: { type: string, format: date-time }
+ *     HrcCaseAttachmentWithUrl:
+ *       allOf:
+ *         - $ref: '#/components/schemas/HrcCaseAttachmentItem'
+ *         - type: object
+ *           properties:
+ *             url: { type: string, description: 'Public URL to download/view the attachment' }
  *     HrcCaseCategory:
  *       type: object
  *       properties:
@@ -297,6 +303,9 @@
  * /hrci/cases/{id}/attachments:
  *   post:
  *     summary: Upload an attachment
+ *     description: |
+ *       - Accepts multipart/form-data with field name `file` or a `mediaId` to link an existing media.
+ *       - Allowed: case owner (creator or complainant), admin roles, LEGAL_SECRETARY, ADDI_GENERAL_SECRETARY.
  *     tags: [HRCI Cases]
  *     security:
  *       - bearerAuth: []
@@ -315,16 +324,44 @@
  *               file:
  *                 type: string
  *                 format: binary
+ *               mediaId:
+ *                 type: string
+ *                 description: Existing mediaId to link (if provided, file is optional)
  *     responses:
- *       201:
- *         description: Attachment added
+ *       200:
+ *         description: Attachment created
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
  *                 success: { type: boolean }
- *                 data: { $ref: '#/components/schemas/HrcCaseAttachmentItem' }
+ *                 data: { $ref: '#/components/schemas/HrcCaseAttachmentWithUrl' }
+ *   get:
+ *     summary: List attachments
+ *     description: |
+ *       List all attachments for the case with URL. Same access as upload.
+ *     tags: [HRCI Cases]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Attachments list
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 count: { type: integer }
+ *                 data:
+ *                   type: array
+ *                   items: { $ref: '#/components/schemas/HrcCaseAttachmentWithUrl' }
  *
  * /hrci/cases/{id}/legal:
  *   patch:
@@ -371,6 +408,8 @@
  * /hrci/cases/{id}/timeline:
  *   get:
  *     summary: Get case timeline/events
+ *     description: |
+ *       Returns case events (newest first). For ATTACHMENT_ADDED events, `data.url` is included to directly access the file.
  *     tags: [HRCI Cases]
  *     security:
  *       - bearerAuth: []

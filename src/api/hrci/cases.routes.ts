@@ -6,9 +6,200 @@ import { requireAuth, requireHrcAdmin } from '../middlewares/authz';
 import fs from 'fs';
 import path from 'path';
 import prisma from '../../lib/prisma';
+import sharp from 'sharp';
 const db: any = prisma;
 
 const router = Router();
+// =========================
+// HRCI Admin endpoints
+// =========================
+
+// GET /hrci/cases/admin/analytics - overview counts and trends
+/**
+ * @swagger
+ * /hrci/cases/admin/analytics:
+ *   get:
+ *     tags: [HRCI Cases]
+ *     summary: Admin analytics (counts and 7/30 day trends)
+ *     description: Overview for admins to monitor workload and trends.
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: query
+ *         name: days
+ *         schema: { type: integer, default: 7, minimum: 1, maximum: 60 }
+ *     responses:
+ *       200:
+ *         description: Analytics data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 total: { type: integer }
+ *                 countsByStatus: { type: object, additionalProperties: { type: integer } }
+ *                 countsByPriority: { type: object, additionalProperties: { type: integer } }
+ *                 trend:
+ *                   type: object
+ *                   properties:
+ *                     createdPerDay:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           date: { type: string }
+ *                           count: { type: integer }
+ */
+router.get('/admin/analytics', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(60, Number((req.query as any).days) || 7));
+    const allowedStatuses = ['NEW','TRIAGED','IN_PROGRESS','LEGAL_REVIEW','ACTION_TAKEN','RESOLVED','REJECTED','CLOSED','ESCALATED'];
+    const priorities = ['LOW','MEDIUM','HIGH','URGENT'];
+
+    const total = await (db as any).hrcCase.count();
+    const countsByStatus: Record<string, number> = {};
+    for (const s of allowedStatuses) countsByStatus[s] = await (db as any).hrcCase.count({ where: { status: s } });
+    const countsByPriority: Record<string, number> = {};
+    for (const p of priorities) countsByPriority[p] = await (db as any).hrcCase.count({ where: { priority: p } });
+
+    const now = new Date();
+    const from = new Date(now.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
+    const created = await (db as any).hrcCase.findMany({ where: { createdAt: { gte: from } }, select: { createdAt: true } });
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const createdPerDayMap: Record<string, number> = {};
+    for (let i = 0; i < days; i++) {
+      const d = new Date(now.getTime() - (days - 1 - i) * 24 * 60 * 60 * 1000);
+      createdPerDayMap[fmt(d)] = 0;
+    }
+    for (const r of created) {
+      const key = fmt(new Date(r.createdAt));
+      if (createdPerDayMap[key] != null) createdPerDayMap[key]++;
+    }
+    const createdPerDay = Object.entries(createdPerDayMap).map(([date, count]) => ({ date, count }));
+
+    return res.json({ success: true, total, countsByStatus, countsByPriority, trend: { createdPerDay } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'ADMIN_ANALYTICS_FAILED', message: e?.message });
+  }
+});
+
+// POST /hrci/cases/admin/bulk-update - update multiple cases at once
+/**
+ * @swagger
+ * /hrci/cases/admin/bulk-update:
+ *   post:
+ *     tags: [HRCI Cases]
+ *     summary: Admin bulk update cases (status/priority/assignee)
+ *     description: Update many cases in one call. Logs events for each change.
+ *     security: [ { bearerAuth: [] } ]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [caseIds, set]
+ *             properties:
+ *               caseIds:
+ *                 type: array
+ *                 items: { type: string }
+ *               set:
+ *                 type: object
+ *                 properties:
+ *                   status: { type: string, enum: [NEW, TRIAGED, IN_PROGRESS, LEGAL_REVIEW, ACTION_TAKEN, RESOLVED, REJECTED, CLOSED, ESCALATED] }
+ *                   priority: { type: string, enum: [LOW, MEDIUM, HIGH, URGENT] }
+ *                   assignedToUserId: { type: string }
+ *     responses:
+ *       200:
+ *         description: Per-case results
+ */
+router.post('/admin/bulk-update', requireAuth, requireHrcAdmin, async (req: any, res) => {
+  const actor: any = req.user;
+  const { caseIds, set } = (req.body || {}) as { caseIds?: string[]; set?: any };
+  if (!Array.isArray(caseIds) || caseIds.length === 0 || !set || typeof set !== 'object') {
+    return res.status(400).json({ success: false, error: 'INVALID_BODY' });
+  }
+  const allowedStatuses = ['NEW','TRIAGED','IN_PROGRESS','LEGAL_REVIEW','ACTION_TAKEN','RESOLVED','REJECTED','CLOSED','ESCALATED'];
+  const allowedPriorities = ['LOW','MEDIUM','HIGH','URGENT'];
+  const wantStatus = set.status ? String(set.status) : undefined;
+  const wantPriority = set.priority ? String(set.priority) : undefined;
+  const wantAssignee = set.assignedToUserId ? String(set.assignedToUserId) : undefined;
+  if (wantStatus && !allowedStatuses.includes(wantStatus)) return res.status(400).json({ success: false, error: 'INVALID_STATUS' });
+  if (wantPriority && !allowedPriorities.includes(wantPriority)) return res.status(400).json({ success: false, error: 'INVALID_PRIORITY' });
+
+  const results: any[] = [];
+  for (const id of caseIds) {
+    try {
+      const existing = await (db as any).hrcCase.findUnique({ where: { id: String(id) }, select: { id: true, caseNumber: true, status: true, priority: true, assignedToUserId: true } });
+      if (!existing) { results.push({ id, success: false, error: 'NOT_FOUND' }); continue; }
+      const data: any = {};
+      const events: any[] = [];
+      if (wantStatus && wantStatus !== existing.status) {
+        data.status = wantStatus;
+        events.push({ type: 'STATUS_CHANGED', data: { from: existing.status, to: wantStatus } });
+      }
+      if (wantPriority && wantPriority !== existing.priority) {
+        data.priority = wantPriority;
+        events.push({ type: 'PRIORITY_CHANGED', data: { from: existing.priority, to: wantPriority } });
+      }
+      if (wantAssignee && wantAssignee !== existing.assignedToUserId) {
+        data.assignedToUserId = wantAssignee;
+        events.push({ type: 'ASSIGNED', data: { toUserId: wantAssignee } });
+      }
+      if (Object.keys(data).length === 0) { results.push({ id, success: true, data: existing, noop: true }); continue; }
+      const updated = await (db as any).hrcCase.update({ where: { id: existing.id }, data, select: { id: true, caseNumber: true, status: true, priority: true, assignedToUserId: true } });
+      for (const ev of events) {
+        try { await (db as any).hrcCaseEvent.create({ data: { caseId: existing.id, type: ev.type, data: ev.data, actorUserId: actor?.id || null } }); } catch {}
+      }
+      results.push({ id, success: true, data: updated });
+    } catch (e: any) {
+      results.push({ id, success: false, error: e?.message || 'UPDATE_FAILED' });
+    }
+  }
+  return res.json({ success: true, results });
+});
+
+// POST /hrci/cases/admin/escalate - mark a case as ESCALATED with reason
+/**
+ * @swagger
+ * /hrci/cases/admin/escalate:
+ *   post:
+ *     tags: [HRCI Cases]
+ *     summary: Escalate a case (admin)
+ *     description: Sets status to ESCALATED and logs an ESCALATED event with reason and target level.
+ *     security: [ { bearerAuth: [] } ]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [caseId, reason]
+ *             properties:
+ *               caseId: { type: string }
+ *               toLevel: { type: string, enum: [DISTRICT, STATE, NATIONAL], nullable: true }
+ *               reason: { type: string }
+ *     responses:
+ *       200:
+ *         description: Case escalated
+ */
+router.post('/admin/escalate', requireAuth, requireHrcAdmin, async (req: any, res) => {
+  try {
+    const actor: any = req.user;
+    const { caseId, toLevel, reason } = (req.body || {}) as { caseId?: string; toLevel?: string; reason?: string };
+    if (!caseId || !reason) return res.status(400).json({ success: false, error: 'INVALID_BODY' });
+    const existing = await (db as any).hrcCase.findUnique({ where: { id: String(caseId) }, select: { id: true, status: true, caseNumber: true } });
+    if (!existing) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+    const updated = await (db as any).hrcCase.update({ where: { id: existing.id }, data: { status: 'ESCALATED' }, select: { id: true, caseNumber: true, status: true } });
+    try {
+      await (db as any).hrcCaseEvent.create({ data: { caseId: existing.id, type: 'ESCALATED', data: { from: existing.status, to: 'ESCALATED', toLevel: toLevel || null, reason }, actorUserId: actor?.id || null } });
+    } catch {}
+    return res.json({ success: true, data: updated });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'ESCALATE_FAILED', message: e?.message });
+  }
+});
+
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: Number(process.env.MEDIA_MAX_IMAGE_MB || 15) * 1024 * 1024 } });
 
 /**
@@ -756,8 +947,9 @@ router.get('/assignees/legal-secretaries', requireAuth, async (req, res) => {
  *     tags: [HRCI Cases]
  *     summary: Get counts of cases by buckets (open, pending, closed, rejected)
  *     description: |-
- *       Buckets are computed as:
- *       - pending = NEW + TRIAGED
+ *       - Accepts multipart/form-data with field name `file` or a `mediaId` to link existing media.
+ *       - Images are automatically converted to WebP for consistent storage and optimization.
+ *       - Stores the file in object storage and links it to the case.
  *       - closed = RESOLVED + CLOSED
  *       - rejected = REJECTED
  *       - open = IN_PROGRESS + LEGAL_REVIEW + ACTION_TAKEN + ESCALATED
@@ -1132,7 +1324,27 @@ router.get('/:id/timeline', requireAuth, async (req, res) => {
       orderBy: { createdAt: 'desc' },
       select: { id: true, type: true, data: true, actorUserId: true, createdAt: true }
     });
-    return res.json({ success: true, count: events.length, data: events });
+    // Enrich ATTACHMENT_ADDED events with media URL
+    const mediaIds: string[] = [];
+    for (const ev of events) {
+      if (String(ev.type) === 'ATTACHMENT_ADDED') {
+        const mid = (ev as any).data?.mediaId;
+        if (mid) mediaIds.push(String(mid));
+      }
+    }
+    let mediaMap: Record<string, string> = {};
+    if (mediaIds.length > 0) {
+      const uniq = Array.from(new Set(mediaIds));
+      const medias = await (db as any).media.findMany({ where: { id: { in: uniq } }, select: { id: true, url: true } });
+      mediaMap = Object.fromEntries(medias.map((m: any) => [m.id, m.url]));
+    }
+    const enriched = events.map((ev: any) => {
+      if (String(ev.type) === 'ATTACHMENT_ADDED' && ev?.data?.mediaId) {
+        return { ...ev, data: { ...ev.data, url: mediaMap[String(ev.data.mediaId)] || null } };
+      }
+      return ev;
+    });
+    return res.json({ success: true, count: enriched.length, data: enriched });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'CASE_TIMELINE_FAILED', message: e?.message });
   }
@@ -1402,8 +1614,9 @@ router.post('/:id/comments', requireAuth, async (_req, res) => {
  *     tags: [HRCI Cases]
  *     summary: Upload and attach a file to a case
  *     description: |
- *       - Accepts multipart/form-data with field name `file`.
+ *       - Accepts multipart/form-data with field name `file` or a `mediaId` to link existing media.
  *       - Stores the file in object storage and links it to the case.
+ *       - Allowed roles/designations: case owner (creator or complainant), admin roles (HRCI_ADMIN/ADMIN/SUPERADMIN/SUPER_ADMIN), LEGAL_SECRETARY, ADDI_GENERAL_SECRETARY.
  *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: path
@@ -1457,8 +1670,20 @@ router.post('/:id/attachments', requireAuth, upload.single('file'), async (req: 
     const roleName = actor?.role?.name?.toString()?.toLowerCase?.();
     const isOwner = actor?.id && (existing.createdByUserId === actor.id || existing.complainantUserId === actor.id);
     const isAdmin = roleName === 'admin' || roleName === 'superadmin' || roleName === 'hrci_admin';
+    // Allow LEGAL_SECRETARY or ADDI_GENERAL_SECRETARY designation holders as well
+    let hasAllowedDesignation = false;
     if (!isOwner && !isAdmin) {
-      return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Only case owner or admin can attach files' });
+      try {
+        const mems: any[] = await (db as any).membership.findMany({
+          where: { userId: actor?.id, status: 'ACTIVE' },
+          select: { designation: { select: { code: true } } }
+        });
+        const allowedDesigs = new Set(['LEGAL_SECRETARY','ADDI_GENERAL_SECRETARY']);
+        hasAllowedDesignation = mems.some((m: any) => allowedDesigs.has(String(m?.designation?.code || '').toUpperCase()));
+      } catch {}
+    }
+    if (!isOwner && !isAdmin && !hasAllowedDesignation) {
+      return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Only case owner, admin, LEGAL_SECRETARY, or ADDI_GENERAL_SECRETARY can attach files' });
     }
 
     // Support two modes: (1) multipart file upload, (2) link an existing mediaId
@@ -1475,19 +1700,39 @@ router.post('/:id/attachments', requireAuth, upload.single('file'), async (req: 
       const d = new Date();
       const datePath = `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
       const rand = Math.random().toString(36).slice(2, 8);
-      safeName = (file.originalname || 'attachment.bin').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const originalName = (file.originalname || 'attachment.bin').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const isImage = (file.mimetype || '').toLowerCase().startsWith('image/');
+      let bodyBuffer: Buffer = file.buffer;
+      if (isImage) {
+        // Convert to WebP for consistent handling
+        try {
+          bodyBuffer = await sharp(file.buffer).webp({ quality: 80 }).toBuffer();
+          mime = 'image/webp';
+          // Replace extension with .webp
+          const base = originalName.replace(/\.[^.]+$/, '');
+          safeName = `${base}.webp`;
+        } catch (convErr) {
+          // Fallback to original if conversion fails
+          mime = file.mimetype || 'application/octet-stream';
+          safeName = originalName;
+          bodyBuffer = file.buffer;
+        }
+      } else {
+        // Non-images are stored as-is
+        mime = file.mimetype || 'application/octet-stream';
+        safeName = originalName;
+      }
       const key = `cases/${id}/${datePath}/${Date.now()}-${rand}-${safeName}`;
 
       await r2Client.send(new PutObjectCommand({
         Bucket: R2_BUCKET,
         Key: key,
-        Body: file.buffer,
-        ContentType: file.mimetype || 'application/octet-stream',
+        Body: bodyBuffer,
+        ContentType: mime || 'application/octet-stream',
         CacheControl: 'private, max-age=31536000',
       }));
       const url = getPublicUrl(key);
-      mime = file.mimetype || 'application/octet-stream';
-      size = Number(file.size || 0);
+      size = Number(bodyBuffer.length || file.size || 0);
       // Create Media row
       media = await (db as any).media.create({
         data: {
@@ -1534,6 +1779,87 @@ router.post('/:id/attachments', requireAuth, upload.single('file'), async (req: 
     return res.json({ success: true, data: { ...attachment, url: (media as any).url } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'ATTACHMENT_UPLOAD_FAILED', message: e?.message });
+  }
+});
+
+// GET /hrci/cases/:id/attachments - list attachments (same access as upload)
+/**
+ * @swagger
+ * /hrci/cases/{id}/attachments:
+ *   get:
+ *     tags: [HRCI Cases]
+ *     summary: List all attachments for a case
+ *     description: |
+ *       Returns all attachments with media URL.
+ *       Allowed roles/designations: case owner (creator or complainant), admin roles (HRCI_ADMIN/ADMIN/SUPERADMIN/SUPER_ADMIN), LEGAL_SECRETARY, ADDI_GENERAL_SECRETARY.
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Attachments list
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 count: { type: integer }
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id: { type: string }
+ *                       caseId: { type: string }
+ *                       mediaId: { type: string }
+ *                       fileName: { type: string }
+ *                       mime: { type: string }
+ *                       size: { type: integer }
+ *                       createdAt: { type: string, format: date-time }
+ *                       url: { type: string }
+ *       403: { description: Forbidden }
+ *       404: { description: Case not found }
+ */
+router.get('/:id/attachments', requireAuth, async (req: any, res) => {
+  try {
+    const actor: any = req.user;
+    const id = String(req.params.id);
+    const existing = await (db as any).hrcCase.findUnique({ where: { id }, select: { id: true, createdByUserId: true, complainantUserId: true } });
+    if (!existing) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+    const roleName = actor?.role?.name?.toString()?.toLowerCase?.();
+    const isOwner = actor?.id && (existing.createdByUserId === actor.id || existing.complainantUserId === actor.id);
+    const isAdmin = roleName === 'admin' || roleName === 'superadmin' || roleName === 'hrci_admin';
+    let hasAllowedDesignation = false;
+    if (!isOwner && !isAdmin) {
+      try {
+        const mems: any[] = await (db as any).membership.findMany({
+          where: { userId: actor?.id, status: 'ACTIVE' },
+          select: { designation: { select: { code: true } } }
+        });
+        const allowedDesigs = new Set(['LEGAL_SECRETARY','ADDI_GENERAL_SECRETARY']);
+        hasAllowedDesignation = mems.some((m: any) => allowedDesigs.has(String(m?.designation?.code || '').toUpperCase()));
+      } catch {}
+    }
+    if (!isOwner && !isAdmin && !hasAllowedDesignation) {
+      return res.status(403).json({ success: false, error: 'FORBIDDEN' });
+    }
+
+    const rows = await (db as any).hrcCaseAttachment.findMany({
+      where: { caseId: id },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, caseId: true, mediaId: true, fileName: true, mime: true, size: true, createdAt: true }
+    });
+    const mids = Array.from(new Set(rows.map((r: any) => String(r.mediaId))));
+    const medias = await (db as any).media.findMany({ where: { id: { in: mids } }, select: { id: true, url: true } });
+    const urlMap = Object.fromEntries(medias.map((m: any) => [m.id, m.url]));
+    const data = rows.map((r: any) => ({ ...r, url: urlMap[r.mediaId] || null }));
+    return res.json({ success: true, count: data.length, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'CASE_ATTACHMENTS_LIST_FAILED', message: e?.message });
   }
 });
 

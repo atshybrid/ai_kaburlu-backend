@@ -21,6 +21,7 @@
     .brand h1 { margin: 0; font-size: 24px; letter-spacing: .2px; }
     .brand p { margin: 4px 0 0; color: var(--muted); }
   .brand .logo { max-height: 48px; margin-bottom: 6px; }
+  .brand .logo[src=""] { display: none; }
     .meta { text-align: right; }
     .meta .pill { display: inline-block; padding: 6px 10px; font-size: 12px; color: #0369a1; background: var(--pill); border-radius: 999px; border: 1px dashed #bae6fd; }
     .meta .row { margin-top: 8px; font-size: 13px; color: var(--muted); }
@@ -38,11 +39,13 @@
     .right h3 { margin: 0 0 8px; font-size: 16px; }
     .right p { margin: 6px 0; font-size: 13px; color: var(--ink); }
     .right .muted { color: var(--muted); font-size: 12px; }
+  .right .qrwrap { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
+  .right .qr { width: 96px; height: 96px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  .right .qr[src=""] { display: none; }
 
-  .signature { position: relative; display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-top: 1px solid var(--line); background: #fff; }
-    .signature .box { width: 240px; height: 64px; border-bottom: 1px solid var(--line); }
-    .signature .label { margin-top: 6px; font-size: 12px; color: var(--muted); }
-  .signature .stamp { position: absolute; right: 24px; bottom: 12px; width: 88px; height: 88px; opacity: 0.85; }
+  .signature { position: relative; display: block; min-height: 110px; padding: 16px 24px; border-top: 1px solid var(--line); background: #fff; }
+  .signature .stamp { position: absolute; right: 24px; top: 12px; width: 88px; height: 88px; opacity: 0.9; }
+  .signature .stamp[src=""] { display: none; }
     .footer { padding: 12px 24px; border-top: 1px dashed var(--line); font-size: 12px; color: var(--muted); text-align: center; background: #fcfdff; }
   </style>
 </head>
@@ -50,7 +53,7 @@
   <div class="sheet">
     <div class="header">
       <div class="brand">
-        <img id="orgLogo" class="logo" src="" alt="Organization Logo" style="display:none" />
+  <img id="orgLogo" class="logo" src="" alt="Organization Logo" />
         <h1 id="orgName">Kaburlu Foundation</h1>
         <p id="orgAddress">[Address Line 1], [Address Line 2], [City], [State] [PIN], [Country]</p>
       </div>
@@ -78,23 +81,21 @@
         <h3>Trust Details</h3>
         <p><strong>Trust Name:</strong> <span id="tName">Kaburlu Foundation</span></p>
         <p><strong>PAN:</strong> <span id="tPan">AAATK1234L</span></p>
-        <p><strong>80G Registration:</strong> <span id="t80g">AAATK/80G/2024-25</span></p>
-        <p class="muted" id="t80gValidity">Valid from [dd/mm/yyyy] to [dd/mm/yyyy]</p>
-        <p><strong>Authorized Signatory:</strong> <span id="signName">[Name]</span> <span class="muted" id="signTitle">[Title]</span></p>
+  <p><strong>80G Registration:</strong> <span id="t80g">AAATK/80G/2024-25</span></p>
+        <div class="qrwrap">
+          <img id="qrCode" class="qr" src="" alt="Scan to verify" />
+          <div class="muted">Scan to verify receipt</div>
+        </div>
       </div>
     </div>
 
     <div class="signature">
-      <div>
-        <div class="box"></div>
-        <div class="label">Signature & Seal</div>
-      </div>
-      <div class="label">This is a computer-generated receipt and does not require a physical signature.</div>
-      <img id="stampRound" class="stamp" src="" alt="Round Stamp" style="display:none" />
+  <img id="stampRound" class="stamp" src="" alt="Round Stamp" />
     </div>
 
     <div class="footer">
-      Donation eligible for deduction under Section 80G of the Income-tax Act, 1961 (if trust is registered and valid at the time of receipt).
+      <div>This is a computer-generated receipt and does not require a physical signature.</div>
+      <div>Donation eligible for deduction under Section 80G of the Income-tax Act, 1961 (if trust is registered and valid at the time of receipt).</div>
     </div>
   </div>
 </body>

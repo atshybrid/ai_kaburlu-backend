@@ -889,7 +889,7 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
       });
       readSet = new Set(readRows.map(r => r.shortNewsId));
     }
-    const data = slice.map((i: any) => {
+  const dataNews = slice.map((i: any) => {
       const l = i.language ? langMap.get(i.language as any) : undefined;
   const categoryName = i.categoryId ? (catNameByCatLang.get(`${i.categoryId}:${i.language}`) ?? catNameById.get(i.categoryId) ?? null) : null;
   const author = i.author as any;
@@ -957,7 +957,122 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
         source: i.source ?? null,
       } as any;
     });
-    return res.json({ success: true, pageInfo: { limit, nextCursor, hasMore: filtered.length > limit }, data });
+    // Inject sponsor ads every 5 items (if any ACTIVE ads)
+    async function getActiveAds(langId?: string) {
+      const now = new Date();
+      // Include ACTIVE ads that are in-window, and when a feed language is known,
+      // include both language-matched and global (languageId = null).
+      const timeWindow = {
+        OR: [
+          { startAt: null, endAt: null },
+          { startAt: { lte: now }, endAt: null },
+          { startAt: null, endAt: { gte: now } },
+          { startAt: { lte: now }, endAt: { gte: now } },
+        ],
+      };
+      const where: any = { status: 'ACTIVE' as any, AND: [timeWindow] };
+      if (langId) {
+        where.AND.push({ OR: [ { languageId: langId }, { languageId: null } ] });
+      }
+      const ads = await (prisma as any).ad.findMany({ where, orderBy: { updatedAt: 'desc' }, take: 100 });
+      return ads;
+    }
+    function pickWeighted(ads: any[], lastId?: string) {
+      const pool = lastId ? ads.filter(a => a.id !== lastId) : ads;
+      const total = pool.reduce((s, a) => s + Math.max(1, Number(a.weight || 1)), 0);
+      if (total <= 0) return null;
+      let r = Math.random() * total;
+      for (const a of pool) {
+        r -= Math.max(1, Number(a.weight || 1));
+        if (r <= 0) return a;
+      }
+      return pool[pool.length - 1] || null;
+    }
+    const adsEnabled = String(process.env.ADS_ENABLED || 'true').toLowerCase() !== 'false';
+  const langForAds = (slice[0] as any)?.language || null;
+  // Extract optional user location from query for geo-targeting
+  const qLat = req.query.latitude !== undefined ? Number(req.query.latitude) : undefined;
+  const qLon = req.query.longitude !== undefined ? Number(req.query.longitude) : undefined;
+  const haveUserLoc = Number.isFinite(qLat as number) && Number.isFinite(qLon as number);
+    const data: any[] = [];
+    let adsPool: any[] = [];
+    if (adsEnabled) {
+  const baseAds = await getActiveAds(langForAds || undefined);
+      // Geo filter: if user location provided, keep ads that either have no geo or include user within radius or match admin filters
+      if (haveUserLoc) {
+        const toRad = (deg: number) => (deg * Math.PI) / 180;
+        const R = 6371; // Earth radius in km
+        const distKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+          const dLat = toRad(lat2 - lat1);
+          const dLon = toRad(lon2 - lon1);
+          const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          return R * c;
+        };
+        const lat1 = Number(qLat);
+        const lon1 = Number(qLon);
+        adsPool = baseAds.filter((ad: any) => {
+          // If lat/lon + radius set, apply radius
+          if (ad.latitude != null && ad.longitude != null && ad.radiusKm != null) {
+            const d = distKm(lat1, lon1, Number(ad.latitude), Number(ad.longitude));
+            if (d <= Number(ad.radiusKm)) return true;
+            // fallthrough to check admin filters; if not matched, exclude
+          }
+          // If any of the admin text filters are set, we don't know user's admin area — include these as broad unless we implement reverse geocoding.
+          // For now, include them as well so admins can target by state/district when client passes area names in future.
+          if (ad.state || ad.district || ad.mandal || ad.pincode) {
+            return true; // permissive until client sends admin area for strict match
+          }
+          // No geo constraints
+          return true;
+        });
+      } else {
+        // No user location — include global ads and admin-filtered ads; skip only strict radius-targeted ads (radiusKm > 0) without admin filters
+        adsPool = baseAds.filter((ad: any) => {
+          const hasLat = ad.latitude !== null && ad.latitude !== undefined;
+          const hasLon = ad.longitude !== null && ad.longitude !== undefined;
+          const hasRadiusVal = ad.radiusKm !== null && ad.radiusKm !== undefined;
+          const radiusNum = hasRadiusVal ? Number(ad.radiusKm) : null;
+          const hasAdminFilters = !!(ad.state || ad.district || ad.mandal || ad.pincode);
+          const hasStrictRadius = hasLat && hasLon && radiusNum !== null && Number(radiusNum) > 0;
+          if (hasStrictRadius && !hasAdminFilters) return false; // strict radius without user location => skip
+          return true; // include everything else (global, admin-filtered, or radius<=0)
+        });
+      }
+    }
+    let lastAdId: string | undefined;
+    for (let i = 0; i < dataNews.length; i++) {
+      data.push({ kind: 'news', data: dataNews[i] });
+  if (adsEnabled && (i + 1) % 2 === 0 && adsPool.length) {
+        const ad = pickWeighted(adsPool, lastAdId);
+        if (ad) {
+          lastAdId = ad.id;
+          data.push({ kind: 'ad', data: {
+            id: ad.id,
+            title: ad.title,
+            mediaType: ad.mediaType,
+            mediaUrl: ad.mediaUrl,
+            posterUrl: ad.posterUrl || null,
+            clickUrl: ad.clickUrl || null,
+            weight: ad.weight || 1,
+            languageId: ad.languageId || null,
+          } });
+        }
+      }
+    }
+    // Fallback: if no user location provided and ads pool is empty, but base ads existed, allow radius-targeted ads too
+    // Note: This affects future pages only; to reflect immediately would require rebuilding data. Instead, we expose debug info.
+    const debugAds = String(req.query.debugAds || '').toLowerCase() === '1';
+    const resp: any = { success: true, pageInfo: { limit, nextCursor, hasMore: filtered.length > limit }, data };
+    if (debugAds && adsEnabled) {
+      resp.adsDebug = {
+        haveUserLoc,
+        langForAds,
+        baseAdsTried: true,
+        adsPoolCount: adsPool.length,
+      };
+    }
+    return res.json(resp);
   } catch (e) {
     return res.status(500).json({ success: false, error: 'Failed to fetch approved short news' });
   }

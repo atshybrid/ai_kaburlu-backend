@@ -1,5 +1,6 @@
 // src/app.ts
 import express from 'express';
+import path from 'path';
 import helmet from 'helmet';
 import compression from 'compression';
 import passport from 'passport';
@@ -49,6 +50,10 @@ import membershipsKycRoutes from './api/memberships/kyc.routes';
 import idcardRoutes from './api/hrci/idcard.routes';
 import orgSettingsRoutes from './api/org/settings.routes';
 import donationsRoutes from './api/donations/donations.routes';
+import meetRoutes from './api/meet/meet.routes';
+import adsRoutes from './api/ads/ads.routes';
+import paymentWebhookRoutes from './api/payments/webhook.routes';
+import { startAdsExpiryScheduler } from './services/adsExpiryScheduler';
 
 const app = express();
 
@@ -100,8 +105,15 @@ const corsOptions: CorsOptions = {
 app.use(cors(corsOptions));
 app.use(helmet());
 app.use(compression());
+// Razorpay webhook must receive the raw body for signature verification.
+app.use('/payment/webhook', express.raw({ type: '*/*' }));
+app.use('/api/v1/payment/webhook', express.raw({ type: '*/*' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static uploads (branding logos, stamps, media)
+// Ensures paths like /uploads/logo.png work in receipts and elsewhere during dev/prod
+app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads'), { maxAge: '1d' }));
 
 // JSON body parse error handler (must be BEFORE other routes' logic error handling) –
 // Express's built-in json parser throws a SyntaxError for invalid JSON; we intercept
@@ -168,6 +180,9 @@ app.use('/preferences', preferencesRoutes);
 app.use('/legal', legalRoutes);
 app.use('/org/settings', orgSettingsRoutes);
 app.use('/donations', donationsRoutes);
+app.use('/meet', meetRoutes);
+app.use('/ads', adsRoutes);
+app.use('/payment', paymentWebhookRoutes); // exposes POST /payment/webhook
 // Public joining endpoints (no version prefix per request)
 app.use('/hrci/geo', geoHrcRoutes); // expose HRCI geo reads without versioned base
 app.use('/hrci/geo/admin', geoHrcAdminRoutes); // protected via JWT + admin
@@ -237,6 +252,9 @@ apiV1.use('/preferences', preferencesRoutes);
 apiV1.use('/legal', legalRoutes);
 apiV1.use('/org/settings', orgSettingsRoutes);
 apiV1.use('/donations', donationsRoutes);
+apiV1.use('/meet', meetRoutes);
+apiV1.use('/ads', adsRoutes);
+apiV1.use('/payment', paymentWebhookRoutes); // exposes POST /api/v1/payment/webhook
 apiV1.use('/hrci/geo', geoHrcRoutes);
 apiV1.use('/hrci/cells', hrciCellsRoutes);
 apiV1.use('/hrci/designations', hrciDesignationsRoutes);
@@ -301,3 +319,6 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 export default app;
+
+// Start background schedulers (non-blocking)
+startAdsExpiryScheduler();
