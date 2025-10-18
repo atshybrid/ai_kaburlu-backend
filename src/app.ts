@@ -181,6 +181,8 @@ app.use('/legal', legalRoutes);
 app.use('/org/settings', orgSettingsRoutes);
 app.use('/donations', donationsRoutes);
 app.use('/meet', meetRoutes);
+// HRCI-specific alias for meetings
+app.use('/hrci/meet', meetRoutes);
 app.use('/ads', adsRoutes);
 app.use('/payment', paymentWebhookRoutes); // exposes POST /payment/webhook
 // Public joining endpoints (no version prefix per request)
@@ -253,6 +255,8 @@ apiV1.use('/legal', legalRoutes);
 apiV1.use('/org/settings', orgSettingsRoutes);
 apiV1.use('/donations', donationsRoutes);
 apiV1.use('/meet', meetRoutes);
+// HRCI-specific alias for meetings under API v1
+apiV1.use('/hrci/meet', meetRoutes);
 apiV1.use('/ads', adsRoutes);
 apiV1.use('/payment', paymentWebhookRoutes); // exposes POST /api/v1/payment/webhook
 apiV1.use('/hrci/geo', geoHrcRoutes);

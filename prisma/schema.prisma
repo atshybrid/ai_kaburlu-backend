@@ -127,6 +127,9 @@ model User {
   contentReads         ContentRead[]
   contentReactions     ContentReaction[]
   pushNotificationLogs PushNotificationLog[]
+  // Meetings back-relations
+  meetingsCreated      Meeting[]            @relation("User_MeetingsCreated")
+  meetingParticipants  MeetingParticipant[] @relation("MeetingParticipant_User")
 }
 
 /// Stores editable AI prompts by key. Allows changing prompts without code changes.
@@ -151,6 +154,8 @@ model Cell {
   memberships       Membership[]
   levelCapacities   CellLevelCapacity[]
   designationPrices DesignationPrice[]
+  // Meetings back-relations
+  meetings         Meeting[] @relation("Cell_Meetings")
 }
 
 /// Organizational levels for membership slots
@@ -1261,8 +1266,8 @@ model Meeting {
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
-  createdBy       User           @relation(fields: [createdByUserId], references: [id])
-  cell            Cell           @relation(fields: [cellId], references: [id])
+  createdBy       User           @relation("User_MeetingsCreated", fields: [createdByUserId], references: [id])
+  cell            Cell           @relation("Cell_Meetings", fields: [cellId], references: [id])
   participants    MeetingParticipant[]
 
   @@index([level, cellId])
@@ -1280,7 +1285,7 @@ model MeetingParticipant {
   leftAt      DateTime?
 
   meeting     Meeting  @relation(fields: [meetingId], references: [id])
-  user        User?    @relation(fields: [userId], references: [id])
+  user        User?    @relation("MeetingParticipant_User", fields: [userId], references: [id])
 
   @@index([meetingId])
   @@index([userId])
