@@ -3,6 +3,7 @@ import 'reflect-metadata';
 import app from './app';
 import { PrismaClient } from '@prisma/client';
 import http from 'http';
+import { startDonationsReconcileJob, stopDonationsReconcileJob } from './jobs/donationsReconcile';
 
 const prisma = new PrismaClient();
 
@@ -37,6 +38,9 @@ async function start() {
       console.log(`Swagger is running on http://${displayHost}:${port}/api/docs`);
     });
 
+    // start background jobs
+    startDonationsReconcileJob();
+
     // graceful shutdown
     const graceful = async (signal?: string) => {
       console.log(`\nReceived ${signal ?? 'signal'}, shutting down...`);
@@ -46,6 +50,7 @@ async function start() {
           process.exit(1);
         }
         try {
+          await stopDonationsReconcileJob();
           await prisma.$disconnect();
           console.log('Prisma disconnected');
           process.exit(0);

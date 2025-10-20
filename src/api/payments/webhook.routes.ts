@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
 import { verifyRazorpayWebhookSignature, getRazorpayPaymentLink, getRazorpayOrderPayments, razorpayEnabled } from '../../lib/razorpay';
+import crypto from 'crypto';
 
 // IMPORTANT: Express must use raw body for webhook signature verification.
 // In app.ts, mount this route BEFORE express.json() or with express.raw middleware.
@@ -18,8 +19,21 @@ router.post('/webhook', async (req: any, res) => {
       return res.status(400).send('bad signature');
     }
     const evt = typeof payload === 'object' ? payload : JSON.parse(text);
+    const payloadHash = crypto.createHash('sha256').update(text).digest('hex');
     const type = evt?.event as string;
     const obj = evt?.payload || {};
+    const eventId = evt?.id || obj?.id || undefined;
+
+    // Deduplicate by payload hash
+    const existing = await (prisma as any).razorpayWebhookEvent.findUnique({ where: { payloadHash } }).catch(() => null);
+    if (existing && existing.status === 'PROCESSED') {
+      return res.status(200).send('ok');
+    }
+    // Record event as RECEIVED (or reuse existing row)
+    let eventRow = existing;
+    if (!eventRow) {
+      eventRow = await (prisma as any).razorpayWebhookEvent.create({ data: { payloadHash, signature: sig, eventType: type, eventId: eventId || null, payload: evt, status: 'RECEIVED' } });
+    }
 
     // Handle payment_link.paid
     if (type === 'payment_link.paid') {
@@ -77,8 +91,17 @@ router.post('/webhook', async (req: any, res) => {
       }
     }
 
+    // Mark processed
+    await (prisma as any).razorpayWebhookEvent.update({ where: { payloadHash }, data: { status: 'PROCESSED', processedAt: new Date() } }).catch(() => null);
     return res.status(200).send('ok');
   } catch (e: any) {
+    // Mark failed (best-effort)
+    try {
+      const payload = req.rawBody || req.bodyRaw || req._raw || req.body;
+      const text = typeof payload === 'string' ? payload : Buffer.isBuffer(payload) ? payload.toString('utf8') : JSON.stringify(payload);
+      const payloadHash = crypto.createHash('sha256').update(text).digest('hex');
+      await (prisma as any).razorpayWebhookEvent.update({ where: { payloadHash }, data: { status: 'FAILED', errorMessage: e?.message || String(e) } });
+    } catch {}
     return res.status(200).send('ok'); // avoid retries storm; log server-side if needed
   }
 });

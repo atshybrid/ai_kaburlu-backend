@@ -1164,6 +1164,44 @@ model PushNotificationLog {
   @@index([nextRetryAt])
 }
 
+/// Admin actions audit log (e.g., Razorpay operations)
+model AdminAuditLog {
+  id           String   @id @default(cuid())
+  action       String
+  actorUserId  String?
+  targetType   String?
+  targetId     String?
+  requestPath  String?
+  requestMethod String?
+  ip           String?
+  userAgent    String?
+  payload      Json?
+  response     Json?
+  success      Boolean  @default(true)
+  errorMessage String?
+  createdAt    DateTime @default(now())
+
+  @@index([action, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
+/// Persist Razorpay webhook events for idempotency and audit
+model RazorpayWebhookEvent {
+  id           String   @id @default(cuid())
+  payloadHash  String   @unique // sha256 of raw payload text for dedupe
+  signature    String?
+  eventType    String?
+  eventId      String? // if available in payload
+  payload      Json
+  status       String   @default("RECEIVED") // RECEIVED | PROCESSED | FAILED
+  errorMessage String?
+  receivedAt   DateTime @default(now())
+  processedAt  DateTime?
+
+  @@index([eventType, receivedAt])
+  @@index([eventId])
+}
+
 /// Terms and Conditions management
 model TermsAndConditions {
   id          String    @id @default(cuid())

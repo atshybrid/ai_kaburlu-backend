@@ -545,6 +545,17 @@ router.get('/lookup/razorpay/:providerOrderId', async (req, res) => {
  *                 example: '9876543210'
  *               mpin: { type: string }
  *               fullName: { type: string }
+ *               # Optional extras captured during registration
+ *               pushToken: { type: string, nullable: true, description: 'FCM push token to enable notifications immediately' }
+ *               languageId: { type: string, nullable: true, description: 'Preferred language id' }
+ *               deviceId: { type: string, nullable: true, description: 'Client device identifier (recommended with pushToken)' }
+ *               deviceModel: { type: string, nullable: true, description: 'Client device model (optional)' }
+ *               latitude: { type: number, nullable: true, description: 'Precise latitude' }
+ *               longitude: { type: number, nullable: true, description: 'Precise longitude' }
+ *               accuracyMeters: { type: number, nullable: true }
+ *               placeId: { type: string, nullable: true }
+ *               placeName: { type: string, nullable: true }
+ *               address: { type: string, nullable: true }
  *     responses:
  *       200:
  *         description: Registration completed
@@ -614,6 +625,49 @@ router.post('/register', async (req, res) => {
         await tx.user.update({ where: { id: user.id }, data: { mpin: null as any, mpinHash } });
       }
       await tx.userProfile.upsert({ where: { userId: user.id }, create: { userId: user.id, fullName }, update: { fullName } });
+
+      // 1b) Optional extras: language preference, push token, and precise location
+      const pushToken = (req.body && req.body.pushToken) ? String(req.body.pushToken) : '';
+      const deviceId = (req.body && req.body.deviceId) ? String(req.body.deviceId) : `reg-${String(mobileNumber)}`;
+      const deviceModel = (req.body && req.body.deviceModel) ? String(req.body.deviceModel) : 'PayFirst Registration';
+      const requestedLanguageId = (req.body && req.body.languageId) ? String(req.body.languageId) : '';
+
+      // If languageId provided and valid, set on user
+      let langRow: any = null;
+      if (requestedLanguageId) {
+        try { langRow = await tx.language.findUnique({ where: { id: requestedLanguageId } }); } catch {}
+        if (langRow) {
+          await tx.user.update({ where: { id: user.id }, data: { languageId: langRow.id } });
+        }
+      }
+
+      // If pushToken provided, upsert a Device record tied to user
+      if (pushToken) {
+        try {
+          await tx.device.upsert({
+            where: { deviceId },
+            update: { pushToken, userId: user.id, ...(langRow ? { languageId: langRow.id } : {}) },
+            create: { deviceId, deviceModel, userId: user.id, pushToken, ...(langRow ? { languageId: langRow.id } : {}) }
+          });
+        } catch {}
+      }
+
+      // If precise location provided, upsert into UserLocation
+      const lat = (req.body && (req.body.latitude ?? req.body.lat)) as any;
+      const lon = (req.body && (req.body.longitude ?? req.body.lng ?? req.body.lon)) as any;
+      const accuracyMeters = (req.body && req.body.accuracyMeters != null) ? Number(req.body.accuracyMeters) : undefined;
+      const placeId = (req.body && req.body.placeId) ? String(req.body.placeId) : undefined;
+      const placeName = (req.body && req.body.placeName) ? String(req.body.placeName) : undefined;
+      const address = (req.body && req.body.address) ? String(req.body.address) : undefined;
+      if (lat != null && lon != null && !Number.isNaN(Number(lat)) && !Number.isNaN(Number(lon))) {
+        try {
+          await tx.userLocation.upsert({
+            where: { userId: user.id },
+            update: { latitude: Number(lat), longitude: Number(lon), accuracyMeters, placeId, placeName, address, provider: 'payfirst.register', timestampUtc: new Date() },
+            create: { userId: user.id, latitude: Number(lat), longitude: Number(lon), accuracyMeters, placeId, placeName, address, provider: 'payfirst.register', timestampUtc: new Date() }
+          });
+        } catch {}
+      }
       
       // 2) Create membership ACTIVE immediately (payment already succeeded)
       const join = await membershipService.joinSeat({

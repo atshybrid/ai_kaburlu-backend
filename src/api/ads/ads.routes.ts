@@ -327,7 +327,6 @@ router.post('/admin/pay/confirm', async (req, res) => {
  *               amount: { type: number, description: "Amount in INR" }
  *               description: { type: string }
  *               customer: { type: object, properties: { name: { type: string }, contact: { type: string }, email: { type: string } } }
- *               callbackUrl: { type: string }
  *     responses:
  *       200:
  *         description: Payment link created
@@ -353,9 +352,6 @@ router.post('/admin/:id/pay/link', requireAuth, requireAdsAdmin, async (req, res
     if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ success: false, error: 'INVALID_AMOUNT' });
   const description = req.body.description || `Payment for Ad: ${ad.title}`;
   const customer = req.body.customer || undefined;
-  const rawCallback = req.body.callbackUrl || undefined;
-  const callbackUrl = (typeof rawCallback === 'string' && /^https?:\/\//i.test(rawCallback)) ? rawCallback : undefined;
-  if (rawCallback && !callbackUrl) return res.status(400).json({ success: false, error: 'INVALID_CALLBACK_URL', message: 'callbackUrl must be an absolute http(s) URL' });
   // Create a PaymentIntent for traceability
   const intent = await prisma.paymentIntent.create({ data: { amount, currency: 'INR', status: 'PENDING' as any, intentType: 'AD' as any, meta: { adId: id } } });
     // Use a unique reference_id per attempt to satisfy Razorpay's uniqueness constraint
@@ -366,7 +362,6 @@ router.post('/admin/:id/pay/link', requireAuth, requireAdsAdmin, async (req, res
       description,
       reference_id,
       customer,
-      callback_url: callbackUrl,
       notes: { type: 'AD', adId: id, intentId: intent.id },
     });
     await prisma.paymentIntent.update({ where: { id: intent.id }, data: { meta: { ...(intent.meta as any || {}), provider: 'razorpay', payment_link_id: (pl as any).id, reference_id } } });

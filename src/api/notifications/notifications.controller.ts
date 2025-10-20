@@ -108,10 +108,14 @@ async function sendNotificationToUser(
   });
 
   if (result.logId) {
-    await prisma.pushNotificationLog.update({
-      where: { id: result.logId },
-      data: { deliveryType: 'USER', targetUserId: userId }
-    });
+    try {
+      await prisma.pushNotificationLog.update({
+        where: { id: result.logId },
+        data: { deliveryType: 'USER', targetUserId: userId }
+      });
+    } catch (e) {
+      console.warn('[NotificationsController] pushNotificationLog.update failed (non-fatal):', String((e as any)?.message || e));
+    }
   }
 
   return result;

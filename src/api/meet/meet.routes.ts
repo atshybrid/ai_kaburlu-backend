@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
 import { requireAuth } from '../middlewares/authz';
-import { createMeetingJoinInfo, generateRoomName } from '../../lib/jitsi';
+import { createMeetingJoinInfo, generateRoomName, generateMeetingPassword } from '../../lib/jitsi';
 import { notificationQueue } from '../../lib/notification-queue';
 import { sendToUserEnhanced } from '../../lib/fcm-enhanced';
 
@@ -16,20 +16,71 @@ function canCreateMeeting(user: any): boolean {
   return isAdminOrPresident(user);
 }
 
+// Normalize possibly-empty string values to undefined
+function emptyToUndef<T>(v: T): T | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v === 'string' && v.trim() === '') return undefined;
+  return v;
+}
+
+// Parse dates leniently, accepting single-digit hour like T1:.. by padding to T01:
+function parseDateLenient(input: any): Date | null {
+  if (!input) return null;
+  if (input instanceof Date) return isNaN(input.getTime()) ? null : input;
+  if (typeof input === 'string') {
+    let s = input.trim();
+    let d = new Date(s);
+    if (!isNaN(d.getTime())) return d;
+    // Pad single-digit hour after 'T'
+    s = s.replace(/T(\d)(?=:\d{2}:\d{2})/, 'T0$1');
+    d = new Date(s);
+    if (!isNaN(d.getTime())) return d;
+  }
+  return null;
+}
+
+// Compute a runtime status based on scheduledAt/endsAt and persisted status
+function computeRuntimeStatus(m: any, now = new Date()): 'SCHEDULED' | 'LIVE' | 'ENDED' | 'CANCELLED' {
+  const status = String(m.status || '').toUpperCase();
+  if (status === 'CANCELLED') return 'CANCELLED';
+  if (status === 'ENDED') return 'ENDED';
+  const endsAt = m.endsAt ? new Date(m.endsAt) : null;
+  // Require explicit start: only treat as LIVE when persisted status is LIVE
+  if (status === 'LIVE') {
+    if (endsAt && now >= endsAt) return 'ENDED';
+    return 'LIVE';
+  }
+  // Otherwise remain SCHEDULED until started or cancelled/ended
+  if (endsAt && now >= endsAt) return 'ENDED';
+  return 'SCHEDULED';
+}
+
+async function persistStatusIfElapsed(meeting: any): Promise<any | null> {
+  const runtime = computeRuntimeStatus(meeting);
+  // Only auto-persist when transitioning to ENDED due to time elapse
+  if (runtime === 'ENDED' && meeting.status !== 'ENDED') {
+    try {
+      const updated = await (prisma as any).meeting.update({ where: { id: meeting.id }, data: { status: 'ENDED', endsAt: meeting.endsAt || new Date() } });
+      return updated;
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
 // Validate scope by level requires proper geo fields
 function validateScope(level: string, body: any): { ok: boolean; error?: string } {
   switch (String(level)) {
     case 'ZONE':
-      if (!body.zone) return { ok: false, error: 'zone is required for level ZONE' };
+      // If zone is omitted, interpret as "all zones" in the selected cell
       return { ok: true };
     case 'STATE':
-      if (!body.hrcStateId) return { ok: false, error: 'hrcStateId is required for level STATE' };
+      // If hrcStateId is omitted, interpret as "all states" in the selected cell
       return { ok: true };
     case 'DISTRICT':
-      if (!body.hrcDistrictId) return { ok: false, error: 'hrcDistrictId is required for level DISTRICT' };
+      // If hrcDistrictId is omitted, interpret as "all districts" in the selected cell
       return { ok: true };
     case 'MANDAL':
-      if (!body.hrcMandalId) return { ok: false, error: 'hrcMandalId is required for level MANDAL' };
+      // If hrcMandalId is omitted, interpret as "all mandals" in the selected cell
       return { ok: true };
     case 'NATIONAL':
       return { ok: true };
@@ -65,6 +116,14 @@ function validateScope(level: string, body: any): { ok: boolean; error?: string 
  *                 type: string
  *                 enum: [NATIONAL, ZONE, STATE, DISTRICT, MANDAL]
  *                 example: STATE
+ *                 description: |
+ *                   If geo identifiers are omitted, the scope includes ALL within the selected cell.
+ *                   Examples:
+ *                     - ZONE without zone => all zones
+ *                     - STATE without hrcStateId => all states
+ *                     - DISTRICT without hrcDistrictId => all districts
+ *                     - MANDAL without hrcMandalId => all mandals
+ *                   With includeChildren=true, deeper levels under that broad scope are also included.
  *               includeChildren:
  *                 type: boolean
  *                 example: true
@@ -99,12 +158,12 @@ router.post('/admin/meetings', requireAuth, async (req: any, res) => {
     const user = req.user;
     if (!canCreateMeeting(user)) return res.status(403).json({ success: false, error: 'FORBIDDEN' });
 
-    const { title } = req.body || {};
-    let { cellId, level, includeChildren, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId, scheduledAt, endsAt, password } = req.body || {};
+  const { title } = req.body || {};
+  let { cellId, level, includeChildren, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId, scheduledAt, endsAt, password } = req.body || {};
     if (!title) return res.status(400).json({ success: false, error: 'title required' });
 
-    // Scope flags encoded in meta (so we don't need schema changes)
-    const meta: any = {};
+  // Scope flags + audience overrides encoded in meta (no schema change)
+  const meta: any = {};
 
     // If creator is PRESIDENT, default to children-only audience under their scope
     const creatorIsPresident = String(user?.role?.name || '').toUpperCase() === 'PRESIDENT';
@@ -112,6 +171,13 @@ router.post('/admin/meetings', requireAuth, async (req: any, res) => {
       meta.presidentChildrenOnly = true;
       if (includeChildren === undefined) includeChildren = true;
     }
+
+    // Normalize blank strings to undefined for geo fields
+    zone = emptyToUndef(zone) as any;
+    hrcCountryId = emptyToUndef(hrcCountryId) as any;
+    hrcStateId = emptyToUndef(hrcStateId) as any;
+    hrcDistrictId = emptyToUndef(hrcDistrictId) as any;
+    hrcMandalId = emptyToUndef(hrcMandalId) as any;
 
     // If admin didn't provide cellId: allow any cell (skip same-cell constraint)
     if (!cellId) {
@@ -143,8 +209,26 @@ router.post('/admin/meetings', requireAuth, async (req: any, res) => {
     const cell = await (prisma as any).cell.findUnique({ where: { id: String(cellId) } });
     if (!cell) return res.status(400).json({ success: false, error: 'INVALID_CELL' });
 
-    const domain = process.env.JITSI_DOMAIN?.trim() || 'meet.jit.si';
-    const roomName = generateRoomName('hrci');
+  const domain = process.env.JITSI_DOMAIN?.trim() || 'meet.jit.si';
+  const roomName = generateRoomName('hrci');
+  const finalPassword = password ? String(password) : generateMeetingPassword();
+
+    // Audience whitelist support (optional)
+    if (Array.isArray((req.body || {}).audienceUserIds)) {
+      const ids = ((req.body as any).audienceUserIds as any[]).map(String).filter(Boolean);
+      if (ids.length) meta.whitelistUserIds = Array.from(new Set(ids));
+    }
+    if ((req.body || {}).whitelistOnly !== undefined) meta.whitelistOnly = !!(req.body as any).whitelistOnly;
+
+    // Parse dates (lenient); return 400 if provided but invalid
+    const scheduledAtDate = parseDateLenient(scheduledAt);
+    const endsAtDate = parseDateLenient(endsAt);
+    if (scheduledAt !== undefined && scheduledAtDate === null) {
+      return res.status(400).json({ success: false, error: 'INVALID_SCHEDULED_AT', message: 'Provide a valid ISO date-time for scheduledAt' });
+    }
+    if (endsAt !== undefined && endsAtDate === null) {
+      return res.status(400).json({ success: false, error: 'INVALID_ENDS_AT', message: 'Provide a valid ISO date-time for endsAt' });
+    }
 
     const meeting = await (prisma as any).meeting.create({
       data: {
@@ -152,7 +236,7 @@ router.post('/admin/meetings', requireAuth, async (req: any, res) => {
         provider: 'JITSI',
         domain,
         roomName,
-        password: password ? String(password) : null,
+  password: finalPassword,
         level: String(level), // Prisma enum (OrgLevel) accepts string values
         cellId: String(cellId),
         includeChildren: !!includeChildren,
@@ -161,8 +245,8 @@ router.post('/admin/meetings', requireAuth, async (req: any, res) => {
         hrcStateId: hrcStateId || null,
         hrcDistrictId: hrcDistrictId || null,
         hrcMandalId: hrcMandalId || null,
-        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
-        endsAt: endsAt ? new Date(endsAt) : null,
+        scheduledAt: scheduledAtDate,
+        endsAt: endsAtDate,
         status: scheduledAt ? 'SCHEDULED' : 'LIVE',
         createdByUserId: user.id,
         meta: Object.keys(meta).length ? meta : undefined,
@@ -180,7 +264,44 @@ router.post('/admin/meetings', requireAuth, async (req: any, res) => {
       }
     } catch {}
 
-    const join = createMeetingJoinInfo(domain, roomName, password || null, null);
+    // Immediate notification to audience on creation (announce schedule)
+    try {
+      const dataPayload: Record<string, string> = {
+        type: 'meeting',
+        action: 'created',
+        meetingId: String(meeting.id),
+        status: String(meeting.status)
+      };
+      if (meeting.scheduledAt) dataPayload.scheduledAt = new Date(meeting.scheduledAt).toISOString();
+      await notifyMeetingAudience(meeting, {
+        title: `Meeting scheduled: ${meeting.title}`,
+        body: meeting.scheduledAt ? `Starts at ${new Date(meeting.scheduledAt).toLocaleString()}` : 'Join will be announced soon',
+        data: dataPayload
+      });
+    } catch {}
+
+    // Schedule additional reminders: 60,50,40,30,20,5 minutes before (skip any past times)
+    try {
+      if (meeting.scheduledAt) {
+        const now = Date.now();
+        const sa = new Date(meeting.scheduledAt).getTime();
+        const defaultMin = Number(process.env.MEETING_REMINDER_MIN_BEFORE || 10);
+        const marks = [60, 50, 40, 30, 20, 5];
+        for (const min of marks) {
+          if (min === defaultMin) continue; // avoid duplicate reminder
+          const whenTs = sa - min * 60000;
+          if (whenTs > now) {
+            await notifyMeetingAudience(meeting, {
+              title: `Reminder: ${meeting.title}`,
+              body: `Starts in ${min} minutes`,
+              data: { type: 'meeting', action: 'reminder', meetingId: String(meeting.id), scheduledAt: new Date(meeting.scheduledAt).toISOString() }
+            }, new Date(whenTs));
+          }
+        }
+      }
+    } catch {}
+
+  const join = createMeetingJoinInfo(domain, roomName, finalPassword, null);
     return res.json({ success: true, data: { meeting, join } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'CREATE_MEETING_FAILED', message: e?.message });
@@ -204,18 +325,47 @@ router.get('/admin/meetings', requireAuth, async (req: any, res) => {
   try {
     if (!isAdminOrPresident(req.user)) return res.status(403).json({ success: false, error: 'FORBIDDEN' });
     const rows = await (prisma as any).meeting.findMany({ orderBy: { createdAt: 'desc' }, take: 100 });
-    return res.json({ success: true, count: rows.length, data: rows });
+    // Compute runtimeStatus and best-effort persist if drifted
+    const data = [] as any[];
+    for (const m of rows) {
+      const runtimeStatus = computeRuntimeStatus(m);
+      if (runtimeStatus !== m.status) persistStatusIfElapsed(m).catch(() => {});
+      data.push({ ...m, runtimeStatus });
+    }
+    return res.json({ success: true, count: data.length, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'LIST_MEETINGS_FAILED', message: e?.message });
   }
 });
 
 // Start or end a meeting
+/**
+ * @swagger
+ * /hrci/meet/admin/meetings/{id}/start:
+ *   post:
+ *     summary: Start a meeting (sets status to LIVE)
+ *     tags: [HRCI Meetings - Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: notify
+ *         required: false
+ *         schema: { type: boolean }
+ *         description: Send a broadcast to audience on start (default true)
+ *     responses:
+ *       200:
+ *         description: Meeting started
+ */
 router.post('/admin/meetings/:id/start', requireAuth, async (req: any, res) => {
   try {
     if (!canCreateMeeting(req.user)) return res.status(403).json({ success: false, error: 'FORBIDDEN' });
     const id = String(req.params.id);
-    const m = await (prisma as any).meeting.update({ where: { id }, data: { status: 'LIVE', scheduledAt: new Date() } });
+  const m = await (prisma as any).meeting.update({ where: { id }, data: { status: 'LIVE', scheduledAt: new Date() } });
     // Optional broadcast on start
     if (String(req.query.notify || 'true') === 'true') {
       await notifyMeetingAudience(m, {
@@ -230,15 +380,37 @@ router.post('/admin/meetings/:id/start', requireAuth, async (req: any, res) => {
         }
       });
     }
-    return res.json({ success: true, data: m });
+  return res.json({ success: true, data: { ...m, runtimeStatus: computeRuntimeStatus(m) } });
   } catch (e: any) { return res.status(500).json({ success: false, error: 'START_FAILED', message: e?.message }); }
 });
 
+/**
+ * @swagger
+ * /hrci/meet/admin/meetings/{id}/end:
+ *   post:
+ *     summary: End a meeting (sets status to ENDED)
+ *     tags: [HRCI Meetings - Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: notify
+ *         required: false
+ *         schema: { type: boolean }
+ *         description: Send a broadcast to audience on end (default false)
+ *     responses:
+ *       200:
+ *         description: Meeting ended
+ */
 router.post('/admin/meetings/:id/end', requireAuth, async (req: any, res) => {
   try {
     if (!canCreateMeeting(req.user)) return res.status(403).json({ success: false, error: 'FORBIDDEN' });
     const id = String(req.params.id);
-    const m = await (prisma as any).meeting.update({ where: { id }, data: { status: 'ENDED', endsAt: new Date() } });
+  const m = await (prisma as any).meeting.update({ where: { id }, data: { status: 'ENDED', endsAt: new Date() } });
     // Optional broadcast on end
     if (String(req.query.notify || 'false') === 'true') {
       await notifyMeetingAudience(m, {
@@ -247,8 +419,44 @@ router.post('/admin/meetings/:id/end', requireAuth, async (req: any, res) => {
         data: { type: 'meeting', action: 'end', meetingId: m.id, status: m.status }
       });
     }
-    return res.json({ success: true, data: m });
+  return res.json({ success: true, data: { ...m, runtimeStatus: 'ENDED' } });
   } catch (e: any) { return res.status(500).json({ success: false, error: 'END_FAILED', message: e?.message }); }
+});
+
+/**
+ * @swagger
+ * /hrci/meet/meetings/{id}/close:
+ *   post:
+ *     summary: Host closes meeting (sets status to ENDED)
+ *     tags: [HRCI Meetings - Member]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Meeting closed }
+ */
+router.post('/meetings/:id/close', requireAuth, async (req: any, res) => {
+  try {
+    const id = String(req.params.id);
+    const m = await (prisma as any).meeting.findUnique({ where: { id } });
+    if (!m) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+    // Only HOST participant or admin/president can close
+    const isPrivileged = isAdminOrPresident(req.user);
+    let isHost = false;
+    if (!isPrivileged) {
+      const host = await (prisma as any).meetingParticipant.findFirst({ where: { meetingId: id, userId: req.user.id, role: 'HOST' } });
+      isHost = !!host;
+    }
+    if (!isPrivileged && !isHost) return res.status(403).json({ success: false, error: 'FORBIDDEN' });
+    const updated = await (prisma as any).meeting.update({ where: { id }, data: { status: 'ENDED', endsAt: new Date() } });
+    return res.json({ success: true, data: { ...updated, runtimeStatus: 'ENDED' } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'CLOSE_FAILED', message: e?.message });
+  }
 });
 
 // Helpers to resolve geo hierarchy for includeChildren
@@ -293,6 +501,13 @@ async function userCanJoin(meeting: any, user: any): Promise<boolean> {
   const allowAnyCell = !!(meeting as any).meta?.allowAnyCell;
   const allowAllMembers = !!(meeting as any).meta?.allowAllMembers;
   const presidentChildrenOnly = !!(meeting as any).meta?.presidentChildrenOnly;
+  const whitelist: string[] = Array.isArray((meeting as any).meta?.whitelistUserIds) ? (meeting as any).meta.whitelistUserIds.map(String) : [];
+  const whitelistOnly = !!(meeting as any).meta?.whitelistOnly;
+
+  // If whitelistOnly, only allow listed userIds regardless of scope
+  if (whitelistOnly) {
+    return whitelist.includes(String(user.id));
+  }
 
   // If allowAllMembers: any membership qualifies (skip cell/geo checks)
   if (allowAllMembers && memberships.length > 0) return true;
@@ -334,35 +549,50 @@ async function userCanJoin(meeting: any, user: any): Promise<boolean> {
           // everyone in same cell is allowed
           return true;
         case 'ZONE': {
-          // Allow members whose zone matches via their own zone or via their state zone
-          if (mem.zone && meeting.zone && String(mem.zone) === String(meeting.zone)) return true;
-          if (mem.hrcStateId && meeting.zone) {
-            const stZone = await getZoneForState(mem.hrcStateId);
-            if (stZone && String(stZone) === String(meeting.zone)) return true;
+          // If a specific zone is set, restrict to that zone; else include all zones
+          if (meeting.zone) {
+            // Allow members whose zone matches via their own zone or via their state zone
+            if (mem.zone && String(mem.zone) === String(meeting.zone)) return true;
+            if (mem.hrcStateId) {
+              const stZone = await getZoneForState(mem.hrcStateId);
+              if (stZone && String(stZone) === String(meeting.zone)) return true;
+            }
+          } else {
+            // No zone specified => include members in any zone in this cell
+            if (mem.zone || mem.hrcStateId || mem.hrcDistrictId || mem.hrcMandalId) return true;
           }
           break;
         }
         case 'STATE': {
-          if (!meeting.hrcStateId) break;
-          // Member may be STATE (handled above) or deeper (DISTRICT/MANDAL)
-          if (mem.hrcStateId && String(mem.hrcStateId) === String(meeting.hrcStateId)) return true;
-          if (mem.hrcDistrictId) {
-            const stId = await getStateIdForDistrict(mem.hrcDistrictId);
-            if (stId && String(stId) === String(meeting.hrcStateId)) return true;
-          }
-          if (mem.hrcMandalId) {
-            const stId = await getStateIdForMandal(mem.hrcMandalId);
-            if (stId && String(stId) === String(meeting.hrcStateId)) return true;
+          // If a specific state is set, restrict to that state's hierarchy
+          if (meeting.hrcStateId) {
+            if (mem.hrcStateId && String(mem.hrcStateId) === String(meeting.hrcStateId)) return true;
+            if (mem.hrcDistrictId) {
+              const stId = await getStateIdForDistrict(mem.hrcDistrictId);
+              if (stId && String(stId) === String(meeting.hrcStateId)) return true;
+            }
+            if (mem.hrcMandalId) {
+              const stId = await getStateIdForMandal(mem.hrcMandalId);
+              if (stId && String(stId) === String(meeting.hrcStateId)) return true;
+            }
+          } else {
+            // No state specified => include children across all states in this cell
+            if (mem.hrcStateId || mem.hrcDistrictId || mem.hrcMandalId) return true;
           }
           break;
         }
         case 'DISTRICT': {
-          if (!meeting.hrcDistrictId) break;
-          // Allow mandal members inside the district
-          if (mem.hrcDistrictId && String(mem.hrcDistrictId) === String(meeting.hrcDistrictId)) return true;
-          if (mem.hrcMandalId) {
-            const dId = await getDistrictIdForMandal(mem.hrcMandalId);
-            if (dId && String(dId) === String(meeting.hrcDistrictId)) return true;
+          // If a specific district is set, restrict to that district; else include all districts
+          if (meeting.hrcDistrictId) {
+            // Allow mandal members inside the district
+            if (mem.hrcDistrictId && String(mem.hrcDistrictId) === String(meeting.hrcDistrictId)) return true;
+            if (mem.hrcMandalId) {
+              const dId = await getDistrictIdForMandal(mem.hrcMandalId);
+              if (dId && String(dId) === String(meeting.hrcDistrictId)) return true;
+            }
+          } else {
+            // No district specified => include members at DISTRICT or MANDAL levels
+            if (mem.hrcDistrictId || mem.hrcMandalId) return true;
           }
           break;
         }
@@ -372,6 +602,9 @@ async function userCanJoin(meeting: any, user: any): Promise<boolean> {
       }
     }
   }
+
+  // If not matched by scope rules but the user is whitelisted, allow
+  if (whitelist.length && whitelist.includes(String(user.id))) return true;
 
   // PRESIDENT meetings with children-only constraint: if set explicitly, only allow deeper geo than the creator's scope.
   // This is enforced at creation via includeChildren=true and meta.presidentChildrenOnly.
@@ -411,6 +644,10 @@ router.get('/meetings/:id/join', requireAuth, async (req: any, res) => {
 
     const allowed = await userCanJoin(m, req.user);
     if (!allowed) return res.status(403).json({ success: false, error: 'FORBIDDEN' });
+    // Enforce: do not allow join before host/admin starts the meeting
+    if (String(m.status).toUpperCase() !== 'LIVE') {
+      return res.status(403).json({ success: false, error: 'MEETING_NOT_STARTED', message: 'Host has not started the meeting yet.' });
+    }
 
     // Record participation
     try {
@@ -419,7 +656,9 @@ router.get('/meetings/:id/join', requireAuth, async (req: any, res) => {
     } catch {}
 
     const join = createMeetingJoinInfo(m.domain, m.roomName, m.password || null, null);
-    return res.json({ success: true, data: { join, meeting: { id: m.id, title: m.title, status: m.status } } });
+  const runtimeStatus = computeRuntimeStatus(m);
+  if (runtimeStatus !== m.status) persistStatusIfElapsed(m).catch(() => {});
+  return res.json({ success: true, data: { join, meeting: { id: m.id, title: m.title, status: m.status, runtimeStatus, scheduledAt: m.scheduledAt, endsAt: m.endsAt } } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'JOIN_FAILED', message: e?.message });
   }
@@ -448,9 +687,11 @@ router.get('/admin/meetings/:id', requireAuth, async (req: any, res) => {
   try {
     if (!isAdminOrPresident(req.user)) return res.status(403).json({ success: false, error: 'FORBIDDEN' });
     const id = String(req.params.id);
-    const m = await (prisma as any).meeting.findUnique({ where: { id } });
+  const m = await (prisma as any).meeting.findUnique({ where: { id } });
     if (!m) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
-    return res.json({ success: true, data: m });
+  const runtimeStatus = computeRuntimeStatus(m);
+  if (runtimeStatus !== m.status) persistStatusIfElapsed(m).catch(() => {});
+  return res.json({ success: true, data: { ...m, runtimeStatus } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'DETAILS_FAILED', message: e?.message });
   }
@@ -485,23 +726,44 @@ router.patch('/admin/meetings/:id', requireAuth, async (req: any, res) => {
     const data: any = {};
     if (body.title !== undefined) data.title = String(body.title);
     if (body.password !== undefined) data.password = body.password ? String(body.password) : null;
-    if (body.scheduledAt !== undefined) data.scheduledAt = body.scheduledAt ? new Date(body.scheduledAt) : null;
-    if (body.endsAt !== undefined) data.endsAt = body.endsAt ? new Date(body.endsAt) : null;
     if (body.includeChildren !== undefined) data.includeChildren = !!body.includeChildren;
     if (body.level !== undefined) data.level = String(body.level);
-    if (body.zone !== undefined) data.zone = body.zone || null;
-    if (body.hrcCountryId !== undefined) data.hrcCountryId = body.hrcCountryId || null;
-    if (body.hrcStateId !== undefined) data.hrcStateId = body.hrcStateId || null;
-    if (body.hrcDistrictId !== undefined) data.hrcDistrictId = body.hrcDistrictId || null;
-    if (body.hrcMandalId !== undefined) data.hrcMandalId = body.hrcMandalId || null;
+    if (body.zone !== undefined) data.zone = emptyToUndef(body.zone) || null;
+    if (body.hrcCountryId !== undefined) data.hrcCountryId = emptyToUndef(body.hrcCountryId) || null;
+    if (body.hrcStateId !== undefined) data.hrcStateId = emptyToUndef(body.hrcStateId) || null;
+    if (body.hrcDistrictId !== undefined) data.hrcDistrictId = emptyToUndef(body.hrcDistrictId) || null;
+    if (body.hrcMandalId !== undefined) data.hrcMandalId = emptyToUndef(body.hrcMandalId) || null;
+
+    if (body.scheduledAt !== undefined) {
+      const d = parseDateLenient(body.scheduledAt);
+      if (d === null && body.scheduledAt !== null) return res.status(400).json({ success: false, error: 'INVALID_SCHEDULED_AT' });
+      data.scheduledAt = d;
+    }
+    if (body.endsAt !== undefined) {
+      const d = parseDateLenient(body.endsAt);
+      if (d === null && body.endsAt !== null) return res.status(400).json({ success: false, error: 'INVALID_ENDS_AT' });
+      data.endsAt = d;
+    }
 
     // Meta flags to expand audience without schema changes
-    if (body.allowAnyCell !== undefined || body.allowAllMembers !== undefined || body.presidentChildrenOnly !== undefined) {
+    if (
+      body.allowAnyCell !== undefined ||
+      body.allowAllMembers !== undefined ||
+      body.presidentChildrenOnly !== undefined ||
+      body.whitelistOnly !== undefined ||
+      Array.isArray(body.audienceUserIds)
+    ) {
       const current = await (prisma as any).meeting.findUnique({ where: { id }, select: { meta: true } });
       const meta = { ...(current?.meta || {}) } as any;
       if (body.allowAnyCell !== undefined) meta.allowAnyCell = !!body.allowAnyCell;
       if (body.allowAllMembers !== undefined) meta.allowAllMembers = !!body.allowAllMembers;
       if (body.presidentChildrenOnly !== undefined) meta.presidentChildrenOnly = !!body.presidentChildrenOnly;
+      if (body.whitelistOnly !== undefined) meta.whitelistOnly = !!body.whitelistOnly;
+      if (Array.isArray(body.audienceUserIds)) {
+        const ids = (body.audienceUserIds as any[]).map(String).filter(Boolean);
+        if (ids.length) meta.whitelistUserIds = Array.from(new Set(ids));
+        else delete meta.whitelistUserIds;
+      }
       data.meta = meta;
     }
 
@@ -528,6 +790,11 @@ router.patch('/admin/meetings/:id', requireAuth, async (req: any, res) => {
  *     tags: [HRCI Meetings - Admin]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
  *     responses:
  *       200:
  *         description: Cancelled meeting
@@ -536,7 +803,7 @@ router.post('/admin/meetings/:id/cancel', requireAuth, async (req: any, res) => 
   try {
     if (!canCreateMeeting(req.user)) return res.status(403).json({ success: false, error: 'FORBIDDEN' });
     const id = String(req.params.id);
-    const m = await (prisma as any).meeting.update({ where: { id }, data: { status: 'CANCELLED' } });
+  const m = await (prisma as any).meeting.update({ where: { id }, data: { status: 'CANCELLED' } });
     if (String(req.query.notify || 'true') === 'true') {
       await notifyMeetingAudience(m, { title: `Meeting cancelled: ${m.title}`, body: 'We will update with a new time soon', data: { type: 'meeting', action: 'cancel', meetingId: m.id, status: m.status } });
     }
@@ -553,6 +820,11 @@ router.post('/admin/meetings/:id/cancel', requireAuth, async (req: any, res) => 
  *     tags: [HRCI Meetings - Admin]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
  *     requestBody:
  *       required: false
  *       content:
@@ -671,7 +943,11 @@ router.get('/meetings/my/upcoming', requireAuth, async (req: any, res) => {
     });
     const allowed = [] as any[];
     for (const m of rows) {
-      if (await userCanJoin(m, req.user)) allowed.push(m);
+      if (await userCanJoin(m, req.user)) {
+        const runtimeStatus = computeRuntimeStatus(m);
+        if (runtimeStatus !== m.status) persistStatusIfElapsed(m).catch(() => {});
+        allowed.push({ ...m, runtimeStatus });
+      }
     }
     return res.json({ success: true, count: allowed.length, data: allowed });
   } catch (e: any) {
@@ -681,17 +957,42 @@ router.get('/meetings/my/upcoming', requireAuth, async (req: any, res) => {
 
 // Helpers: resolve audience and send notifications
 async function resolveMeetingAudienceUserIds(meeting: any): Promise<string[]> {
-  const where: any = { cellId: meeting.cellId };
-  if (!meeting.includeChildren) {
-    where.level = meeting.level;
-    if (meeting.level === 'STATE' && meeting.hrcStateId) where.hrcStateId = meeting.hrcStateId;
-    if (meeting.level === 'DISTRICT' && meeting.hrcDistrictId) where.hrcDistrictId = meeting.hrcDistrictId;
-    if (meeting.level === 'MANDAL' && meeting.hrcMandalId) where.hrcMandalId = meeting.hrcMandalId;
-    if (meeting.level === 'ZONE' && meeting.zone) where.zone = meeting.zone;
+  const meta = (meeting as any).meta || {};
+  const allowAllMembers = !!meta.allowAllMembers;
+  const allowAnyCell = !!meta.allowAnyCell;
+  const whitelistOnly = !!meta.whitelistOnly;
+  const whitelist: string[] = Array.isArray(meta.whitelistUserIds) ? meta.whitelistUserIds.map(String) : [];
+
+  // If whitelistOnly, short-circuit: return whitelist as recipients (or none if empty)
+  if (whitelistOnly) {
+    return whitelist.length ? Array.from(new Set(whitelist)) : [];
   }
+
+  // Build base where clause for memberships
+  const where: any = {};
+  if (!allowAnyCell) where.cellId = meeting.cellId; // restrict cell unless allowAnyCell
+
+  if (!allowAllMembers) {
+    if (!meeting.includeChildren) {
+      // Exact scope only
+      where.level = meeting.level;
+      if (meeting.level === 'STATE' && meeting.hrcStateId) where.hrcStateId = meeting.hrcStateId;
+      if (meeting.level === 'DISTRICT' && meeting.hrcDistrictId) where.hrcDistrictId = meeting.hrcDistrictId;
+      if (meeting.level === 'MANDAL' && meeting.hrcMandalId) where.hrcMandalId = meeting.hrcMandalId;
+      if (meeting.level === 'ZONE' && meeting.zone) where.zone = meeting.zone;
+    } else {
+      // includeChildren true: keep broad (cell-only restriction already applied above unless allowAnyCell)
+    }
+  } else {
+    // allowAllMembers: no geo filters
+  }
+
   const rows = await (prisma as any).membership.findMany({ where, select: { userId: true }, distinct: ['userId'], take: 10000 });
-  const ids = rows.map((r: any) => r.userId).filter(Boolean);
-  return Array.from(new Set(ids));
+  let ids = rows.map((r: any) => r.userId).filter(Boolean).map(String);
+
+  // Merge whitelist users if present (acts as additive allow-list when not whitelistOnly)
+  if (whitelist.length) ids = Array.from(new Set(ids.concat(whitelist)));
+  return ids;
 }
 
 async function notifyMeetingAudience(meeting: any, payload: { title: string; body: string; data?: Record<string, string> }, scheduleAt?: Date): Promise<{ recipients: number }>

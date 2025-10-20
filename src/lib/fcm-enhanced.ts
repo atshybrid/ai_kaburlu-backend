@@ -105,10 +105,16 @@ async function updateNotificationLog(
     updateData.completedAt = new Date();
   }
 
-  const updatedLog = await prisma.pushNotificationLog.update({
-    where: { id: logId },
-    data: updateData
-  });
+  let updatedLog;
+  try {
+    updatedLog = await prisma.pushNotificationLog.update({
+      where: { id: logId },
+      data: updateData
+    });
+  } catch (e) {
+    console.warn('[FCM Enhanced] updateNotificationLog failed (non-fatal):', { logId, status, err: String((e as any)?.message || e) });
+    return;
+  }
 
   console.log(`[FCM Enhanced] Updated notification log: ${logId}`, {
     status,
@@ -402,14 +408,22 @@ export async function sendToUserEnhanced(
   });
 
   // Update the log to reflect this was a user-targeted send
-  await prisma.pushNotificationLog.update({
-    where: { id: result.logId },
-    data: {
-      deliveryType: 'USER',
-      targetUserId: userId,
-      targetTokens: tokens
+  if (result.logId) {
+    try {
+      await prisma.pushNotificationLog.update({
+        where: { id: result.logId },
+        data: {
+          deliveryType: 'USER',
+          targetUserId: userId,
+          targetTokens: tokens
+        }
+      });
+    } catch (e) {
+      console.warn('[FCM Enhanced] Failed to update pushNotificationLog with user context (non-fatal):', e);
     }
-  });
+  } else {
+    console.warn('[FCM Enhanced] No logId returned from token send; skipping user-context log update.');
+  }
 
   return result;
 }

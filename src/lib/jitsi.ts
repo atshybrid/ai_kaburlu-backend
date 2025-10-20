@@ -29,3 +29,15 @@ export function createMeetingJoinInfo(domain: string, roomName: string, password
     jwt: jwt || null,
   };
 }
+
+// Generate an unambiguous, URL-safe meeting password (moderators can share it to lock the room)
+export function generateMeetingPassword(length = 10): string {
+  // Avoid easily confusable characters; keep URL-safe
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@$#';
+  const bytes = crypto.randomBytes(length);
+  let pw = '';
+  for (let i = 0; i < length; i++) {
+    pw += alphabet[bytes[i] % alphabet.length];
+  }
+  return pw;
+}

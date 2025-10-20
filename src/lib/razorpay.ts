@@ -43,8 +43,6 @@ export async function createRazorpayPaymentLink(args: {
   reference_id?: string;
   customer?: { name?: string; contact?: string; email?: string };
   notify?: { sms?: boolean; email?: boolean };
-  callback_url?: string;
-  callback_method?: 'get' | 'post';
   notes?: Record<string, any>;
 }) {
   const payload: any = {
@@ -54,8 +52,6 @@ export async function createRazorpayPaymentLink(args: {
     reference_id: args.reference_id,
     customer: args.customer,
     notify: args.notify || { sms: true, email: true },
-    callback_url: args.callback_url,
-    callback_method: args.callback_method || 'get',
     notes: args.notes || {},
   };
   const res = await axios.post('https://api.razorpay.com/v1/payment_links', payload, {

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
-import { createRazorpayOrder, getRazorpayKeyId, razorpayEnabled, verifyRazorpaySignature, createRazorpayPaymentLink, getRazorpayPaymentLink, getRazorpayOrderPayments } from '../../lib/razorpay';
+import { createRazorpayOrder, getRazorpayKeyId, razorpayEnabled, verifyRazorpaySignature, createRazorpayPaymentLink, getRazorpayPaymentLink, getRazorpayOrderPayments, listRazorpayPaymentLinks, updateRazorpayPaymentLink, notifyRazorpayPaymentLink } from '../../lib/razorpay';
 import { generateDonationReceiptPdf, buildDonationReceiptHtml } from '../../lib/pdf/generateDonationReceipt';
 import { requireAuth, requireHrcAdmin } from '../middlewares/authz';
 import { randomUUID } from 'crypto';
@@ -9,8 +9,16 @@ import sharp from 'sharp';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { r2Client, R2_BUCKET, getPublicUrl } from '../../lib/r2';
 import QRCode from 'qrcode';
+import { logAdminAction } from '../../lib/audit';
 
 const router = Router();
+
+// Small in-memory helpers for caching and rate limiting (stateless fallback; fine for a single instance)
+const linkStatusCache = new Map<string, { ts: number; data: any }>();
+const rateBucket = new Map<string, { windowStart: number; count: number }>();
+const STATUS_TTL_MS = 3_000; // micro-cache 3s
+const RATE_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_PER_KEY = 30; // 30 req/min per (ip+linkId)
 
 // Ensure asset URLs are absolute so images load in browsers and Puppeteer
 function toAbsoluteAssetUrl(url: any, fallbackOrigin?: string): string {
@@ -31,6 +39,16 @@ function withinWindow(ev: any): boolean {
   if (ev.startAt && new Date(ev.startAt) > now) return false;
   if (ev.endAt && new Date(ev.endAt) < now) return false;
   return true;
+}
+
+// Resolve the public base URL for constructing absolute links
+function resolvePublicBase(req: any): string {
+  const envBase = (process.env.APP_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || '').toString().trim();
+  if (envBase) return envBase.replace(/\/$/, '');
+  const xfProto = (req.headers['x-forwarded-proto'] as string) || undefined;
+  const proto = (xfProto && xfProto.split(',')[0]) || req.protocol || 'http';
+  const host = (req.get('x-forwarded-host') || req.get('host') || '').split(',')[0];
+  return host ? `${proto}://${host}` : '';
 }
 
 /**
@@ -408,7 +426,7 @@ router.get('/admin/events/:id/gallery', requireAuth, requireHrcAdmin, async (req
  *   post:
  *     tags: [HRCI Membership - Member APIs]
  *     summary: Create a Razorpay Payment Link for a donation (member flow)
- *     description: Creates a Donation and a PaymentIntent, then generates a Razorpay Payment Link for external payment.
+ *     description: Creates a Donation and a PaymentIntent, then generates a Razorpay Payment Link for external payment. Callback URL is not used; status is handled internally via webhooks and reconciliation.
  *     security: [ { bearerAuth: [] } ]
  *     requestBody:
  *       required: true
@@ -427,7 +445,6 @@ router.get('/admin/events/:id/gallery', requireAuth, requireHrcAdmin, async (req
  *               donorPan: { type: string, nullable: true }
  *               isAnonymous: { type: boolean, default: false }
  *               shareCode: { type: string, nullable: true }
- *               callbackUrl: { type: string, nullable: true }
  *     responses:
  *       200:
  *         description: Payment link created
@@ -444,12 +461,15 @@ router.get('/admin/events/:id/gallery', requireAuth, requireHrcAdmin, async (req
  *                     intentId: { type: string }
  *                     linkId: { type: string }
  *                     shortUrl: { type: string }
+ *                     status: { type: string, enum: [PENDING, SUCCESS, FAILED] }
+ *                     statusUrl: { type: string, description: 'Public endpoint to fetch current payment link status' }
  */
 router.post('/members/payment-links', requireAuth, async (req: any, res) => {
   try {
     if (!razorpayEnabled()) return res.status(400).json({ success: false, error: 'RAZORPAY_DISABLED' });
     const user = req.user;
-    const { eventId, amount, donorName, donorAddress, donorMobile, donorEmail, donorPan, isAnonymous, shareCode, callbackUrl } = req.body || {};
+  const { eventId, amount, donorName, donorAddress, donorMobile, donorEmail, donorPan, isAnonymous, shareCode } = req.body || {};
+    const idempotencyKey = (req.get('Idempotency-Key') || req.get('X-Idempotency-Key') || (req.body && req.body.idempotencyKey) || '').toString().trim();
     const amt = Number(amount);
     if (!amt || amt <= 0) return res.status(400).json({ success: false, error: 'INVALID_AMOUNT' });
     const panUpper = (donorPan ? String(donorPan) : '').trim().toUpperCase();
@@ -461,13 +481,34 @@ router.post('/members/payment-links', requireAuth, async (req: any, res) => {
       if (ev.status !== 'ACTIVE' || !withinWindow(ev)) return res.status(400).json({ success: false, error: 'EVENT_NOT_ACTIVE' });
     }
 
-    // Optional: resolve share code
-    let referrerUserId: string | undefined;
+    // Attribution policy: always attribute to the logged-in member creating the link
+    const referrerUserId: string | undefined = user?.id;
+    // Optional: if a shareCode is provided, only update its counters (do not override attribution)
     if (shareCode) {
       const link = await (prisma as any).donationShareLink.findUnique({ where: { code: String(shareCode) } }).catch(() => null);
       if (link && link.active) {
-        referrerUserId = link.createdByUserId;
         await (prisma as any).donationShareLink.update({ where: { id: link.id }, data: { ordersCount: { increment: 1 } } }).catch(() => null);
+      }
+    }
+
+    // If idempotency key provided, try to find a recent pending intent+donation by this user and parameters
+    if (idempotencyKey) {
+      const existing = await prisma.paymentIntent.findFirst({
+        where: {
+          intentType: 'DONATION' as any,
+          status: 'PENDING',
+          createdAt: { gte: new Date(Date.now() - 10 * 60 * 1000) }, // last 10 minutes
+        },
+        orderBy: { createdAt: 'desc' }
+      }).catch(() => null);
+      if (existing) {
+        const existingDonation = await (prisma as any).donation.findFirst({ where: { paymentIntentId: existing.id, referrerUserId: user?.id } }).catch(() => null);
+        if (existingDonation && existingDonation.providerOrderId) {
+          const base = resolvePublicBase(req);
+          const statusPath = `${req.baseUrl}/payment-links/${existingDonation.providerOrderId}/status`;
+          const statusUrl = base ? `${base}${statusPath}` : statusPath;
+          return res.json({ success: true, data: { donationId: existingDonation.id, intentId: existing.id, linkId: existingDonation.providerOrderId, shortUrl: null, status: existingDonation.status, statusUrl }, idempotent: true });
+        }
       }
     }
 
@@ -480,7 +521,7 @@ router.post('/members/payment-links', requireAuth, async (req: any, res) => {
         cellCodeOrName: ev?.title || 'DONATION',
         designationCode: 'DONATION',
         level: 'NATIONAL' as any,
-        meta: { donorName, donorAddress, donorMobile, donorEmail, donorPan: panUpper || null, isAnonymous: !!isAnonymous, eventId: ev?.id || null, shareCode: shareCode || null, createdByUserId: user?.id || null },
+        meta: { donorName, donorAddress, donorMobile, donorEmail, donorPan: panUpper || null, isAnonymous: !!isAnonymous, eventId: ev?.id || null, shareCode: shareCode || null, createdByUserId: user?.id || null, idempotencyKey: idempotencyKey || null },
       } as any)
     });
 
@@ -506,16 +547,495 @@ router.post('/members/payment-links', requireAuth, async (req: any, res) => {
       description: `Donation for ${ev?.title || 'General Donation'}`,
       reference_id: donation.id,
       customer: donorMobile || donorEmail ? { name: donorName, contact: donorMobile, email: donorEmail } : undefined,
-      callback_url: callbackUrl,
       notes: { type: 'DONATION', donationId: donation.id, eventId: donation.eventId },
     });
 
     await prisma.paymentIntent.update({ where: { id: intent.id }, data: { meta: { ...(intent.meta as any || {}), provider: 'razorpay', payment_link_id: pl.id } } });
     await (prisma as any).donation.update({ where: { id: donation.id }, data: { providerOrderId: pl.id } });
 
-    return res.json({ success: true, data: { donationId: donation.id, intentId: intent.id, linkId: pl.id, shortUrl: (pl as any).short_url || null } });
+  const base = resolvePublicBase(req);
+  // req.baseUrl will be '/donations' or '/api/v1/donations' depending on mount
+  const statusPath = `${req.baseUrl}/payment-links/${pl.id}/status`;
+  const statusUrl = base ? `${base}${statusPath}` : statusPath;
+  return res.json({ success: true, data: { donationId: donation.id, intentId: intent.id, linkId: pl.id, shortUrl: (pl as any).short_url || null, status: donation.status, statusUrl } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'DONATION_PAYMENT_LINK_CREATE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/members/payment-links:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: List donation payment links created by the logged-in member
+ *     description: Returns payment-link based donations attributed to the member (via JWT), with optional filters and totals by status.
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date-time }
+ *         description: Filter from createdAt (inclusive)
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date-time }
+ *         description: Filter to createdAt (inclusive)
+ *       - in: query
+ *         name: status
+ *         schema: { type: string }
+ *         description: Comma-separated statuses to include (PENDING,SUCCESS,FAILED,REFUND)
+ *       - in: query
+ *         name: eventId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+ *       - in: query
+ *         name: offset
+ *         schema: { type: integer, default: 0, minimum: 0 }
+ *     responses:
+ *       200:
+ *         description: List of member payment links and totals
+ */
+router.get('/members/payment-links', requireAuth, async (req: any, res) => {
+  try {
+    const userId = req.user?.id as string;
+    if (!userId) return res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
+
+    const { from, to, status, eventId } = req.query as any;
+    const verify = String(req.query.verify || '').toLowerCase() === 'true';
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+
+    const where: any = {
+      referrerUserId: userId,
+      // only those created via payment-link flow
+      providerOrderId: { not: null },
+    };
+
+    if (from) {
+      const d = new Date(String(from));
+      if (!isNaN(d.getTime())) (where as any).createdAt = { ...(where.createdAt || {}), gte: d };
+    }
+    if (to) {
+      const d = new Date(String(to));
+      if (!isNaN(d.getTime())) (where as any).createdAt = { ...(where.createdAt || {}), lte: d };
+    }
+    if (status) {
+      const arr = String(status).split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+      if (arr.length) (where as any).status = { in: arr };
+    }
+    if (eventId) (where as any).eventId = String(eventId);
+
+    let [rows, totalCount] = await Promise.all([
+      (prisma as any).donation.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip: offset,
+        select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true }
+      }),
+      (prisma as any).donation.count({ where })
+    ]);
+
+    // Optional reconciliation against Razorpay for pending rows in the page
+    let reconciled = 0;
+    if (verify && razorpayEnabled()) {
+      for (const d of rows) {
+        if (d.status === 'PENDING' && d.providerOrderId) {
+          try {
+            const pl = await getRazorpayPaymentLink(String(d.providerOrderId));
+            if (String(pl.status).toLowerCase() === 'paid') {
+              const intent = await prisma.paymentIntent.findFirst({ where: { id: String((await (prisma as any).donation.findUnique({ where: { id: d.id } })).paymentIntentId) } }).catch(() => null);
+              await prisma.paymentIntent.update({ where: { id: intent?.id || '' }, data: { status: 'SUCCESS' } }).catch(() => null);
+              await prisma.$transaction(async (tx) => {
+                const anyTx = tx as any;
+                const updated = await anyTx.donation.update({ where: { id: d.id }, data: { status: 'SUCCESS', providerPaymentId: (pl as any)?.payments?.[0]?.payment_id || d.providerPaymentId } });
+                await anyTx.donationEvent.update({ where: { id: updated.eventId }, data: { collectedAmount: { increment: updated.amount } } }).catch(() => null);
+              });
+              reconciled++;
+            }
+          } catch { /* ignore reconciliation errors per row */ }
+        }
+      }
+      // Refresh the page rows if any reconciled
+      if (reconciled > 0) {
+        rows = await (prisma as any).donation.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          skip: offset,
+          select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true }
+        });
+      }
+    }
+
+    // Totals by status using groupBy over the same filter (ignores pagination)
+    const gb = await (prisma as any).donation.groupBy({
+      by: ['status'],
+      where,
+      _count: { _all: true },
+      _sum: { amount: true }
+    });
+    const totals: any = { overall: { count: totalCount, amount: 0 }, byStatus: {} };
+    for (const r of gb) {
+      const amt = Number(r._sum?.amount || 0);
+      totals.byStatus[r.status] = { count: Number(r._count?._all || 0), amount: amt };
+      totals.overall.amount += amt;
+    }
+
+    return res.json({ success: true, count: rows.length, total: totalCount, totals, data: rows, reconciled });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'MEMBER_PAYMENT_LINKS_LIST_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/admin/members/{userId}/payment-links:
+ *   get:
+ *     tags: [Donations - Admin]
+ *     summary: List donation payment links created by a member (admin)
+ *     description: HRCI Admin can view a member's payment link donations with filters and totals.
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string }
+ *       - in: query
+ *         name: eventId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+ *       - in: query
+ *         name: offset
+ *         schema: { type: integer, default: 0, minimum: 0 }
+ *     responses:
+ *       200:
+ *         description: Admin view of member payment links
+ */
+router.get('/admin/members/:userId/payment-links', requireAuth, requireHrcAdmin, async (req: any, res) => {
+  try {
+    const memberUserId = String(req.params.userId);
+    const { from, to, status, eventId } = req.query as any;
+    const verify = String(req.query.verify || '').toLowerCase() === 'true';
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+
+    const where: any = {
+      referrerUserId: memberUserId,
+      providerOrderId: { not: null },
+    };
+    if (from) { const d = new Date(String(from)); if (!isNaN(d.getTime())) (where as any).createdAt = { ...(where.createdAt || {}), gte: d }; }
+    if (to) { const d = new Date(String(to)); if (!isNaN(d.getTime())) (where as any).createdAt = { ...(where.createdAt || {}), lte: d }; }
+    if (status) {
+      const arr = String(status).split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+      if (arr.length) (where as any).status = { in: arr };
+    }
+    if (eventId) (where as any).eventId = String(eventId);
+
+    let [rows, totalCount] = await Promise.all([
+      (prisma as any).donation.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip: offset,
+        select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true }
+      }),
+      (prisma as any).donation.count({ where })
+    ]);
+
+    let reconciled = 0;
+    if (verify && razorpayEnabled()) {
+      for (const d of rows) {
+        if (d.status === 'PENDING' && d.providerOrderId) {
+          try {
+            const pl = await getRazorpayPaymentLink(String(d.providerOrderId));
+            if (String(pl.status).toLowerCase() === 'paid') {
+              const intent = await prisma.paymentIntent.findFirst({ where: { id: String((await (prisma as any).donation.findUnique({ where: { id: d.id } })).paymentIntentId) } }).catch(() => null);
+              await prisma.paymentIntent.update({ where: { id: intent?.id || '' }, data: { status: 'SUCCESS' } }).catch(() => null);
+              await prisma.$transaction(async (tx) => {
+                const anyTx = tx as any;
+                const updated = await anyTx.donation.update({ where: { id: d.id }, data: { status: 'SUCCESS', providerPaymentId: (pl as any)?.payments?.[0]?.payment_id || d.providerPaymentId } });
+                await anyTx.donationEvent.update({ where: { id: updated.eventId }, data: { collectedAmount: { increment: updated.amount } } }).catch(() => null);
+              });
+              reconciled++;
+            }
+          } catch { }
+        }
+      }
+      if (reconciled > 0) {
+        rows = await (prisma as any).donation.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          skip: offset,
+          select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true }
+        });
+      }
+    }
+
+    const gb = await (prisma as any).donation.groupBy({
+      by: ['status'],
+      where,
+      _count: { _all: true },
+      _sum: { amount: true }
+    });
+    const totals: any = { overall: { count: totalCount, amount: 0 }, byStatus: {} };
+    for (const r of gb) {
+      const amt = Number(r._sum?.amount || 0);
+      totals.byStatus[r.status] = { count: Number(r._count?._all || 0), amount: amt };
+      totals.overall.amount += amt;
+    }
+
+    return res.json({ success: true, count: rows.length, total: totalCount, totals, data: rows, reconciled });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'ADMIN_MEMBER_PAYMENT_LINKS_LIST_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/members/{userId}/payment-links:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: List donation payment links for a specific member
+ *     description: The member themself can query their own userId; HRCI Admins can query any member.
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string }
+ *       - in: query
+ *         name: eventId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+ *       - in: query
+ *         name: offset
+ *         schema: { type: integer, default: 0, minimum: 0 }
+ *     responses:
+ *       200:
+ *         description: Member view of payment links
+ *       403:
+ *         description: Forbidden when querying other users without admin role
+ */
+router.get('/members/:userId/payment-links', requireAuth, async (req: any, res) => {
+  try {
+    const requester = req.user;
+    const paramUserId = String(req.params.userId);
+    const roleName = requester?.role?.name?.toString()?.toUpperCase();
+    const isAdmin = roleName === 'HRCI_ADMIN' || roleName === 'SUPERADMIN';
+    if (!isAdmin && requester?.id !== paramUserId) {
+      return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Can only query your own records' });
+    }
+
+    const { from, to, status, eventId } = req.query as any;
+    const verify = String(req.query.verify || '').toLowerCase() === 'true';
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+
+    const where: any = {
+      referrerUserId: paramUserId,
+      providerOrderId: { not: null },
+    };
+    if (from) { const d = new Date(String(from)); if (!isNaN(d.getTime())) (where as any).createdAt = { ...(where.createdAt || {}), gte: d }; }
+    if (to) { const d = new Date(String(to)); if (!isNaN(d.getTime())) (where as any).createdAt = { ...(where.createdAt || {}), lte: d }; }
+    if (status) { const arr = String(status).split(',').map((s) => s.trim().toUpperCase()).filter(Boolean); if (arr.length) (where as any).status = { in: arr }; }
+    if (eventId) (where as any).eventId = String(eventId);
+
+    let [rows, totalCount] = await Promise.all([
+      (prisma as any).donation.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip: offset,
+        select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true }
+      }),
+      (prisma as any).donation.count({ where })
+    ]);
+
+    let reconciled = 0;
+    if (verify && razorpayEnabled()) {
+      for (const d of rows) {
+        if (d.status === 'PENDING' && d.providerOrderId) {
+          try {
+            const pl = await getRazorpayPaymentLink(String(d.providerOrderId));
+            if (String(pl.status).toLowerCase() === 'paid') {
+              const intent = await prisma.paymentIntent.findFirst({ where: { id: String((await (prisma as any).donation.findUnique({ where: { id: d.id } })).paymentIntentId) } }).catch(() => null);
+              await prisma.paymentIntent.update({ where: { id: intent?.id || '' }, data: { status: 'SUCCESS' } }).catch(() => null);
+              await prisma.$transaction(async (tx) => {
+                const anyTx = tx as any;
+                const updated = await anyTx.donation.update({ where: { id: d.id }, data: { status: 'SUCCESS', providerPaymentId: (pl as any)?.payments?.[0]?.payment_id || d.providerPaymentId } });
+                await anyTx.donationEvent.update({ where: { id: updated.eventId }, data: { collectedAmount: { increment: updated.amount } } }).catch(() => null);
+              });
+              reconciled++;
+            }
+          } catch { }
+        }
+      }
+      if (reconciled > 0) {
+        rows = await (prisma as any).donation.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          skip: offset,
+          select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true }
+        });
+      }
+    }
+
+    const gb = await (prisma as any).donation.groupBy({
+      by: ['status'],
+      where,
+      _count: { _all: true },
+      _sum: { amount: true }
+    });
+    const totals: any = { overall: { count: totalCount, amount: 0 }, byStatus: {} };
+    for (const r of gb) {
+      const amt = Number(r._sum?.amount || 0);
+      totals.byStatus[r.status] = { count: Number(r._count?._all || 0), amount: amt };
+      totals.overall.amount += amt;
+    }
+
+    return res.json({ success: true, count: rows.length, total: totalCount, totals, data: rows, reconciled });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'MEMBER_PAYMENT_LINKS_USER_LIST_FAILED', message: e?.message });
+  }
+});
+
+// Implement cancellation for member's payment link
+router.delete('/members/payment-links/:id', requireAuth, async (req: any, res) => {
+  try {
+    if (!razorpayEnabled()) return res.status(400).json({ success: false, error: 'RAZORPAY_DISABLED' });
+    const userId = req.user?.id as string;
+    const linkId = String(req.params.id);
+
+    // Find the donation created by this member with this link id
+    const donation = await (prisma as any).donation.findFirst({ where: { providerOrderId: linkId, referrerUserId: userId } });
+    if (!donation) return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Payment link not found for this member' });
+    if (donation.status === 'SUCCESS') return res.status(400).json({ success: false, error: 'CANNOT_CANCEL_PAID_LINK' });
+
+    const { cancelRazorpayPaymentLink } = await import('../../lib/razorpay');
+    const pl = await cancelRazorpayPaymentLink(linkId).catch((e: any) => {
+      // Razorpay may return error if already cancelled; treat as ok
+      return { id: linkId, status: 'cancelled' } as any;
+    });
+
+    // Mark donation as FAILED to indicate cancelled
+    await (prisma as any).donation.update({ where: { id: donation.id }, data: { status: 'FAILED' } }).catch(() => null);
+
+    return res.json({ success: true, data: { linkId, status: (pl as any)?.status || 'cancelled' } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'DONATION_PAYMENT_LINK_CANCEL_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/members/payment-links/{id}/notify:
+ *   post:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Send payment link notification (sms/email)
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [via]
+ *             properties:
+ *               via: { type: string, enum: [sms, email] }
+ *     responses:
+ *       200: { description: Notification triggered }
+ */
+router.post('/members/payment-links/:id/notify', requireAuth, async (req: any, res) => {
+  try {
+    if (!razorpayEnabled()) return res.status(400).json({ success: false, error: 'RAZORPAY_DISABLED' });
+    const userId = req.user?.id as string;
+    const id = String(req.params.id);
+    const via = String(req.body?.via || '').toLowerCase();
+    if (!['sms', 'email'].includes(via)) return res.status(400).json({ success: false, error: 'INVALID_VIA' });
+
+    // Ensure this link belongs to the member
+    const donation = await (prisma as any).donation.findFirst({ where: { providerOrderId: id, referrerUserId: userId } });
+    if (!donation) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+    if (donation.status === 'SUCCESS') return res.status(400).json({ success: false, error: 'ALREADY_PAID' });
+
+    const out = await notifyRazorpayPaymentLink(id, via as any);
+    // Best-effort audit for member self-notify
+    logAdminAction({ req, action: 'donation.member.payment_link.notify', target: { type: 'RZP_PAYMENT_LINK', id }, payload: { via }, response: out, success: true }).catch(() => {});
+    return res.json({ success: true, data: out });
+  } catch (e: any) {
+    logAdminAction({ req, action: 'donation.member.payment_link.notify', target: { type: 'RZP_PAYMENT_LINK', id: String(req.params.id) }, payload: { via: req.body?.via }, success: false, errorMessage: e?.message }).catch(() => {});
+    return res.status(500).json({ success: false, error: 'RP_LINK_NOTIFY_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/admin/payment-links/{id}/notify:
+ *   post:
+ *     tags: [Donations - Admin]
+ *     summary: Send payment link notification (sms/email) as admin
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [via]
+ *             properties:
+ *               via: { type: string, enum: [sms, email] }
+ *     responses:
+ *       200: { description: Notification triggered }
+ */
+router.post('/admin/payment-links/:id/notify', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    if (!razorpayEnabled()) return res.status(400).json({ success: false, error: 'RAZORPAY_DISABLED' });
+    const id = String(req.params.id);
+    const via = String(req.body?.via || '').toLowerCase();
+    if (!['sms', 'email'].includes(via)) return res.status(400).json({ success: false, error: 'INVALID_VIA' });
+    const out = await notifyRazorpayPaymentLink(id, via as any);
+    await logAdminAction({ req, action: 'donation.admin.payment_link.notify', target: { type: 'RZP_PAYMENT_LINK', id }, payload: { via }, response: out, success: true });
+    return res.json({ success: true, data: out });
+  } catch (e: any) {
+    await logAdminAction({ req, action: 'donation.admin.payment_link.notify', target: { type: 'RZP_PAYMENT_LINK', id: String(req.params.id) }, payload: { via: req.body?.via }, success: false, errorMessage: e?.message });
+    return res.status(500).json({ success: false, error: 'RP_LINK_NOTIFY_FAILED', message: e?.message });
   }
 });
 
@@ -538,10 +1058,102 @@ router.get('/members/payment-links/:id', requireAuth, async (req, res) => {
   try {
     if (!razorpayEnabled()) return res.status(400).json({ success: false, error: 'RAZORPAY_DISABLED' });
     const linkId = String(req.params.id);
+    // Ownership guard: only the member that created this link (or admin) can query
+    const requester: any = (req as any).user;
+    const roleName = requester?.role?.name?.toString()?.toUpperCase();
+    const isAdmin = roleName === 'HRCI_ADMIN' || roleName === 'SUPERADMIN' || roleName === 'ADMIN' || roleName === 'SUPER_ADMIN';
+    const donation = await (prisma as any).donation.findFirst({ where: { providerOrderId: linkId } });
+    if (!donation) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+    if (!isAdmin && donation.referrerUserId !== requester?.id) {
+      return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Can only query your own records' });
+    }
     const pl = await getRazorpayPaymentLink(linkId);
+
+    // Auto-reconcile: if Razorpay shows paid and our donation is not SUCCESS, update immediately
+    if (String(pl.status).toLowerCase() === 'paid' && donation.status !== 'SUCCESS') {
+      try {
+        const intent = donation.paymentIntentId ? await prisma.paymentIntent.findUnique({ where: { id: donation.paymentIntentId } }) : null;
+        await prisma.paymentIntent.update({ where: { id: intent?.id || '' }, data: { status: 'SUCCESS' } }).catch(() => null);
+        await prisma.$transaction(async (tx) => {
+          const anyTx = tx as any;
+          const d = await anyTx.donation.update({ where: { id: donation.id }, data: { status: 'SUCCESS', providerPaymentId: (pl as any)?.payments?.[0]?.payment_id || donation.providerPaymentId } });
+          await anyTx.donationEvent.update({ where: { id: d.eventId }, data: { collectedAmount: { increment: d.amount } } }).catch(() => null);
+        });
+      } catch { /* ignore reconcile errors */ }
+    }
+
     return res.json({ success: true, data: pl });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'DONATION_PAYMENT_LINK_GET_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/payment-links/{id}/status:
+ *   get:
+ *     tags: [Donations]
+ *     summary: Public - Get Razorpay Payment Link status
+ *     description: Public endpoint to check payment link status. If provider reports paid, the donation is reconciled to SUCCESS.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Payment link status }
+ *       404: { description: Not found }
+ */
+router.get('/payment-links/:id/status', async (req, res) => {
+  try {
+    if (!razorpayEnabled()) return res.status(400).json({ success: false, error: 'RAZORPAY_DISABLED' });
+    const linkId = String(req.params.id);
+    // Rate limit per (ip+linkId)
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+    const key = `${ip}:${linkId}`;
+    const now = Date.now();
+    const bucket = rateBucket.get(key);
+    if (!bucket || now - bucket.windowStart > RATE_WINDOW_MS) {
+      rateBucket.set(key, { windowStart: now, count: 1 });
+    } else {
+      bucket.count += 1;
+      if (bucket.count > RATE_LIMIT_PER_KEY) {
+        return res.status(429).json({ success: false, error: 'RATE_LIMITED' });
+      }
+    }
+
+    // Require that the linkId corresponds to a known donation (avoid open proxy to Razorpay)
+    const donation = await (prisma as any).donation.findFirst({ where: { providerOrderId: linkId } });
+    if (!donation) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+
+    // Micro-cache for a few seconds to reduce provider calls during rapid polling
+    const cached = linkStatusCache.get(linkId);
+    if (cached && now - cached.ts < STATUS_TTL_MS) {
+      res.setHeader('Cache-Control', `public, max-age=${Math.floor(STATUS_TTL_MS / 1000)}`);
+      return res.json({ success: true, data: cached.data, cached: true });
+    }
+    const pl = await getRazorpayPaymentLink(linkId);
+
+    // Auto-reconcile if paid
+    if (String(pl.status).toLowerCase() === 'paid' && donation.status !== 'SUCCESS') {
+      try {
+        const intent = donation.paymentIntentId ? await prisma.paymentIntent.findUnique({ where: { id: donation.paymentIntentId } }) : null;
+        await prisma.paymentIntent.update({ where: { id: intent?.id || '' }, data: { status: 'SUCCESS' } }).catch(() => null);
+        await prisma.$transaction(async (tx) => {
+          const anyTx = tx as any;
+          const d = await anyTx.donation.update({ where: { id: donation.id }, data: { status: 'SUCCESS', providerPaymentId: (pl as any)?.payments?.[0]?.payment_id || donation.providerPaymentId } });
+          await anyTx.donationEvent.update({ where: { id: d.eventId }, data: { collectedAmount: { increment: d.amount } } }).catch(() => null);
+        });
+      } catch { /* ignore reconcile errors */ }
+    }
+
+    // Return sanitized status info
+    const payload = { id: pl.id, status: pl.status, amount: (pl as any).amount, currency: (pl as any).currency, short_url: (pl as any).short_url || undefined };
+    linkStatusCache.set(linkId, { ts: now, data: payload });
+    res.setHeader('Cache-Control', `public, max-age=${Math.floor(STATUS_TTL_MS / 1000)}`);
+    return res.json({ success: true, data: payload });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'PAYMENT_LINK_STATUS_FAILED', message: e?.message });
   }
 });
 
@@ -644,6 +1256,85 @@ router.post('/admin/events/:id/gallery/upload', requireAuth, requireHrcAdmin, up
 
 /**
  * @swagger
+ * /donations/admin/payment-links:
+ *   get:
+ *     tags: [Donations - Admin]
+ *     summary: List Razorpay Payment Links (direct from Razorpay)
+ *     description: Proxy to Razorpay Payment Links list API. Useful for audits.
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: query
+ *         name: from
+ *         schema: { type: integer, description: 'epoch seconds' }
+ *       - in: query
+ *         name: to
+ *         schema: { type: integer, description: 'epoch seconds' }
+ *       - in: query
+ *         name: count
+ *         schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+ *       - in: query
+ *         name: skip
+ *         schema: { type: integer, default: 0, minimum: 0 }
+ *     responses:
+ *       200: { description: Razorpay Payment Links list }
+ */
+router.get('/admin/payment-links', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    if (!razorpayEnabled()) return res.status(400).json({ success: false, error: 'RAZORPAY_DISABLED' });
+    const params: any = {};
+    if (req.query.from) params.from = Number(req.query.from);
+    if (req.query.to) params.to = Number(req.query.to);
+    if (req.query.count) params.count = Math.min(100, Math.max(1, Number(req.query.count)));
+    if (req.query.skip) params.skip = Math.max(0, Number(req.query.skip));
+    const rp = await listRazorpayPaymentLinks(params);
+    await logAdminAction({ req, action: 'donation.admin.payment_link.list', target: { type: 'RZP_PAYMENT_LINK' }, payload: params, response: { count: rp?.count }, success: true });
+    return res.json({ success: true, data: rp });
+  } catch (e: any) {
+    await logAdminAction({ req, action: 'donation.admin.payment_link.list', payload: req.query, success: false, errorMessage: e?.message });
+    return res.status(500).json({ success: false, error: 'RP_LINKS_LIST_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/admin/payment-links/{id}:
+ *   patch:
+ *     tags: [Donations - Admin]
+ *     summary: Update a Razorpay Payment Link (notes, etc.)
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               notes: { type: object }
+ *     responses:
+ *       200: { description: Updated Razorpay link }
+ */
+router.patch('/admin/payment-links/:id', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    if (!razorpayEnabled()) return res.status(400).json({ success: false, error: 'RAZORPAY_DISABLED' });
+    const id = String(req.params.id);
+    const payload: any = {};
+    if (req.body && typeof req.body === 'object') Object.assign(payload, req.body);
+    const rp = await updateRazorpayPaymentLink(id, payload);
+    await logAdminAction({ req, action: 'donation.admin.payment_link.patch', target: { type: 'RZP_PAYMENT_LINK', id }, payload, response: rp, success: true });
+    return res.json({ success: true, data: rp });
+  } catch (e: any) {
+    await logAdminAction({ req, action: 'donation.admin.payment_link.patch', target: { type: 'RZP_PAYMENT_LINK', id: String(req.params.id) }, payload: req.body, success: false, errorMessage: e?.message });
+    return res.status(500).json({ success: false, error: 'RP_LINK_UPDATE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
  * /donations/admin/events/{id}/gallery/{imageId}:
  *   put:
  *     tags: [Donations - Admin]
@@ -726,6 +1417,55 @@ router.delete('/admin/events/:id/gallery/:imageId', requireAuth, requireHrcAdmin
     return res.json({ success: true, deleted: Number(result) || 0 });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'GALLERY_DELETE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/admin/audit-logs:
+ *   get:
+ *     tags: [Donations - Admin]
+ *     summary: List admin audit logs
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: query
+ *         name: action
+ *         schema: { type: string }
+ *       - in: query
+ *         name: actorUserId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+ *       - in: query
+ *         name: offset
+ *         schema: { type: integer, default: 0, minimum: 0 }
+ *     responses:
+ *       200: { description: Audit logs }
+ */
+router.get('/admin/audit-logs', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const { action, actorUserId, from, to } = req.query as any;
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const where: any = {};
+    if (action) where.action = String(action);
+    if (actorUserId) where.actorUserId = String(actorUserId);
+    if (from) { const d = new Date(String(from)); if (!isNaN(d.getTime())) (where as any).createdAt = { ...(where.createdAt || {}), gte: d }; }
+    if (to) { const d = new Date(String(to)); if (!isNaN(d.getTime())) (where as any).createdAt = { ...(where.createdAt || {}), lte: d }; }
+    const [rows, total] = await Promise.all([
+      (prisma as any).adminAuditLog.findMany({ where, orderBy: { createdAt: 'desc' }, take: limit, skip: offset }),
+      (prisma as any).adminAuditLog.count({ where })
+    ]);
+    return res.json({ success: true, count: rows.length, total, data: rows });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'AUDIT_LOGS_LIST_FAILED', message: e?.message });
   }
 });
 
@@ -1137,8 +1877,8 @@ router.get('/receipt/:id', async (req, res) => {
     const receiptDate = new Date(donation.createdAt).toLocaleDateString('en-IN');
     const donorName = donation.isAnonymous ? 'Anonymous Donor' : (donation.donorName || 'Donor');
 
-    // Force absolute origin for QR to production domain
-    const origin = 'https://app.hrcitodaynews.in'.replace(/\/$/, '');
+  // Use configured public base URL for QR and branding
+  const origin = (process.env.APP_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || 'https://app.hrcitodaynews.in').toString().replace(/\/$/, '');
     const qrUrl = `${origin}/donations/receipt/${donation.id}/html`;
   const qrDataUrl = await QRCode.toDataURL(qrUrl).catch(() => undefined);
   const pdf = await generateDonationReceiptPdf({
@@ -1155,9 +1895,9 @@ router.get('/receipt/:id', async (req, res) => {
       eightyGValidTo: org.eightyGValidTo,
       authorizedSignatoryName: org.authorizedSignatoryName,
       authorizedSignatoryTitle: org.authorizedSignatoryTitle,
-      // Always fetch branding via public endpoints under the app domain
-      hrciLogoUrl: `${origin}/org/settings/logo`,
-      stampRoundUrl: `${origin}/org/settings/stamp`,
+  // Always fetch branding via public endpoints under the app domain
+  hrciLogoUrl: `${origin}/org/settings/logo`,
+  stampRoundUrl: `${origin}/org/settings/stamp`,
     }, {
       receiptNo,
       receiptDate,
@@ -1211,8 +1951,8 @@ router.get('/receipt/:id/html', async (req, res) => {
     const receiptNo = `DN-${donation.id.slice(-8).toUpperCase()}`;
     const receiptDate = new Date(donation.createdAt).toLocaleDateString('en-IN');
     const donorName = donation.isAnonymous ? 'Anonymous Donor' : (donation.donorName || 'Donor');
-    // Force absolute origin for QR to production domain
-    const origin = 'https://app.hrcitodaynews.in'.replace(/\/$/, '');
+  // Use configured public base URL for QR
+  const origin = (process.env.APP_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || 'https://app.hrcitodaynews.in').toString().replace(/\/$/, '');
     const qrUrl = `${origin}/donations/receipt/${donation.id}/html`;
     const qrDataUrl = await QRCode.toDataURL(qrUrl).catch(() => undefined);
     const html = buildDonationReceiptHtml({
@@ -1291,12 +2031,12 @@ router.get('/receipt/:id/url', async (req, res) => {
     const receiptDate = new Date(donation.createdAt).toLocaleDateString('en-IN');
     const donorName = donation.isAnonymous ? 'Anonymous Donor' : (donation.donorName || 'Donor');
 
-  // Force absolute origin for QR to production domain
-  const origin = 'https://app.hrcitodaynews.in'.replace(/\/$/, '');
+  // Use configured public base URL for QR
+  const origin = (process.env.APP_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || 'https://app.hrcitodaynews.in').toString().replace(/\/$/, '');
   const qrUrl = `${origin}/donations/receipt/${donation.id}/html`;
   const qrDataUrl = await QRCode.toDataURL(qrUrl).catch(() => undefined);
   // Use the same app domain for branding endpoints
-  const appOrigin = 'https://app.hrcitodaynews.in'.replace(/\/$/, '');
+  const appOrigin = (process.env.APP_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || 'https://app.hrcitodaynews.in').toString().replace(/\/$/, '');
   const pdf = await generateDonationReceiptPdf({
       orgName: org.orgName,
       addressLine1: org.addressLine1,
