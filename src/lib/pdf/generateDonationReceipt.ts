@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import axios from 'axios';
 
 export type OrgPublic = {
   orgName: string;
@@ -83,9 +84,43 @@ export function buildDonationReceiptHtml(org: OrgPublic, data: DonationReceiptDa
 export async function generateDonationReceiptPdf(org: OrgPublic, data: DonationReceiptData): Promise<Buffer> {
   // Lazy import puppeteer only when needed
   const puppeteer = await import('puppeteer');
-  let html = buildDonationReceiptHtml(org, data);
+  // Try to inline external images as data URLs to avoid network/CORS issues in headless Chrome
+  const inlineIfPossible = async (url?: string | null): Promise<string | undefined> => {
+    const raw = (url ?? '').toString().trim();
+    if (!raw) return undefined;
+    if (/^data:/i.test(raw)) return raw; // already data URL
+    const base = (process.env.APP_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || '').toString().replace(/\/$/, '');
+    const absUrl = raw.startsWith('/') && base ? `${base}${raw}` : raw;
+    try {
+      const resp = await axios.get(absUrl, { responseType: 'arraybuffer', maxRedirects: 5, validateStatus: () => true });
+      const status = resp.status;
+      if (status >= 200 && status < 400) {
+        const ctype = (resp.headers['content-type'] as string) || 'image/png';
+        const b64 = Buffer.from(resp.data).toString('base64');
+        return `data:${ctype};base64,${b64}`;
+      }
+    } catch {
+      // swallow and fallback to original URL
+    }
+    return absUrl;
+  };
 
-  const browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+  const orgInline: OrgPublic = { ...org };
+  if (org.hrciLogoUrl) orgInline.hrciLogoUrl = await inlineIfPossible(org.hrciLogoUrl);
+  if (org.stampRoundUrl) orgInline.stampRoundUrl = await inlineIfPossible(org.stampRoundUrl);
+
+  let html = buildDonationReceiptHtml(orgInline, data);
+
+  // Choose an executable path if provided by environment (Render/other PaaS), else let Puppeteer find the downloaded Chrome.
+  // Supported envs: PUPPETEER_EXECUTABLE_PATH (official), or GOOGLE_CHROME_BIN (Heroku-like).
+  const execPath =
+    (process.env.PUPPETEER_EXECUTABLE_PATH && String(process.env.PUPPETEER_EXECUTABLE_PATH)) ||
+    (process.env.GOOGLE_CHROME_BIN && String(process.env.GOOGLE_CHROME_BIN)) ||
+    undefined;
+  const browser = await puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    executablePath: execPath,
+  });
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: ['networkidle0'] });
   await page.emulateMediaType('print');

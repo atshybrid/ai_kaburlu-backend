@@ -412,6 +412,10 @@ model Donation {
   providerOrderId   String?
   providerPaymentId String?
   paymentIntentId   String?
+  // Persisted receipt links to avoid regenerating PDFs repeatedly
+  receiptPdfUrl     String?
+  receiptHtmlUrl    String?
+  receiptGeneratedAt DateTime?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 

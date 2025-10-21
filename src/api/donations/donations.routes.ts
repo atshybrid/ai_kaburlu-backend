@@ -41,6 +41,13 @@ function withinWindow(ev: any): boolean {
   return true;
 }
 
+function maskPan(pan?: string | null): string | null {
+  if (!pan) return null;
+  const s = String(pan);
+  // Mask all but last 4 characters
+  return s.replace(/.(?=.{4}$)/g, 'X');
+}
+
 // Resolve the public base URL for constructing absolute links
 function resolvePublicBase(req: any): string {
   const envBase = (process.env.APP_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || '').toString().trim();
@@ -49,6 +56,60 @@ function resolvePublicBase(req: any): string {
   const proto = (xfProto && xfProto.split(',')[0]) || req.protocol || 'http';
   const host = (req.get('x-forwarded-host') || req.get('host') || '').split(',')[0];
   return host ? `${proto}://${host}` : '';
+}
+
+// Generate and persist receipt links (PDF uploaded + HTML absolute URL). Idempotent: returns existing if already set.
+async function ensureReceiptLinks(donation: any, req: any): Promise<{ pdfUrl: string; htmlUrl: string }> {
+  if (donation.receiptPdfUrl && donation.receiptHtmlUrl) {
+    return { pdfUrl: donation.receiptPdfUrl, htmlUrl: donation.receiptHtmlUrl };
+  }
+  const org = await (prisma as any).orgSetting.findFirst({ orderBy: { updatedAt: 'desc' } });
+  if (!org) throw new Error('ORG_SETTINGS_REQUIRED');
+  const origin = (process.env.APP_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || '').toString().replace(/\/$/, '');
+  const htmlUrl = origin ? `${origin}/donations/receipt/${donation.id}/html` : `${req?.protocol || 'http'}://${req?.get?.('host') || ''}/donations/receipt/${donation.id}/html`;
+
+  // Build PDF once and upload
+  const amountFmt = (donation.amount || 0).toLocaleString('en-IN');
+  const receiptNo = `DN-${String(donation.id).slice(-8).toUpperCase()}`;
+  const receiptDate = new Date(donation.createdAt).toLocaleDateString('en-IN');
+  const donorName = donation.isAnonymous ? 'Anonymous Donor' : (donation.donorName || 'Donor');
+  const qrDataUrl = await QRCode.toDataURL(htmlUrl).catch(() => undefined);
+  const appOrigin = origin || `${req?.protocol || 'http'}://${req?.get?.('host') || ''}`.replace(/\/$/, '');
+  const pdf = await generateDonationReceiptPdf({
+    orgName: org.orgName,
+    addressLine1: org.addressLine1,
+    addressLine2: org.addressLine2,
+    city: org.city,
+    state: org.state,
+    pincode: org.pincode,
+    country: org.country,
+    pan: org.pan,
+    eightyGNumber: org.eightyGNumber,
+    eightyGValidFrom: org.eightyGValidFrom,
+    eightyGValidTo: org.eightyGValidTo,
+    authorizedSignatoryName: org.authorizedSignatoryName,
+    authorizedSignatoryTitle: org.authorizedSignatoryTitle,
+    hrciLogoUrl: `${appOrigin}/org/settings/logo`,
+    stampRoundUrl: `${appOrigin}/org/settings/stamp`,
+  }, {
+    receiptNo,
+    receiptDate,
+    donorName,
+    donorAddress: donation.donorAddress || '',
+    donorPan: donation.donorPan || undefined,
+    amount: amountFmt,
+    mode: donation.providerPaymentId ? 'UPI/Card/NetBanking' : 'Cash/Manual',
+    purpose: 'Donation',
+    qrDataUrl,
+  });
+  if (!R2_BUCKET) throw new Error('STORAGE_NOT_CONFIGURED');
+  const d = new Date(donation.createdAt);
+  const datePath = `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
+  const key = `donations/receipts/${datePath}/${receiptNo}.pdf`;
+  await r2Client.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: Buffer.from(pdf), ContentType: 'application/pdf', CacheControl: 'public, max-age=31536000' }));
+  const pdfUrl = getPublicUrl(key);
+  const updated = await (prisma as any).donation.update({ where: { id: donation.id }, data: { receiptPdfUrl: pdfUrl, receiptHtmlUrl: htmlUrl, receiptGeneratedAt: new Date() } });
+  return { pdfUrl: updated.receiptPdfUrl, htmlUrl: updated.receiptHtmlUrl };
 }
 
 /**
@@ -593,6 +654,18 @@ router.post('/members/payment-links', requireAuth, async (req: any, res) => {
  *       - in: query
  *         name: offset
  *         schema: { type: integer, default: 0, minimum: 0 }
+ *       - in: query
+ *         name: includeShortUrl
+ *         schema: { type: boolean, default: false }
+ *         description: When true, fetch Razorpay payment link short URL for each item (may be slower)
+ *       - in: query
+ *         name: includeShortUrl
+ *         schema: { type: boolean, default: false }
+ *         description: When true, fetch Razorpay payment link short URL for each item (may be slower)
+ *       - in: query
+ *         name: includeShortUrl
+ *         schema: { type: boolean, default: false }
+ *         description: When true, fetch Razorpay payment link short URL for each item (may be slower)
  *     responses:
  *       200:
  *         description: List of member payment links and totals
@@ -604,8 +677,9 @@ router.get('/members/payment-links', requireAuth, async (req: any, res) => {
 
     const { from, to, status, eventId } = req.query as any;
     const verify = String(req.query.verify || '').toLowerCase() === 'true';
-    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
     const offset = Math.max(0, Number(req.query.offset) || 0);
+  const includeShortUrl = String(req.query.includeShortUrl || '').toLowerCase() === 'true';
 
     const where: any = {
       referrerUserId: userId,
@@ -633,7 +707,8 @@ router.get('/members/payment-links', requireAuth, async (req: any, res) => {
         orderBy: { createdAt: 'desc' },
         take: limit,
         skip: offset,
-        select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true }
+        select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true, receiptPdfUrl: true, receiptHtmlUrl: true,
+          donorName: true, donorAddress: true, donorMobile: true, donorEmail: true, donorPan: true, isAnonymous: true }
       }),
       (prisma as any).donation.count({ where })
     ]);
@@ -665,7 +740,8 @@ router.get('/members/payment-links', requireAuth, async (req: any, res) => {
           orderBy: { createdAt: 'desc' },
           take: limit,
           skip: offset,
-          select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true }
+          select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true, receiptPdfUrl: true, receiptHtmlUrl: true,
+            donorName: true, donorAddress: true, donorMobile: true, donorEmail: true, donorPan: true, isAnonymous: true }
         });
       }
     }
@@ -684,7 +760,39 @@ router.get('/members/payment-links', requireAuth, async (req: any, res) => {
       totals.overall.amount += amt;
     }
 
-    return res.json({ success: true, count: rows.length, total: totalCount, totals, data: rows, reconciled });
+    // Optionally fetch short URLs
+    const shortUrlMap = new Map<string, string | null>();
+    if (includeShortUrl && razorpayEnabled()) {
+      for (const r of rows) {
+        if (r.providerOrderId && !shortUrlMap.has(r.providerOrderId)) {
+          try {
+            const pl = await getRazorpayPaymentLink(String(r.providerOrderId));
+            shortUrlMap.set(r.providerOrderId, (pl as any).short_url || null);
+          } catch { shortUrlMap.set(r.providerOrderId, null); }
+        }
+      }
+    }
+    // Backfill missing receipts for SUCCESS rows (cap to first 3 to avoid heavy work per call)
+    let backfilled = 0;
+    for (const r of rows) {
+      if (backfilled >= 3) break;
+      if (r.status === 'SUCCESS' && (!r.receiptPdfUrl || !r.receiptHtmlUrl)) {
+        try {
+          const full = await (prisma as any).donation.findUnique({ where: { id: r.id } });
+          await ensureReceiptLinks(full, req);
+          backfilled++;
+        } catch {}
+      }
+    }
+    // Attach masked PAN, shortUrl, and receipt links
+    const data = rows.map((r: any) => ({
+      ...r,
+      donorPanMasked: maskPan(r.donorPan),
+      shortUrl: r.providerOrderId ? (shortUrlMap.get(r.providerOrderId) ?? null) : null,
+      receiptPdfUrl: r.receiptPdfUrl || null,
+      receiptHtmlUrl: r.receiptHtmlUrl || null,
+    }));
+    return res.json({ success: true, count: data.length, total: totalCount, totals, data, reconciled });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'MEMBER_PAYMENT_LINKS_LIST_FAILED', message: e?.message });
   }
@@ -730,8 +838,9 @@ router.get('/admin/members/:userId/payment-links', requireAuth, requireHrcAdmin,
     const memberUserId = String(req.params.userId);
     const { from, to, status, eventId } = req.query as any;
     const verify = String(req.query.verify || '').toLowerCase() === 'true';
-    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
-    const offset = Math.max(0, Number(req.query.offset) || 0);
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  const includeShortUrl = String(req.query.includeShortUrl || '').toLowerCase() === 'true';
 
     const where: any = {
       referrerUserId: memberUserId,
@@ -751,7 +860,8 @@ router.get('/admin/members/:userId/payment-links', requireAuth, requireHrcAdmin,
         orderBy: { createdAt: 'desc' },
         take: limit,
         skip: offset,
-        select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true }
+        select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true, receiptPdfUrl: true, receiptHtmlUrl: true,
+          donorName: true, donorAddress: true, donorMobile: true, donorEmail: true, donorPan: true, isAnonymous: true }
       }),
       (prisma as any).donation.count({ where })
     ]);
@@ -770,6 +880,8 @@ router.get('/admin/members/:userId/payment-links', requireAuth, requireHrcAdmin,
                 const updated = await anyTx.donation.update({ where: { id: d.id }, data: { status: 'SUCCESS', providerPaymentId: (pl as any)?.payments?.[0]?.payment_id || d.providerPaymentId } });
                 await anyTx.donationEvent.update({ where: { id: updated.eventId }, data: { collectedAmount: { increment: updated.amount } } }).catch(() => null);
               });
+              // Generate and persist receipt links for newly paid donations
+              try { await ensureReceiptLinks({ ...d }, req); } catch {}
               reconciled++;
             }
           } catch { }
@@ -781,7 +893,8 @@ router.get('/admin/members/:userId/payment-links', requireAuth, requireHrcAdmin,
           orderBy: { createdAt: 'desc' },
           take: limit,
           skip: offset,
-          select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true }
+          select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true, receiptPdfUrl: true, receiptHtmlUrl: true,
+            donorName: true, donorAddress: true, donorMobile: true, donorEmail: true, donorPan: true, isAnonymous: true }
         });
       }
     }
@@ -799,7 +912,36 @@ router.get('/admin/members/:userId/payment-links', requireAuth, requireHrcAdmin,
       totals.overall.amount += amt;
     }
 
-    return res.json({ success: true, count: rows.length, total: totalCount, totals, data: rows, reconciled });
+    const shortUrlMap = new Map<string, string | null>();
+    if (includeShortUrl && razorpayEnabled()) {
+      for (const r of rows) {
+        if (r.providerOrderId && !shortUrlMap.has(r.providerOrderId)) {
+          try {
+            const pl = await getRazorpayPaymentLink(String(r.providerOrderId));
+            shortUrlMap.set(r.providerOrderId, (pl as any).short_url || null);
+          } catch { shortUrlMap.set(r.providerOrderId, null); }
+        }
+      }
+    }
+    let backfilled = 0;
+    for (const r of rows) {
+      if (backfilled >= 3) break;
+      if (r.status === 'SUCCESS' && (!r.receiptPdfUrl || !r.receiptHtmlUrl)) {
+        try {
+          const full = await (prisma as any).donation.findUnique({ where: { id: r.id } });
+          await ensureReceiptLinks(full, req);
+          backfilled++;
+        } catch {}
+      }
+    }
+    const data = rows.map((r: any) => ({
+      ...r,
+      donorPanMasked: maskPan(r.donorPan),
+      shortUrl: r.providerOrderId ? (shortUrlMap.get(r.providerOrderId) ?? null) : null,
+      receiptPdfUrl: r.receiptPdfUrl || null,
+      receiptHtmlUrl: r.receiptHtmlUrl || null,
+    }));
+    return res.json({ success: true, count: data.length, total: totalCount, totals, data, reconciled });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'ADMIN_MEMBER_PAYMENT_LINKS_LIST_FAILED', message: e?.message });
   }
@@ -854,8 +996,9 @@ router.get('/members/:userId/payment-links', requireAuth, async (req: any, res) 
 
     const { from, to, status, eventId } = req.query as any;
     const verify = String(req.query.verify || '').toLowerCase() === 'true';
-    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
-    const offset = Math.max(0, Number(req.query.offset) || 0);
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  const includeShortUrl = String(req.query.includeShortUrl || '').toLowerCase() === 'true';
 
     const where: any = {
       referrerUserId: paramUserId,
@@ -872,7 +1015,8 @@ router.get('/members/:userId/payment-links', requireAuth, async (req: any, res) 
         orderBy: { createdAt: 'desc' },
         take: limit,
         skip: offset,
-        select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true }
+        select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true, receiptPdfUrl: true, receiptHtmlUrl: true,
+          donorName: true, donorAddress: true, donorMobile: true, donorEmail: true, donorPan: true, isAnonymous: true }
       }),
       (prisma as any).donation.count({ where })
     ]);
@@ -902,7 +1046,8 @@ router.get('/members/:userId/payment-links', requireAuth, async (req: any, res) 
           orderBy: { createdAt: 'desc' },
           take: limit,
           skip: offset,
-          select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true }
+          select: { id: true, eventId: true, amount: true, status: true, providerOrderId: true, providerPaymentId: true, createdAt: true, receiptPdfUrl: true, receiptHtmlUrl: true,
+            donorName: true, donorAddress: true, donorMobile: true, donorEmail: true, donorPan: true, isAnonymous: true }
         });
       }
     }
@@ -920,7 +1065,36 @@ router.get('/members/:userId/payment-links', requireAuth, async (req: any, res) 
       totals.overall.amount += amt;
     }
 
-    return res.json({ success: true, count: rows.length, total: totalCount, totals, data: rows, reconciled });
+    const shortUrlMap = new Map<string, string | null>();
+    if (includeShortUrl && razorpayEnabled()) {
+      for (const r of rows) {
+        if (r.providerOrderId && !shortUrlMap.has(r.providerOrderId)) {
+          try {
+            const pl = await getRazorpayPaymentLink(String(r.providerOrderId));
+            shortUrlMap.set(r.providerOrderId, (pl as any).short_url || null);
+          } catch { shortUrlMap.set(r.providerOrderId, null); }
+        }
+      }
+    }
+    let backfilled = 0;
+    for (const r of rows) {
+      if (backfilled >= 3) break;
+      if (r.status === 'SUCCESS' && (!r.receiptPdfUrl || !r.receiptHtmlUrl)) {
+        try {
+          const full = await (prisma as any).donation.findUnique({ where: { id: r.id } });
+          await ensureReceiptLinks(full, req);
+          backfilled++;
+        } catch {}
+      }
+    }
+    const data = rows.map((r: any) => ({
+      ...r,
+      donorPanMasked: maskPan(r.donorPan),
+      shortUrl: r.providerOrderId ? (shortUrlMap.get(r.providerOrderId) ?? null) : null,
+      receiptPdfUrl: r.receiptPdfUrl || null,
+      receiptHtmlUrl: r.receiptHtmlUrl || null,
+    }));
+    return res.json({ success: true, count: data.length, total: totalCount, totals, data, reconciled });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'MEMBER_PAYMENT_LINKS_USER_LIST_FAILED', message: e?.message });
   }
@@ -1723,6 +1897,7 @@ router.post('/confirm', async (req, res) => {
     if (!donation) return res.status(404).json({ success: false, error: 'DONATION_NOT_FOUND' });
 
     if (intent.status === 'SUCCESS' || donation.status === 'SUCCESS') {
+      try { await ensureReceiptLinks(donation, req); } catch {}
       return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id } });
     }
 
@@ -1755,7 +1930,8 @@ router.post('/confirm', async (req, res) => {
         if (link) await anyTx.donationShareLink.update({ where: { id: link.id }, data: { successCount: { increment: 1 } } });
       }
     });
-    return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id } });
+  try { await ensureReceiptLinks(donation, req); } catch {}
+  return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'DONATION_CONFIRM_FAILED', message: e?.message });
   }
@@ -1791,7 +1967,10 @@ router.post('/manual-verify', requireAuth, async (req, res) => {
     if (!donationId) return res.status(400).json({ success: false, error: 'DONATION_ID_REQUIRED' });
     const donation = await (prisma as any).donation.findUnique({ where: { id: String(donationId) } });
     if (!donation) return res.status(404).json({ success: false, error: 'DONATION_NOT_FOUND' });
-    if (donation.status === 'SUCCESS') return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id } });
+    if (donation.status === 'SUCCESS') {
+      try { await ensureReceiptLinks(donation, req); } catch {}
+      return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id } });
+    }
     const intent = await prisma.paymentIntent.findUnique({ where: { id: String(donation.paymentIntentId) } });
     if (!intent) return res.status(404).json({ success: false, error: 'INTENT_NOT_FOUND' });
 
@@ -1836,11 +2015,12 @@ router.post('/manual-verify', requireAuth, async (req, res) => {
         if (link) await anyTx.donationShareLink.update({ where: { id: link.id }, data: { successCount: { increment: 1 } } });
       }
     });
-    return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id } });
+  try { await ensureReceiptLinks(donation, req); } catch {}
+  return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'DONATION_MANUAL_VERIFY_FAILED', message: e?.message });
   }
-});
+  });
 
 /**
  * @swagger
@@ -1895,7 +2075,7 @@ router.get('/receipt/:id', async (req, res) => {
       eightyGValidTo: org.eightyGValidTo,
       authorizedSignatoryName: org.authorizedSignatoryName,
       authorizedSignatoryTitle: org.authorizedSignatoryTitle,
-  // Always fetch branding via public endpoints under the app domain
+  // Use app endpoints so relative paths + base URL work reliably
   hrciLogoUrl: `${origin}/org/settings/logo`,
   stampRoundUrl: `${origin}/org/settings/stamp`,
     }, {
@@ -2023,6 +2203,9 @@ router.get('/receipt/:id/url', async (req, res) => {
     const donation = await (prisma as any).donation.findUnique({ where: { id: String(req.params.id) } });
     if (!donation) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
     if (donation.status !== 'SUCCESS') return res.status(400).json({ success: false, error: 'RECEIPT_AVAILABLE_AFTER_SUCCESS' });
+    if (donation.receiptPdfUrl) {
+      return res.json({ success: true, data: { url: donation.receiptPdfUrl } });
+    }
     const org = await (prisma as any).orgSetting.findFirst({ orderBy: { updatedAt: 'desc' } });
     if (!org) return res.status(400).json({ success: false, error: 'ORG_SETTINGS_REQUIRED', message: 'Set organization settings first from admin' });
 
