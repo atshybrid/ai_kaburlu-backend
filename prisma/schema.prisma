@@ -416,6 +416,8 @@ model Donation {
   receiptPdfUrl     String?
   receiptHtmlUrl    String?
   receiptGeneratedAt DateTime?
+  // Denormalized donor photo for admin listings and public displays
+  donorPhotoUrl     String?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 

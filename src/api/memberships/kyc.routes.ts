@@ -71,7 +71,9 @@ router.get('/:membershipId', requireAuth, async (req, res) => {
       const m = await pickUserMembership(user.id);
       if (!m) return res.status(404).json({ success: false, error: 'NO_MEMBERSHIP' });
       const kyc = await (prisma as any).membershipKyc.findUnique({ where: { membershipId: m.id } }).catch(() => null);
-      return res.json({ success: true, data: kyc || null, membershipId: m.id });
+      const hasKyc = !!kyc;
+      const status = hasKyc ? (kyc.status || 'PENDING') : 'NOT_SUBMITTED';
+      return res.json({ success: true, data: kyc || null, membershipId: m.id, hasKyc, status });
     }
     const user: any = (req as any).user;
     
@@ -235,7 +237,7 @@ router.post('/', requireAuth, async (req, res) => {
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Your KYC record (may be null)
+ *         description: Your KYC record (may be null); includes normalized status
  *         content:
  *           application/json:
  *             schema:
@@ -245,6 +247,12 @@ router.post('/', requireAuth, async (req, res) => {
  *                 data:
  *                   type: object
  *                   nullable: true
+ *                 membershipId: { type: string }
+ *                 hasKyc: { type: boolean }
+ *                 status:
+ *                   type: string
+ *                   description: Normalized KYC status
+ *                   enum: [NOT_SUBMITTED, PENDING, UNDER_REVIEW, APPROVED, REJECTED]
  *       404:
  *         description: No membership found for user
  */
@@ -254,7 +262,9 @@ router.get('/me', requireAuth, async (req, res) => {
     const m = await pickUserMembership(user.id);
     if (!m) return res.status(404).json({ success: false, error: 'NO_MEMBERSHIP' });
     const kyc = await (prisma as any).membershipKyc.findUnique({ where: { membershipId: m.id } }).catch(() => null);
-    return res.json({ success: true, data: kyc || null, membershipId: m.id });
+    const hasKyc = !!kyc;
+    const status = hasKyc ? (kyc.status || 'PENDING') : 'NOT_SUBMITTED';
+    return res.json({ success: true, data: kyc || null, membershipId: m.id, hasKyc, status });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'KYC_ME_GET_FAILED', message: e?.message });
   }

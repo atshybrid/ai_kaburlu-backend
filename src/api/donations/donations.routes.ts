@@ -15,6 +15,7 @@ const router = Router();
 
 // Small in-memory helpers for caching and rate limiting (stateless fallback; fine for a single instance)
 const linkStatusCache = new Map<string, { ts: number; data: any }>();
+const orderStatusCache = new Map<string, { ts: number; data: any }>();
 const rateBucket = new Map<string, { windowStart: number; count: number }>();
 const STATUS_TTL_MS = 3_000; // micro-cache 3s
 const RATE_WINDOW_MS = 60_000; // 1 minute
@@ -654,14 +655,6 @@ router.post('/members/payment-links', requireAuth, async (req: any, res) => {
  *       - in: query
  *         name: offset
  *         schema: { type: integer, default: 0, minimum: 0 }
- *       - in: query
- *         name: includeShortUrl
- *         schema: { type: boolean, default: false }
- *         description: When true, fetch Razorpay payment link short URL for each item (may be slower)
- *       - in: query
- *         name: includeShortUrl
- *         schema: { type: boolean, default: false }
- *         description: When true, fetch Razorpay payment link short URL for each item (may be slower)
  *       - in: query
  *         name: includeShortUrl
  *         schema: { type: boolean, default: false }
@@ -1471,6 +1464,162 @@ router.get('/admin/payment-links', requireAuth, requireHrcAdmin, async (req, res
 
 /**
  * @swagger
+ * /donations/admin/donations:
+ *   get:
+ *     tags: [Donations - Admin]
+ *     summary: List all donations (admin)
+ *     description: Admin listing of donations with filters, pagination and totals by status. Includes donorPhotoUrl and receipt links if present.
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string }
+ *         description: Comma-separated list of statuses (PENDING,SUCCESS,FAILED,REFUND)
+ *       - in: query
+ *         name: eventId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: referrerUserId
+ *         schema: { type: string }
+ *         description: Filter by member attribution (creator of link/share)
+ *       - in: query
+ *         name: mobile
+ *         schema: { type: string }
+ *       - in: query
+ *         name: email
+ *         schema: { type: string }
+ *       - in: query
+ *         name: pan
+ *         schema: { type: string }
+ *       - in: query
+ *         name: name
+ *         schema: { type: string }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+ *       - in: query
+ *         name: offset
+ *         schema: { type: integer, default: 0, minimum: 0 }
+ *       - in: query
+ *         name: verify
+ *         schema: { type: boolean, default: false }
+ *         description: If true, best-effort reconcile pending rows with provider
+ *     responses:
+ *       200:
+ *         description: Donations list
+ */
+router.get('/admin/donations', requireAuth, requireHrcAdmin, async (req: any, res) => {
+  try {
+    const { from, to, status, eventId, referrerUserId, mobile, email, pan, name } = req.query as any;
+    const verify = String(req.query.verify || '').toLowerCase() === 'true';
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+
+    const where: any = {};
+    if (from) { const d = new Date(String(from)); if (!isNaN(d.getTime())) (where as any).createdAt = { ...(where.createdAt || {}), gte: d }; }
+    if (to) { const d = new Date(String(to)); if (!isNaN(d.getTime())) (where as any).createdAt = { ...(where.createdAt || {}), lte: d }; }
+    if (status) {
+      const arr = String(status).split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+      if (arr.length) (where as any).status = { in: arr };
+    }
+    if (eventId) (where as any).eventId = String(eventId);
+    if (referrerUserId) (where as any).referrerUserId = String(referrerUserId);
+    if (mobile) (where as any).donorMobile = { contains: String(mobile), mode: 'insensitive' };
+    if (email) (where as any).donorEmail = { contains: String(email), mode: 'insensitive' };
+    if (pan) (where as any).donorPan = { equals: String(pan).toUpperCase() };
+    if (name) (where as any).donorName = { contains: String(name), mode: 'insensitive' };
+
+    let [rows, totalCount] = await Promise.all([
+      (prisma as any).donation.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip: offset,
+        select: {
+          id: true, eventId: true, amount: true, currency: true, status: true,
+          providerOrderId: true, providerPaymentId: true, createdAt: true, updatedAt: true,
+          donorName: true, donorAddress: true, donorMobile: true, donorEmail: true, donorPan: true, isAnonymous: true,
+          receiptPdfUrl: true, receiptHtmlUrl: true, donorPhotoUrl: true,
+          referrerUserId: true,
+        }
+      }),
+      (prisma as any).donation.count({ where })
+    ]);
+
+    // Optional best-effort reconciliation for pending rows in page
+    let reconciled = 0;
+    if (verify && razorpayEnabled()) {
+      for (const d of rows) {
+        if (d.status === 'PENDING') {
+          try {
+            if (d.providerOrderId) {
+              const payments = await getRazorpayOrderPayments(String(d.providerOrderId));
+              const successPayment = payments?.items?.find((p: any) => ['captured','authorized'].includes(String(p.status||'').toLowerCase()));
+              if (successPayment) {
+                const intent = d.paymentIntentId ? await prisma.paymentIntent.findUnique({ where: { id: String((await (prisma as any).donation.findUnique({ where: { id: d.id } })).paymentIntentId) } }).catch(() => null) : null;
+                await prisma.paymentIntent.update({ where: { id: intent?.id || '' }, data: { status: 'SUCCESS' } }).catch(() => null);
+                await prisma.$transaction(async (tx) => {
+                  const anyTx = tx as any;
+                  const updated = await anyTx.donation.update({ where: { id: d.id }, data: { status: 'SUCCESS', providerPaymentId: successPayment.id } });
+                  await anyTx.donationEvent.update({ where: { id: updated.eventId }, data: { collectedAmount: { increment: updated.amount } } }).catch(() => null);
+                });
+                reconciled++;
+              }
+            }
+          } catch { }
+        }
+      }
+      if (reconciled > 0) {
+        rows = await (prisma as any).donation.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          skip: offset,
+          select: {
+            id: true, eventId: true, amount: true, currency: true, status: true,
+            providerOrderId: true, providerPaymentId: true, createdAt: true, updatedAt: true,
+            donorName: true, donorAddress: true, donorMobile: true, donorEmail: true, donorPan: true, isAnonymous: true,
+            receiptPdfUrl: true, receiptHtmlUrl: true, donorPhotoUrl: true,
+            referrerUserId: true,
+          }
+        });
+      }
+    }
+
+    // Totals by status for the current filter
+    const gb = await (prisma as any).donation.groupBy({
+      by: ['status'],
+      where,
+      _count: { _all: true },
+      _sum: { amount: true }
+    });
+    const totals: any = { overall: { count: totalCount, amount: 0 }, byStatus: {} };
+    for (const r of gb) {
+      const amt = Number(r._sum?.amount || 0);
+      totals.byStatus[r.status] = { count: Number(r._count?._all || 0), amount: amt };
+      totals.overall.amount += amt;
+    }
+
+    // Mask PAN in response for safety
+    const data = rows.map((r: any) => ({
+      ...r,
+      donorPanMasked: r.donorPan ? String(r.donorPan).replace(/.(?=.{4}$)/g, 'X') : null,
+    }));
+
+    return res.json({ success: true, count: data.length, total: totalCount, totals, data, reconciled });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'ADMIN_DONATIONS_LIST_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
  * /donations/admin/payment-links/{id}:
  *   patch:
  *     tags: [Donations - Admin]
@@ -1757,6 +1906,24 @@ router.get('/share-links/:code', async (req, res) => {
  *     responses:
  *       200:
  *         description: Order created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     order:
+ *                       type: object
+ *                       properties:
+ *                         orderId: { type: string, description: 'Internal PaymentIntent ID' }
+ *                         amount: { type: integer }
+ *                         currency: { type: string, example: 'INR' }
+ *                         provider: { type: string, example: 'razorpay' }
+ *                         providerOrderId: { type: string, description: 'Razorpay Order ID' }
+ *                         providerKeyId: { type: string, description: 'Use with Razorpay SDK' }
  *       400:
  *         description: Validation error (e.g., invalid amount or PAN missing for high value donation > 10,000 INR)
  *         content:
@@ -1886,6 +2053,8 @@ router.post('/orders', async (req, res) => {
  *                   properties:
  *                     status: { type: string }
  *                     donationId: { type: string }
+ *                     receiptPdfUrl: { type: string, nullable: true }
+ *                     receiptHtmlUrl: { type: string, nullable: true }
  */
 router.post('/confirm', async (req, res) => {
   try {
@@ -1897,8 +2066,9 @@ router.post('/confirm', async (req, res) => {
     if (!donation) return res.status(404).json({ success: false, error: 'DONATION_NOT_FOUND' });
 
     if (intent.status === 'SUCCESS' || donation.status === 'SUCCESS') {
-      try { await ensureReceiptLinks(donation, req); } catch {}
-      return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id } });
+      let urls: any = {};
+      try { const u = await ensureReceiptLinks(donation, req); urls = { receiptPdfUrl: u.pdfUrl, receiptHtmlUrl: u.htmlUrl }; } catch {}
+      return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id, ...urls } });
     }
 
     if (status === 'FAILED') {
@@ -1930,10 +2100,224 @@ router.post('/confirm', async (req, res) => {
         if (link) await anyTx.donationShareLink.update({ where: { id: link.id }, data: { successCount: { increment: 1 } } });
       }
     });
-  try { await ensureReceiptLinks(donation, req); } catch {}
-  return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id } });
+    let urls: any = {};
+    try { const u = await ensureReceiptLinks(donation, req); urls = { receiptPdfUrl: u.pdfUrl, receiptHtmlUrl: u.htmlUrl }; } catch {}
+    return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id, ...urls } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'DONATION_CONFIRM_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/orders/{id}/status:
+ *   get:
+ *     tags: [Donations]
+ *     summary: Public - Get Razorpay Order payment status
+ *     description: Checks Razorpay Order payments; if captured/authorized, marks donation SUCCESS, updates totals, and returns receipt URLs.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Order status and receipt links when paid
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     providerOrderId: { type: string }
+ *                     paid: { type: boolean }
+ *                     paymentId: { type: string, nullable: true }
+ *                     status: { type: string, enum: [PENDING, SUCCESS, FAILED] }
+ *                     receiptPdfUrl: { type: string, nullable: true }
+ *                     receiptHtmlUrl: { type: string, nullable: true }
+ *       404: { description: Donation not found for this order }
+ */
+router.get('/orders/:id/status', async (req, res) => {
+  try {
+    if (!razorpayEnabled()) return res.status(400).json({ success: false, error: 'RAZORPAY_DISABLED' });
+    const providerOrderId = String(req.params.id);
+    // Rate limit per (ip+orderId)
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || (req as any).ip || 'unknown';
+    const key = `${ip}:ord:${providerOrderId}`;
+    const now = Date.now();
+    const bucket = rateBucket.get(key);
+    if (!bucket || now - bucket.windowStart > RATE_WINDOW_MS) {
+      rateBucket.set(key, { windowStart: now, count: 1 });
+    } else {
+      bucket.count += 1;
+      if (bucket.count > RATE_LIMIT_PER_KEY) {
+        return res.status(429).json({ success: false, error: 'RATE_LIMITED' });
+      }
+    }
+
+    const donation = await (prisma as any).donation.findFirst({ where: { providerOrderId: providerOrderId } });
+    if (!donation) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+
+    // Micro-cache
+    const cached = orderStatusCache.get(providerOrderId);
+    if (cached && now - cached.ts < STATUS_TTL_MS) {
+      res.setHeader('Cache-Control', `public, max-age=${Math.floor(STATUS_TTL_MS / 1000)}`);
+      return res.json({ success: true, data: cached.data, cached: true });
+    }
+
+    const payments = await getRazorpayOrderPayments(providerOrderId);
+    const successPayment = payments?.items?.find((p: any) => {
+      const st = String(p.status || '').toLowerCase();
+      return st === 'captured' || st === 'authorized';
+    });
+
+    let updatedDonation = donation;
+    if (successPayment && donation.status !== 'SUCCESS') {
+      try {
+        const intent = donation.paymentIntentId ? await prisma.paymentIntent.findUnique({ where: { id: donation.paymentIntentId } }) : null;
+        await prisma.paymentIntent.update({ where: { id: intent?.id || '' }, data: { status: 'SUCCESS' } }).catch(() => null);
+        await prisma.$transaction(async (tx) => {
+          const anyTx = tx as any;
+          const d = await anyTx.donation.update({ where: { id: donation.id }, data: { status: 'SUCCESS', providerPaymentId: successPayment.id } });
+          await anyTx.donationEvent.update({ where: { id: d.eventId }, data: { collectedAmount: { increment: d.amount } } }).catch(() => null);
+          updatedDonation = d;
+        });
+      } catch {}
+    }
+
+    // Ensure receipt links (best-effort)
+    let urls: any = { receiptPdfUrl: updatedDonation.receiptPdfUrl || null, receiptHtmlUrl: updatedDonation.receiptHtmlUrl || null };
+    if (updatedDonation.status === 'SUCCESS' && (!updatedDonation.receiptPdfUrl || !updatedDonation.receiptHtmlUrl)) {
+      try { const u = await ensureReceiptLinks(updatedDonation, req); urls = { receiptPdfUrl: u.pdfUrl, receiptHtmlUrl: u.htmlUrl }; } catch {}
+    }
+
+    const payload = {
+      providerOrderId,
+      paid: !!successPayment || updatedDonation.status === 'SUCCESS',
+      paymentId: successPayment?.id || updatedDonation.providerPaymentId || null,
+      status: updatedDonation.status,
+      ...urls,
+    };
+    orderStatusCache.set(providerOrderId, { ts: now, data: payload });
+    res.setHeader('Cache-Control', `public, max-age=${Math.floor(STATUS_TTL_MS / 1000)}`);
+    return res.json({ success: true, data: payload });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'ORDER_STATUS_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /donations/receipts/search:
+ *   get:
+ *     tags: [Donations]
+ *     summary: Public - Search paid donations to fetch 80G receipts
+ *     parameters:
+ *       - in: query
+ *         name: donationId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: mobile
+ *         schema: { type: string }
+ *       - in: query
+ *         name: pan
+ *         schema: { type: string }
+ *       - in: query
+ *         name: name
+ *         schema: { type: string }
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+ *       - in: query
+ *         name: offset
+ *         schema: { type: integer, default: 0, minimum: 0 }
+ *     responses:
+ *       200:
+ *         description: Matching paid donations with receipt links
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 count: { type: integer }
+ *                 total: { type: integer }
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id: { type: string }
+ *                       amount: { type: integer }
+ *                       currency: { type: string }
+ *                       createdAt: { type: string, format: date-time }
+ *                       donorName: { type: string }
+ *                       donorMobile: { type: string }
+ *                       donorEmail: { type: string }
+ *                       donorPanMasked: { type: string, nullable: true }
+ *                       receiptPdfUrl: { type: string, nullable: true }
+ *                       receiptHtmlUrl: { type: string, nullable: true }
+ */
+router.get('/receipts/search', async (req, res) => {
+  try {
+    const { donationId, mobile, pan, name, from, to } = req.query as any;
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 20));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const where: any = { status: 'SUCCESS' };
+    if (donationId) where.id = String(donationId);
+    if (mobile) where.donorMobile = { contains: String(mobile), mode: 'insensitive' };
+    if (pan) where.donorPan = { equals: String(pan).toUpperCase() };
+    if (name) where.donorName = { contains: String(name), mode: 'insensitive' };
+    if (from) { const d = new Date(String(from)); if (!isNaN(d.getTime())) (where as any).createdAt = { ...(where.createdAt || {}), gte: d }; }
+    if (to) { const d = new Date(String(to)); if (!isNaN(d.getTime())) (where as any).createdAt = { ...(where.createdAt || {}), lte: d }; }
+
+    const [rows, total] = await Promise.all([
+      (prisma as any).donation.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip: offset,
+        select: {
+          id: true, amount: true, currency: true, createdAt: true,
+          donorName: true, donorMobile: true, donorEmail: true, donorPan: true,
+          receiptPdfUrl: true, receiptHtmlUrl: true, providerPaymentId: true,
+        }
+      }),
+      (prisma as any).donation.count({ where })
+    ]);
+
+    // Ensure receipt links exist for returned rows (best-effort, cap a few)
+    let backfilled = 0;
+    for (const r of rows) {
+      if (backfilled >= 3) break;
+      if (!r.receiptPdfUrl || !r.receiptHtmlUrl) {
+        try {
+          const full = await (prisma as any).donation.findUnique({ where: { id: r.id } });
+          await ensureReceiptLinks(full, req);
+          backfilled++;
+        } catch {}
+      }
+    }
+
+    const data = rows.map((r: any) => ({
+      ...r,
+      donorPanMasked: maskPan(r.donorPan),
+      receiptPdfUrl: r.receiptPdfUrl || null,
+      receiptHtmlUrl: r.receiptHtmlUrl || null,
+    }));
+
+    return res.json({ success: true, count: data.length, total, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'RECEIPT_SEARCH_FAILED', message: e?.message });
   }
 });
 

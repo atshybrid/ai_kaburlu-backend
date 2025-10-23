@@ -924,6 +924,28 @@ router.post('/admin/meetings/:id/schedule-reminder', requireAuth, async (req: an
  *     responses:
  *       200:
  *         description: Upcoming meetings
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 count: { type: integer }
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id: { type: string }
+ *                       title: { type: string }
+ *                       status: { type: string, enum: [SCHEDULED, LIVE, ENDED, CANCELLED] }
+ *                       runtimeStatus: { type: string, enum: [SCHEDULED, LIVE, ENDED, CANCELLED] }
+ *                       scheduledAt: { type: string, format: date-time, nullable: true }
+ *                       endsAt: { type: string, format: date-time, nullable: true }
+ *                       myRole: { type: string, enum: [HOST, GUEST], nullable: true, description: "Your role in this meeting if already determined" }
+ *                       isHost: { type: boolean, description: "True if you are a HOST for this meeting" }
+ *                       canJoin: { type: boolean, description: "True if join is allowed now (LIVE)" }
+ *                       joinDisabledReason: { type: string, nullable: true, description: "If cannot join, indicates why: NOT_STARTED | ENDED | CANCELLED | FORBIDDEN" }
  */
 router.get('/meetings/my/upcoming', requireAuth, async (req: any, res) => {
   try {
@@ -943,11 +965,43 @@ router.get('/meetings/my/upcoming', requireAuth, async (req: any, res) => {
     });
     const allowed = [] as any[];
     for (const m of rows) {
-      if (await userCanJoin(m, req.user)) {
-        const runtimeStatus = computeRuntimeStatus(m);
-        if (runtimeStatus !== m.status) persistStatusIfElapsed(m).catch(() => {});
-        allowed.push({ ...m, runtimeStatus });
+      const permitted = await userCanJoin(m, req.user);
+      const runtimeStatus = computeRuntimeStatus(m);
+      if (runtimeStatus !== m.status) persistStatusIfElapsed(m).catch(() => {});
+
+      if (!permitted) {
+        // Not in audience; skip from upcoming list
+        continue;
       }
+
+      // Determine my role if participant exists
+      let myRole: 'HOST' | 'GUEST' | null = null;
+      try {
+        const part = await (prisma as any).meetingParticipant.findFirst({ where: { meetingId: m.id, userId: req.user.id }, select: { role: true } });
+        if (part?.role) myRole = String(part.role).toUpperCase() === 'HOST' ? 'HOST' : 'GUEST';
+      } catch {}
+
+      const isHost = myRole === 'HOST';
+      // Compute joinability and reason for UI
+      let canJoin = false; let joinDisabledReason: string | null = null;
+      if (runtimeStatus === 'LIVE') {
+        canJoin = true;
+      } else if (runtimeStatus === 'SCHEDULED') {
+        joinDisabledReason = 'NOT_STARTED';
+      } else if (runtimeStatus === 'ENDED') {
+        joinDisabledReason = 'ENDED';
+      } else if (runtimeStatus === 'CANCELLED') {
+        joinDisabledReason = 'CANCELLED';
+      }
+
+      allowed.push({
+        ...m,
+        runtimeStatus,
+        myRole,
+        isHost,
+        canJoin,
+        joinDisabledReason
+      });
     }
     return res.json({ success: true, count: allowed.length, data: allowed });
   } catch (e: any) {

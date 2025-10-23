@@ -50,6 +50,8 @@ import membershipsKycRoutes from './api/memberships/kyc.routes';
 import idcardRoutes from './api/hrci/idcard.routes';
 import orgSettingsRoutes from './api/org/settings.routes';
 import donationsRoutes from './api/donations/donations.routes';
+import donationStoriesRoutes from './api/donations/successStories.routes';
+import donationDonorsRoutes from './api/donations/donors.routes';
 import meetRoutes from './api/meet/meet.routes';
 import adsRoutes from './api/ads/ads.routes';
 import paymentWebhookRoutes from './api/payments/webhook.routes';
@@ -180,6 +182,8 @@ app.use('/preferences', preferencesRoutes);
 app.use('/legal', legalRoutes);
 app.use('/org/settings', orgSettingsRoutes);
 app.use('/donations', donationsRoutes);
+app.use('/donations', donationStoriesRoutes);
+app.use('/donations', donationDonorsRoutes);
 app.use('/meet', meetRoutes);
 // HRCI-specific alias for meetings
 app.use('/hrci/meet', meetRoutes);
@@ -254,6 +258,8 @@ apiV1.use('/preferences', preferencesRoutes);
 apiV1.use('/legal', legalRoutes);
 apiV1.use('/org/settings', orgSettingsRoutes);
 apiV1.use('/donations', donationsRoutes);
+apiV1.use('/donations', donationStoriesRoutes);
+apiV1.use('/donations', donationDonorsRoutes);
 apiV1.use('/meet', meetRoutes);
 // HRCI-specific alias for meetings under API v1
 apiV1.use('/hrci/meet', meetRoutes);
