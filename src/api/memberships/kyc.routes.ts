@@ -23,6 +23,136 @@ async function pickUserMembership(userId: string) {
 
 /**
  * @swagger
+ * /memberships/kyc/pending:
+ *   get:
+ *     tags: [HRCI Membership - Admin APIs]
+ *     summary: Get all pending KYC submissions (HRCI Admin only)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema: 
+ *           type: string
+ *           enum: [PENDING, UNDER_REVIEW, APPROVED, REJECTED]
+ *         description: Filter by KYC status (optional, defaults to PENDING)
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, minimum: 1, maximum: 100 }
+ *         description: Limit number of results (optional, defaults to 50)
+ *       - in: query
+ *         name: offset
+ *         schema: { type: integer, minimum: 0 }
+ *         description: Number of records to skip (optional, defaults to 0)
+ *     responses:
+ *       200:
+ *         description: List of KYC submissions
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id: { type: string }
+ *                       membershipId: { type: string }
+ *                       status: { type: string }
+ *                       remarks: { type: string }
+ *                       createdAt: { type: string, format: date-time }
+ *                       updatedAt: { type: string, format: date-time }
+ *                       membership:
+ *                         type: object
+ *                         properties:
+ *                           id: { type: string }
+ *                           userId: { type: string }
+ *                           level: { type: string }
+ *                           zone: { type: string, nullable: true }
+ *                           hrcCountryId: { type: string, nullable: true }
+ *                           hrcStateId: { type: string, nullable: true }
+ *                           hrcDistrictId: { type: string, nullable: true }
+ *                           hrcMandalId: { type: string, nullable: true }
+ *                           cell:
+ *                             type: object
+ *                             properties:
+ *                               id: { type: string }
+ *                               name: { type: string }
+ *                               code: { type: string }
+ *                           designation:
+ *                             type: object
+ *                             properties:
+ *                               id: { type: string }
+ *                               name: { type: string }
+ *                               code: { type: string }
+ *                 meta:
+ *                   type: object
+ *                   properties:
+ *                     total: { type: integer }
+ *                     limit: { type: integer }
+ *                     offset: { type: integer }
+ *       401:
+ *         description: Authentication required
+ *       403:
+ *         description: HRCI Admin access required
+ */
+router.get('/pending', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const { status = 'PENDING', limit = '50', offset = '0' } = req.query;
+    const limitNum = Math.min(Math.max(parseInt(String(limit)), 1), 100);
+    const offsetNum = Math.max(parseInt(String(offset)), 0);
+    
+    const where: any = {};
+    if (status && ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'].includes(String(status))) {
+      where.status = String(status);
+    }
+    
+    const [kycRecords, total] = await Promise.all([
+      (prisma as any).membershipKyc.findMany({
+        where,
+        take: limitNum,
+        skip: offsetNum,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          membership: {
+            select: {
+              id: true,
+              userId: true,
+              level: true,
+              zone: true,
+              hrcCountryId: true,
+              hrcStateId: true,
+              hrcDistrictId: true,
+              hrcMandalId: true,
+              createdAt: true,
+              updatedAt: true,
+              cell: { select: { id: true, name: true, code: true } },
+              designation: { select: { id: true, name: true, code: true } },
+            }
+          }
+        }
+      }),
+      (prisma as any).membershipKyc.count({ where })
+    ]);
+    
+    return res.json({ 
+      success: true, 
+      data: kycRecords,
+      meta: { total, limit: limitNum, offset: offsetNum }
+    });
+  } catch (e: any) {
+    return res.status(500).json({ 
+      success: false, 
+      error: 'KYC_LIST_FAILED', 
+      message: e?.message 
+    });
+  }
+});
+
+/**
+ * @swagger
  * /memberships/kyc/{membershipId}:
  *   get:
  *     tags: [HRCI Membership - Member APIs]
@@ -62,9 +192,11 @@ async function pickUserMembership(userId: string) {
  *       404:
  *         description: Membership not found
  */
-router.get('/:membershipId', requireAuth, async (req, res) => {
+router.get('/:membershipId', requireAuth, async (req, res, next) => {
   try {
     const membershipId = String(req.params.membershipId);
+    // Avoid path collision: if someone hit '/pending' and it routed here, skip to the correct route
+    if (membershipId.toLowerCase() === 'pending') return next('route');
     // Delegate '/me' to self handler semantics
     if (membershipId.toLowerCase() === 'me') {
       const user: any = (req as any).user;
@@ -78,10 +210,10 @@ router.get('/:membershipId', requireAuth, async (req, res) => {
     const user: any = (req as any).user;
     
     // Check if user is HRCI_ADMIN or owns this membership
-    const isHrcAdmin = user?.role?.name?.toString()?.toLowerCase() === 'hrci_admin';
-    const isSuperAdmin = user?.role?.name?.toString()?.toLowerCase() === 'superadmin';
+    const role = user?.role?.name?.toString()?.toLowerCase();
+    const isHrcAdmin = role === 'hrci_admin' || role === 'superadmin' || role === 'super_admin';
     
-    if (!isHrcAdmin && !isSuperAdmin) {
+    if (!isHrcAdmin) {
       // Regular user can only view their own KYC
       const membership = await prisma.membership.findFirst({ 
         where: { id: membershipId, userId: user.id } 

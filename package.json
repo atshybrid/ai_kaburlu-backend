@@ -35,7 +35,10 @@
     "db:hrci:apply": "npx prisma db execute --file scripts/sql/add_hrci_case_enums.sql --schema prisma/schema.prisma && npx prisma db execute --file scripts/sql/add_hrci_case_tables.sql --schema prisma/schema.prisma",
     "db:hrci:categories:apply": "npx prisma db execute --file scripts/sql/add_hrci_case_categories.sql --schema prisma/schema.prisma",
     "seed:hrci:case-categories": "npx ts-node scripts/seed_hrci_case_categories.ts",
-    "db:discounts:apply": "npx prisma db execute --file scripts/sql/add_discount_table.sql --schema prisma/schema.prisma"
+    "db:discounts:apply": "npx prisma db execute --file scripts/sql/add_discount_table.sql --schema prisma/schema.prisma",
+    "hrci:letters:regen": "npx ts-node scripts/regenerate_all_appointment_letters.ts",
+    "hrci:geo:check-dupes": "npx ts-node scripts/check_hrci_geo_duplicates.ts",
+    "hrci:geo:fix-caps": "cross-env FIX_CAPS=1 npx ts-node scripts/check_hrci_geo_duplicates.ts"
   },
   "engines": {
     "node": ">=18.0.0"

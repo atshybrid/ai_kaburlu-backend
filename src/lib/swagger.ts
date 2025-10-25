@@ -41,6 +41,7 @@ const swaggerDefinition = {
     { name: 'Engagement - Comments' },
     { name: 'HRCI' },
     { name: 'HRCI Admin' },
+    { name: 'HRCI_admin_reportes', description: 'HRCI admin analytics and finance reports (daily/weekly/monthly metrics)'} ,
   { name: 'HRCI Cases', description: 'Case management APIs: create, list, summary, assignment, assignee lookup' },
   { name: 'HRCI Meetings - Admin', description: 'Create, manage and notify HRCI meetings (admin/president)' },
   { name: 'HRCI Meetings - Member', description: 'Join and view upcoming HRCI meetings (member access)' },

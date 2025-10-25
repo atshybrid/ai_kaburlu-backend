@@ -329,6 +329,7 @@ model PaymentIntent {
 /// Sponsor Ads for in-feed display
 enum AdStatus {
   DRAFT
+  PENDING_PAYMENT
   ACTIVE
   PAUSED
   EXPIRED
@@ -489,6 +490,9 @@ model IDCard {
   designationName String?
   cellName        String?
   mobileNumber    String?
+  // Generated Appointment Letter (PDF) link for member
+  appointmentLetterPdfUrl String?
+  appointmentLetterGeneratedAt DateTime?
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 }

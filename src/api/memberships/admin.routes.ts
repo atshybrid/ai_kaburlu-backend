@@ -47,7 +47,7 @@ const router = Router();
  *       200:
  *         description: Membership list
  */
-router.get('/', requireAuth, requireAdmin, async (req, res) => {
+router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
   try {
     const { userId, status, level, cellId, designationId } = req.query as any;
     const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 20));
@@ -94,7 +94,7 @@ router.get('/', requireAuth, requireAdmin, async (req, res) => {
 router.get('/:id', (req, res, next) => {
   if (req.params.id === 'discounts') return next('route');
   return next();
-}, requireAuth, requireAdmin, async (req, res) => {
+}, requireAuth, requireHrcAdmin, async (req, res) => {
   try {
     const m = await prisma.membership.findUnique({ where: { id: req.params.id }, include: { designation: true, cell: true, idCard: true, payments: true } });
     if (!m) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
@@ -138,7 +138,7 @@ router.get('/:id', (req, res, next) => {
 router.put('/:id/status', (req, res, next) => {
   if (req.params.id === 'discounts') return next('route');
   return next();
-}, requireAuth, requireAdmin, async (req, res) => {
+}, requireAuth, requireHrcAdmin, async (req, res) => {
   try {
     const { status, expiresAt } = req.body || {};
     if (!status) return res.status(400).json({ success: false, error: 'STATUS_REQUIRED' });
@@ -176,7 +176,7 @@ router.put('/:id/status', (req, res, next) => {
  *     responses:
  *       200: { description: Card issued }
  */
-router.post('/:id/idcard', requireAuth, requireAdmin, async (req, res) => {
+router.post('/:id/idcard', requireAuth, requireHrcAdmin, async (req, res) => {
   try {
     const m = await prisma.membership.findUnique({ where: { id: req.params.id } });
     if (!m) return res.status(404).json({ success: false, error: 'NOT_FOUND' });

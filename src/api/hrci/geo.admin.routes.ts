@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
-import { requireAuth, requireAdmin } from '../middlewares/authz';
+import { requireAuth, requireHrcAdmin } from '../middlewares/authz';
 
 /**
  * @swagger
@@ -10,7 +10,7 @@ import { requireAuth, requireAdmin } from '../middlewares/authz';
  */
 const router = Router();
 
-router.use(requireAuth, requireAdmin);
+router.use(requireAuth, requireHrcAdmin);
 
 // District CRUD
 /**

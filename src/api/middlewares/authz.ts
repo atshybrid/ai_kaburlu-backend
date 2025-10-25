@@ -7,7 +7,8 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   try {
     const user: any = (req as any).user;
     const roleName = user?.role?.name?.toString()?.toLowerCase();
-    if (roleName === 'admin' || roleName === 'superadmin') return next();
+    // Accept both SUPERADMIN and SUPER_ADMIN aliases
+    if (roleName === 'admin' || roleName === 'superadmin' || roleName === 'super_admin') return next();
     return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Admin or Superadmin required' });
   } catch (e: any) {
     return res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
@@ -19,7 +20,8 @@ export function requireHrcAdmin(req: Request, res: Response, next: NextFunction)
   try {
     const user: any = (req as any).user;
     const roleName = user?.role?.name?.toString()?.toLowerCase();
-    if (roleName === 'hrci_admin' || roleName === 'superadmin') return next();
+    // Allow HRCI_ADMIN and super admin aliases
+    if (roleName === 'hrci_admin' || roleName === 'superadmin' || roleName === 'super_admin') return next();
     return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'HRCI_ADMIN (or Superadmin) required' });
   } catch (e: any) {
     return res.status(401).json({ success: false, error: 'UNAUTHORIZED' });

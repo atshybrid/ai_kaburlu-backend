@@ -41,6 +41,7 @@ function mask(str?: string | null, kind?: 'mobile' | 'email' | 'pan'): string | 
  *         panMasked: { type: string, nullable: true }
  *         totalAmount: { type: integer, description: "Total successful donation amount" }
  *         donationCount: { type: integer, description: "Number of successful donations" }
+ *         latestDonationId: { type: string, nullable: true, description: "Most recent donation id for this donor" }
  *         photoUrl: { type: string, nullable: true }
  *     TopDonorListResponse:
  *       type: object
@@ -201,6 +202,23 @@ router.get('/top-donors', async (req, res) => {
         LIMIT 1
       `;
       const photoUrl = profRows?.[0]?.photoUrl ?? profRows?.[0]?.photourl ?? null;
+
+      // Find latest donation id for this donor (priority: mobile > email > PAN > name)
+      let latestDonationId: string | null = null;
+      try {
+        const whereBase: any = { status: 'SUCCESS' };
+        if (eventId) whereBase.eventId = eventId;
+        if (keyMobile) whereBase.donorMobile = keyMobile;
+        else if (keyEmail) whereBase.donorEmail = keyEmail;
+        else if (keyPan) whereBase.donorPan = keyPan;
+        else if (r.donor_name) whereBase.donorName = r.donor_name;
+        const latest = await (prisma as any).donation.findFirst({
+          where: whereBase,
+          orderBy: { createdAt: 'desc' },
+          select: { id: true }
+        });
+        latestDonationId = latest?.id || null;
+      } catch {}
       out.push({
         key: r.donor_key,
         displayName: r.donor_name || keyMobile || keyEmail || 'Donor',
@@ -209,6 +227,7 @@ router.get('/top-donors', async (req, res) => {
         panMasked: mask(r.donor_pan, 'pan'),
         totalAmount: Number(r.total_amount || 0),
         donationCount: Number(r.donation_count || 0),
+        latestDonationId,
         photoUrl: photoUrl || null,
       });
     }

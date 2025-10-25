@@ -59,6 +59,60 @@ function resolvePublicBase(req: any): string {
   return host ? `${proto}://${host}` : '';
 }
 
+// Build a structured 80G receipt JSON for front-end rendering
+async function buildReceiptJson(donation: any, req: any, override?: { pdfUrl?: string | null; htmlUrl?: string | null }) {
+  const org = await (prisma as any).orgSetting.findFirst({ orderBy: { updatedAt: 'desc' } });
+  if (!org) throw new Error('ORG_SETTINGS_REQUIRED');
+  const origin = resolvePublicBase(req);
+  const amountFmt = (donation.amount || 0).toLocaleString('en-IN');
+  const receiptNo = `DN-${String(donation.id).slice(-8).toUpperCase()}`;
+  const receiptDate = new Date(donation.createdAt).toLocaleDateString('en-IN');
+  const donorName = donation.isAnonymous ? 'Anonymous Donor' : (donation.donorName || 'Donor');
+  const htmlUrl = override?.htmlUrl || donation.receiptHtmlUrl || (origin ? `${origin}/donations/receipt/${donation.id}/html` : null);
+  const pdfUrl = override?.pdfUrl || donation.receiptPdfUrl || null;
+  return {
+    id: donation.id,
+    receiptNo,
+    receiptDate,
+    amount: donation.amount,
+    amountFormatted: amountFmt,
+    currency: donation.currency || 'INR',
+    mode: donation.providerPaymentId ? 'UPI/Card/NetBanking' : 'Cash/Manual',
+    purpose: 'Donation',
+    donor: {
+      name: donorName,
+      address: donation.donorAddress || '',
+      pan: donation.donorPan || null,
+      mobile: donation.donorMobile || null,
+      email: donation.donorEmail || null,
+      isAnonymous: !!donation.isAnonymous,
+    },
+    org: {
+      name: org.orgName,
+      addressLine1: org.addressLine1 || null,
+      addressLine2: org.addressLine2 || null,
+      city: org.city || null,
+      state: org.state || null,
+      pincode: org.pincode || null,
+      country: org.country || null,
+      pan: org.pan || null,
+      eightyG: {
+        number: org.eightyGNumber || null,
+        validFrom: org.eightyGValidFrom || null,
+        validTo: org.eightyGValidTo || null,
+      },
+      authorizedSignatoryName: org.authorizedSignatoryName || null,
+      authorizedSignatoryTitle: org.authorizedSignatoryTitle || null,
+      logoUrl: `${origin}/org/settings/logo`,
+      stampUrl: `${origin}/org/settings/stamp`,
+    },
+    verify: {
+      htmlUrl,
+      pdfUrl,
+    },
+  };
+}
+
 // Generate and persist receipt links (PDF uploaded + HTML absolute URL). Idempotent: returns existing if already set.
 async function ensureReceiptLinks(donation: any, req: any): Promise<{ pdfUrl: string; htmlUrl: string }> {
   if (donation.receiptPdfUrl && donation.receiptHtmlUrl) {
@@ -2041,7 +2095,7 @@ router.post('/orders', async (req, res) => {
  *               razorpay_signature: { type: string, nullable: true }
  *     responses:
  *       200:
- *         description: Confirmation result
+ *         description: Confirmation result with 80G receipt JSON on success
  *         content:
  *           application/json:
  *             schema:
@@ -2055,6 +2109,42 @@ router.post('/orders', async (req, res) => {
  *                     donationId: { type: string }
  *                     receiptPdfUrl: { type: string, nullable: true }
  *                     receiptHtmlUrl: { type: string, nullable: true }
+ *                     receipt:
+ *                       type: object
+ *                       description: Structured 80G receipt data for front-end rendering
+ *                       properties:
+ *                         receiptNo: { type: string }
+ *                         receiptDate: { type: string }
+ *                         amount: { type: integer }
+ *                         amountFormatted: { type: string }
+ *                         currency: { type: string }
+ *                         mode: { type: string }
+ *                         purpose: { type: string }
+ *                         donor:
+ *                           type: object
+ *                           properties:
+ *                             name: { type: string }
+ *                             address: { type: string }
+ *                             pan: { type: string, nullable: true }
+ *                             mobile: { type: string, nullable: true }
+ *                             email: { type: string, nullable: true }
+ *                             isAnonymous: { type: boolean }
+ *                         org:
+ *                           type: object
+ *                           properties:
+ *                             name: { type: string }
+ *                             pan: { type: string, nullable: true }
+ *                             eightyG:
+ *                               type: object
+ *                               properties:
+ *                                 number: { type: string, nullable: true }
+ *                                 validFrom: { type: string, nullable: true }
+ *                                 validTo: { type: string, nullable: true }
+ *                         verify:
+ *                           type: object
+ *                           properties:
+ *                             htmlUrl: { type: string, nullable: true }
+ *                             pdfUrl: { type: string, nullable: true }
  */
 router.post('/confirm', async (req, res) => {
   try {
@@ -2068,7 +2158,9 @@ router.post('/confirm', async (req, res) => {
     if (intent.status === 'SUCCESS' || donation.status === 'SUCCESS') {
       let urls: any = {};
       try { const u = await ensureReceiptLinks(donation, req); urls = { receiptPdfUrl: u.pdfUrl, receiptHtmlUrl: u.htmlUrl }; } catch {}
-      return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id, ...urls } });
+      let receipt: any = null;
+      try { receipt = await buildReceiptJson(donation, req, { pdfUrl: urls.receiptPdfUrl, htmlUrl: urls.receiptHtmlUrl }); } catch {}
+      return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id, ...urls, receipt } });
     }
 
     if (status === 'FAILED') {
@@ -2102,7 +2194,9 @@ router.post('/confirm', async (req, res) => {
     });
     let urls: any = {};
     try { const u = await ensureReceiptLinks(donation, req); urls = { receiptPdfUrl: u.pdfUrl, receiptHtmlUrl: u.htmlUrl }; } catch {}
-    return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id, ...urls } });
+    let receipt: any = null;
+    try { receipt = await buildReceiptJson(donation, req, { pdfUrl: urls.receiptPdfUrl, htmlUrl: urls.receiptHtmlUrl }); } catch {}
+    return res.json({ success: true, data: { status: 'SUCCESS', donationId: donation.id, ...urls, receipt } });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'DONATION_CONFIRM_FAILED', message: e?.message });
   }

@@ -15,6 +15,9 @@ import { GuestRegistrationDto } from './guest-registration.dto';
 import * as jwt from 'jsonwebtoken';
 import * as bcrypt from 'bcrypt';
 import prisma from '../../lib/prisma';
+import { r2Client, R2_BUCKET, getPublicUrl } from '../../lib/r2';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { generateAppointmentLetterPdf, buildAppointmentLetterHtml } from '../../lib/pdf/generateAppointmentLetter';
 
 // A simple exception class for HTTP errors
 class HttpException extends Error {
@@ -86,6 +89,11 @@ export const login = async (loginDto: MpinLoginDto) => {
 
   // Build membership/payment/ID card summary for login UX
   const membershipSummary = await getMembershipSummary(user.id, !!userProfile?.profilePhotoUrl);
+  // Ensure appointment letter URL if eligible; attach to response
+  let appointmentLetterUrl: string | null = null;
+  try {
+    appointmentLetterUrl = await ensureAppointmentLetterForUser(user.id);
+  } catch {}
 
   const result: any =  {
     jwt: accessToken,
@@ -119,7 +127,7 @@ export const login = async (loginDto: MpinLoginDto) => {
   };
   // Only attach membership section for actual members
   if (membershipSummary?.hasMembership) {
-    result.membership = membershipSummary;
+    result.membership = { ...membershipSummary, appointmentLetterPdfUrl: appointmentLetterUrl };
   }
   console.log("result", result)
   return result
@@ -377,4 +385,169 @@ async function getMembershipSummary(userId: string, hasProfilePhoto: boolean) {
       : { hasKyc: false, status: 'NOT_SUBMITTED' },
     nextAction,
   };
+}
+
+/**
+ * If the user has an ACTIVE membership with ID card issued and KYC approved,
+ * generate an appointment letter PDF (if not already generated), upload to R2, and persist URL on IDCard.
+ * Returns the public URL, or null if not eligible.
+ */
+ 
+export async function ensureAppointmentLetterForUser(userId: string, force = false): Promise<string | null> {
+  const m = await prisma.membership.findFirst({
+    where: { userId },
+    orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+    include: { idCard: true, kyc: true, designation: true, cell: true }
+  });
+  if (!m) return null;
+  const idCard = (m as any).idCard || null;
+  const kyc = (m as any).kyc || null;
+  const kycApproved = (kyc?.status || '').toUpperCase() === 'APPROVED';
+  const idCardIssued = idCard && idCard.status === 'GENERATED';
+  const active = m.status === 'ACTIVE' && !((m.expiresAt && m.expiresAt < new Date()));
+  if (!(active && idCardIssued && kycApproved)) return null;
+
+  // If we already have a stored PDF URL and we're not forcing regeneration,
+  // auto-fix legacy PDFs (old layout like left-side stamp) by regenerating once.
+  if (!force && idCard.appointmentLetterPdfUrl) {
+    const url: string = idCard.appointmentLetterPdfUrl as string;
+    const generatedAt: Date | null = (idCard as any).appointmentLetterGeneratedAt || null;
+    // Heuristics for legacy PDFs to regenerate automatically once:
+    // 1) URL missing a timestamp suffix (e.g., -<digits>.pdf)
+    // 2) URL not under the expected path 'memberships/appointments/'
+    // 3) Generated before the stamp alignment fix rollout cutoff
+    const hasTimestamp = /-\d+\.pdf$/i.test(url);
+    const inNewPath = url.includes('/memberships/appointments/');
+  const cutoff = new Date('2025-10-25T00:00:00Z');
+    const beforeCutoff = !!(generatedAt && generatedAt.getTime() < cutoff.getTime());
+    const looksLegacy = !hasTimestamp || !inNewPath || beforeCutoff;
+    if (!looksLegacy) {
+      return url;
+    }
+    // else fall-through to regenerate
+  }
+
+  // Build organization info
+  const org = await prisma.orgSetting.findFirst({ orderBy: { updatedAt: 'desc' } });
+  const orgPublic = {
+    orgName: org?.orgName || 'HRCI',
+    addressLine1: org?.addressLine1 || null,
+    addressLine2: org?.addressLine2 || null,
+    city: org?.city || null,
+    state: org?.state || null,
+    pincode: org?.pincode || null,
+    country: org?.country || null,
+    email: (org as any)?.email || null,
+    website: (org as any)?.website || null,
+    phone: (org as any)?.phone || null,
+    // Default registration line if not configured
+    orgRegd: ((org as any)?.documents && (Array.isArray((org as any).documents) ? (org as any).documents.find((d: any) => d?.type === 'registration')?.title : null)) ||
+             'Regd. No: 4396 / 2022 under Trust Act 1882, Govt. of India, NCT Delhi',
+    authorizedSignatoryName: org?.authorizedSignatoryName || null,
+    authorizedSignatoryTitle: org?.authorizedSignatoryTitle || null,
+    hrciLogoUrl: org?.hrciLogoUrl || null,
+    stampRoundUrl: org?.stampRoundUrl || null,
+  } as any;
+
+  // Build letter data
+  // Build jurisdiction emphasis: prefer District name specifically (as requested), fallback to a combined path.
+  const jurisdictionParts: string[] = [];
+  let districtName: string | null = null;
+  if ((m as any).hrcStateId) {
+    try {
+      const s = await (prisma as any).hrcState.findUnique({ where: { id: (m as any).hrcStateId } });
+      if (s) jurisdictionParts.push(s.name);
+    } catch {}
+  }
+  if ((m as any).hrcDistrictId) {
+    try {
+      const d = await (prisma as any).hrcDistrict.findUnique({ where: { id: (m as any).hrcDistrictId } });
+      if (d) {
+        districtName = d.name;
+        jurisdictionParts.push(d.name);
+      }
+    } catch {}
+  }
+  if ((m as any).hrcMandalId) {
+    try {
+      const md = await (prisma as any).hrcMandal.findUnique({ where: { id: (m as any).hrcMandalId } });
+      if (md) jurisdictionParts.push(md.name);
+    } catch {}
+  }
+  // Build recipient address lines from profile if present
+  const profile = await prisma.userProfile.findUnique({ where: { userId }, select: { fullName: true, address: true, gender: true } }).catch(() => null) as any;
+  let address1: string | null = null;
+  let address2: string | null = null;
+  try {
+    const a = (profile?.address || null) as any;
+    if (a) {
+      const line1 = a.addressLine1 || a.line1 || a.address1 || null;
+      const city = a.city || null;
+      const st = a.state || null;
+      const pin = a.pincode || a.pin || a.zip || null;
+      address1 = line1 || null;
+      address2 = [city, st, pin].filter(Boolean).join(', ') || null;
+    }
+  } catch {}
+  const salutationPrefix = 'Mr./Ms.'; // we can enhance via profile.gender
+  const levelText = String(m.level);
+  const subjectLine = `Appointment as ${levelText} Member of Human Rights Council for India (HRCI)`;
+  const effectiveFromDate = idCard.issuedAt || m.activatedAt || new Date();
+  const fmt = (d: Date | null | undefined) => {
+    if (!d) return null;
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  };
+  // validity period label
+  let validityPeriod: string | null = null;
+  if (idCard.expiresAt && effectiveFromDate) {
+    const days = Math.round((idCard.expiresAt.getTime() - effectiveFromDate.getTime()) / (1000 * 60 * 60 * 24));
+    if (days >= 700) validityPeriod = 'Two Years';
+    else if (days >= 360) validityPeriod = 'One Year';
+  }
+
+  const letterData = {
+    letterNo: `HRCI/APPT/${new Date().getFullYear()}/${(idCard.cardNumber || m.id).slice(-6).toUpperCase()}`,
+    letterDate: fmt(new Date()) || '',
+    recipientSalutation: salutationPrefix,
+    memberName: idCard.fullName || profile?.fullName || 'Member',
+    recipientAddress1: address1,
+    recipientAddress2: address2,
+    subjectLine,
+    designationName: idCard.designationName || (m as any).designation?.name || 'Member',
+    cellName: idCard.cellName || (m as any).cell?.name || null,
+    level: levelText,
+    effectiveFrom: fmt(effectiveFromDate),
+    validityPeriod,
+    cardNumber: idCard.cardNumber || null,
+    validityTo: fmt(idCard.expiresAt) || fmt(m.expiresAt) || null,
+    mobileNumber: idCard.mobileNumber || (await prisma.user.findUnique({ where: { id: userId }, select: { mobileNumber: true } }))?.mobileNumber || null,
+    placeLine: districtName ? `| Place: ${districtName}` : '',
+    joiningDate: fmt(m.activatedAt || idCard.issuedAt) || null,
+    memberCreatedDate: fmt(m.createdAt) || null,
+    locationDisplay: await (async () => {
+      try {
+        const loc = await prisma.userLocation.findUnique({ where: { userId } }).catch(() => null) as any;
+        const profileAddr = (profile?.address || null) as any;
+        const profileCityState = [profileAddr?.city, profileAddr?.state].filter(Boolean).join(', ');
+        return (loc?.placeName || profileCityState || null);
+      } catch { return null; }
+    })(),
+  } as any;
+
+  const pdf = await generateAppointmentLetterPdf(orgPublic, letterData);
+  if (!R2_BUCKET) throw new Error('STORAGE_NOT_CONFIGURED');
+  const now = new Date();
+  const datePath = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+  const safeId = (idCard.cardNumber || m.id).replace(/[^A-Za-z0-9_-]/g, '_');
+  // Use a timestamped filename to avoid CDN/browser cache serving older A5 PDFs
+  const key = `memberships/appointments/${datePath}/${safeId}-${now.getTime()}.pdf`;
+  await r2Client.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: Buffer.from(pdf), ContentType: 'application/pdf', CacheControl: 'public, max-age=31536000' }));
+  const pdfUrl = getPublicUrl(key);
+  // Cast data as any to avoid transient TS mismatch when Prisma Client types are stale in the editor.
+  // Runtime is safe because the schema and generated client support these fields.
+  await prisma.iDCard.update({ where: { id: idCard.id }, data: { appointmentLetterPdfUrl: pdfUrl, appointmentLetterGeneratedAt: new Date() } as any });
+  return pdfUrl;
 }

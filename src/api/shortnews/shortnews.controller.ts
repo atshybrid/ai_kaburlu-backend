@@ -292,6 +292,58 @@ export const createShortNews = async (req: Request, res: Response) => {
     const lang: Language | null = await prisma.language.findUnique({ where: { id: languageId } });
     const languageCode = lang?.code || 'en';
 
+    // Optional language content enforcement: block obvious mismatches (e.g., Hindi text under Telugu)
+    try {
+      const enforce = String(process.env.SHORTNEWS_LANGUAGE_ENFORCE || 'true').toLowerCase() !== 'false';
+      if (enforce) {
+        const expected = (languageCode || '').toLowerCase();
+        // Count characters by script families
+        const text = `${titleToSave}\n${content}`;
+        let devanagari = 0, telugu = 0, latin = 0, other = 0;
+        for (const ch of text) {
+          const code = ch.codePointAt(0) || 0;
+          if ((code >= 0x0900 && code <= 0x097F) || (code >= 0xA8E0 && code <= 0xA8FF)) {
+            // Devanagari + Vedic Extensions
+            devanagari++;
+          } else if (code >= 0x0C00 && code <= 0x0C7F) {
+            // Telugu
+            telugu++;
+          } else if (
+            (code >= 0x0041 && code <= 0x005A) || (code >= 0x0061 && code <= 0x007A) || // Basic Latin letters
+            (code >= 0x00C0 && code <= 0x024F) // Latin-1 Supplement & Latin Extended-A/B ranges (rough)
+          ) {
+            latin++;
+          } else {
+            if ((code >= 0x0020 && code <= 0x007E) || (code >= 0x0000 && code <= 0x001F)) {
+              // punctuation/control/ASCII skip into latin bucket lightly
+              latin++;
+            } else {
+              other++;
+            }
+          }
+        }
+        const nonLatin = telugu + devanagari + other;
+        const strictness = Math.min(Math.max(Number(process.env.SHORTNEWS_LANGUAGE_STRICTNESS || 0.6), 0.5), 0.9);
+        // Only enforce when there is sufficient non-Latin content to be confident
+        if (nonLatin >= 20) {
+          if (expected === 'te') {
+            const ratio = telugu / (nonLatin || 1);
+            // If text is dominantly in some other script (e.g., Devanagari) reject
+            if (ratio < strictness && devanagari / (nonLatin || 1) >= strictness) {
+              return res.status(400).json({ success: false, error: 'LANGUAGE_MISMATCH', message: 'Content appears to be Hindi/Devanagari while your language is Telugu' });
+            }
+          } else if (expected === 'hi') {
+            const ratio = devanagari / (nonLatin || 1);
+            if (ratio < strictness && telugu / (nonLatin || 1) >= strictness) {
+              return res.status(400).json({ success: false, error: 'LANGUAGE_MISMATCH', message: 'Content appears to be Telugu while your language is Hindi' });
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // do not block on detection errors
+    }
+
     // Optional AI SEO enrichment
   const imageCandidates: string[] = Array.isArray(mediaUrls) ? mediaUrls.filter((u: string) => /\.(webp|png|jpe?g|gif|avif)$/i.test(u)) : [];
   const videoCandidates: string[] = Array.isArray(mediaUrls) ? mediaUrls.filter((u: string) => /\.(webm|mp4|mov|ogg)$/i.test(u)) : [];
@@ -771,7 +823,9 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
   try {
     const limit = Math.min(parseInt((req.query.limit as string) || '10', 10), 50);
     const cursorRaw = (req.query.cursor as string) || '';
-    const languageIdParam = (req.query.languageId as string) || '';
+  const languageIdParam = ((req.query.languageId as string) || '').trim();
+  const languageCodeParamRaw = ((req.query.languageCode as string) || '').trim();
+  const languageCodeParam = languageCodeParamRaw ? languageCodeParamRaw.toLowerCase() : '';
     // Optional language filter: if provided, validate exists; else show all languages
     let cursor: { id: string; date: string } | null = null;
     if (cursorRaw) {
@@ -783,21 +837,31 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
         }
       } catch {}
     }
-    // Validate languageId if provided
+    // Resolve language filter from id or code
+    let resolvedLanguageId: string | null = null;
     if (languageIdParam) {
       const langCheck = await prisma.language.findUnique({ where: { id: languageIdParam } });
-      if (!langCheck) {
-        return res.status(400).json({ success: false, error: 'Invalid languageId' });
-      }
+      if (!langCheck) return res.status(400).json({ success: false, error: 'Invalid languageId' });
+      resolvedLanguageId = langCheck.id;
+    } else if (languageCodeParam) {
+      const langCheck = await prisma.language.findFirst({ where: { code: { equals: languageCodeParam, mode: 'insensitive' } } });
+      if (!langCheck) return res.status(400).json({ success: false, error: 'Invalid languageCode' });
+      resolvedLanguageId = langCheck.id;
     }
     const where: any = { status: { in: ['DESK_APPROVED', 'AI_APPROVED'] } };
-    if (languageIdParam) where.language = languageIdParam;
+    if (resolvedLanguageId) where.language = resolvedLanguageId;
 
-    // Optional geo filter: if both lat and lon provided, filter within ~30km radius
+    // Optional geo filter: if both lat and lon provided, filter within radiusKm (default ~30km)
     const latStr = (req.query.latitude as string) || '';
     const lonStr = (req.query.longitude as string) || '';
+    const radiusStr = (req.query.radiusKm as string) || '';
     let centerLat: number | null = null;
     let centerLon: number | null = null;
+    let radiusKm = 30;
+    if (radiusStr) {
+      const rNum = Number(radiusStr);
+      if (Number.isFinite(rNum) && rNum > 0) radiusKm = Math.min(Math.max(rNum, 1), 200);
+    }
     if (latStr && lonStr) {
       const latNum = Number(latStr);
       const lonNum = Number(lonStr);
@@ -831,10 +895,10 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
     };
     let geoFiltered = items;
     if (centerLat != null && centerLon != null) {
-      const deltaLat = 30 / 111; // ~1 deg lat ~111km
+      const deltaLat = radiusKm / 111; // ~1 deg lat ~111km
       const latRad = toRad(centerLat);
       const cosLat = Math.max(0.000001, Math.cos(latRad));
-      const deltaLon = 30 / (111 * cosLat);
+      const deltaLon = radiusKm / (111 * cosLat);
       const minLat = centerLat - deltaLat;
       const maxLat = centerLat + deltaLat;
       const minLon = centerLon - deltaLon;
@@ -844,7 +908,7 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
         const lon = i.longitude;
         if (lat == null || lon == null) return false;
         if (lat < minLat || lat > maxLat || lon < minLon || lon > maxLon) return false;
-        return haversineKm(centerLat!, centerLon!, lat, lon) <= 30;
+        return haversineKm(centerLat!, centerLon!, lat, lon) <= radiusKm;
       });
     }
     const filtered = cursor
@@ -1084,6 +1148,19 @@ export const getApprovedShortNewsById = async (req: Request, res: Response) => {
     if (!id) {
       return res.status(400).json({ success: false, error: 'ShortNews ID is required' });
     }
+  const qLangId = ((req.query.languageId as string) || '').trim();
+  const qLangCodeRaw = ((req.query.languageCode as string) || '').trim();
+  const qLangCode = qLangCodeRaw ? qLangCodeRaw.toLowerCase() : '';
+    let guardLanguageId: string | null = null;
+    if (qLangId) {
+      const lang = await prisma.language.findUnique({ where: { id: qLangId } });
+      if (!lang) return res.status(400).json({ success: false, error: 'Invalid languageId' });
+      guardLanguageId = lang.id;
+    } else if (qLangCode) {
+      const lang = await prisma.language.findFirst({ where: { code: { equals: qLangCode, mode: 'insensitive' } } });
+      if (!lang) return res.status(400).json({ success: false, error: 'Invalid languageCode' });
+      guardLanguageId = lang.id;
+    }
 
     // Find the short news item - must be approved to be publicly accessible
     const item = await prisma.shortNews.findUnique({
@@ -1108,6 +1185,11 @@ export const getApprovedShortNewsById = async (req: Request, res: Response) => {
     // Only approved items are publicly accessible
     if (!['DESK_APPROVED', 'AI_APPROVED'].includes(item.status as string)) {
       return res.status(404).json({ success: false, error: 'ShortNews not found' });
+    }
+
+    // Optional language guard: if provided, ensure item matches
+    if (guardLanguageId && String(item.language) !== guardLanguageId) {
+      return res.status(404).json({ success: false, error: 'LANGUAGE_MISMATCH' });
     }
 
     // Get language info

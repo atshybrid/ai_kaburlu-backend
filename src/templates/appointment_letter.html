@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Member Appointment Letter</title>
+  <style>
+    @page { size: A4; margin: 14mm 14mm 16mm 14mm; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #222; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .container { width: 680px; box-sizing: border-box; margin: 0 auto; padding: 16px; border: none; box-shadow: none; page-break-inside: avoid; }
+  .header { display: grid; grid-template-columns: 110px 1fr; gap: 14px; align-items: center; border-bottom: none; padding-bottom: 8px; }
+    .logo { height: 80px; display: inline-block; object-fit: contain; }
+    .org h1 { margin: 0; font-size: 18px; letter-spacing: .3px; text-transform: uppercase; }
+    .org .regd { margin-top: 2px; font-size: 11px; color: #444; }
+    .org .contacts { margin-top: 6px; font-size: 11px; color: #555; line-height: 1.35; }
+    .title { text-align: center; font-size: 16px; margin: 12px 0; text-transform: uppercase; letter-spacing: .8px; font-weight: bold; }
+    .meta { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; }
+    .content { line-height: 1.55; font-size: 13px; }
+    .field { margin: 5px 0; }
+    .highlight { font-weight: bold; }
+    .list { margin: 8px 0 8px 18px; padding: 0; font-size: 12.5px; }
+    .list li { margin: 5px 0; }
+  .footer { margin-top: 16px; display: flex; justify-content: flex-end; }
+  .sign-block { display: flex; flex-direction: column; align-items: flex-end; }
+  .stamp { height: 70px; opacity: 0.9; margin-top: 6px; }
+  .sign { text-align: right; }
+    .sign .name { font-weight: bold; }
+    .muted { color: #666; }
+    .subtle { color: #999; font-size: 11px; }
+  </style>
+  </head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img id="orgLogo" class="logo" src="" alt="Logo" />
+      <div class="org">
+        <h1 id="orgName">HUMAN RIGHTS COUNCIL FOR INDIA (HRCI)</h1>
+        <div id="orgRegd" class="regd">(Regd. No: 4396 / 2022 under Trust Act 1882, Govt. of India, NCT Delhi)</div>
+        <div class="contacts">
+          Head Office: <span id="orgHeadOffice">[Head Office Address]</span><br/>
+          Email: <span id="orgEmail">official@hrci.org.in</span> | Website: <span id="orgWebsite">www.hrci.org.in</span><br/>
+          Phone: <span id="orgPhone">[Contact]</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="title">MEMBER APPOINTMENT LETTER</div>
+
+    <div class="meta">
+      <div>Ref No: <span id="refNo" class="highlight">HRCI/APPT/2025/000001</span></div>
+      <div>Date: <span id="letterDate" class="highlight">25/10/2025</span> <span class="muted" id="placeLine"></span></div>
+    </div>
+
+    <div class="content">
+      <div class="field">To,</div>
+      <div class="field"><span id="salutationPrefix">Mr./Ms.</span> <span id="recipientName" class="highlight">Full Name</span></div>
+      <div class="field">Address: <span id="recipientAddress1">Address Line 1</span></div>
+      <div class="field"><span id="recipientAddress2">City, State, Pin</span></div>
+
+      <div class="field" style="margin-top:10px;">
+        <strong>Subject:</strong> <span id="subjectLine">Appointment as [Level] Member of Human Rights Council for India (HRCI)</span>
+      </div>
+
+      <p>
+        Dear <span id="salutation">Sir/Madam</span>,
+      </p>
+
+      <p>
+        We are pleased to inform you that the Governing Body of Human Rights Council for India (HRCI) has approved your appointment as a
+        <span id="designationName" class="highlight">[Designation]</span>, effective from
+        <span id="effectiveFrom" class="highlight">[DD/MM/YYYY]</span>.
+      </p>
+
+      <p>
+        This appointment is based on your dedication, integrity, and commitment to the protection and promotion of human rights and social justice. You are expected to uphold the values and principles of HRCI and work collaboratively to safeguard the rights of citizens as per the guidelines of the Indian Constitution and the United Nations Human Rights Charter.
+      </p>
+
+      <div class="field"><strong>Terms & Responsibilities:</strong></div>
+      <ul class="list">
+        <li>To promote awareness about human rights and assist victims of human rights violations.</li>
+        <li>To coordinate with local and state authorities in addressing human rights issues.</li>
+        <li>To participate in HRCI meetings, workshops, and community outreach programs.</li>
+        <li>To maintain ethical conduct and discipline as per HRCI’s code of conduct.</li>
+      </ul>
+
+      <p>
+        Your appointment is valid for a period of <span id="validityPeriod" class="highlight">One Year</span> and is subject to review or renewal based on performance and organizational policy.
+      </p>
+
+      <p>
+        We congratulate you on your appointment and look forward to your active participation in our mission to build a just and equitable society.
+      </p>
+
+      
+    </div>
+
+    <div class="footer">
+      <div class="sign-block">
+        <img id="stampRound" class="stamp" src="" alt="Stamp" />
+        <div class="sign">
+          <div class="name" id="signName">[Authorized Signatory]</div>
+          <div class="muted" id="signTitle">Chairman / National President</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="subtle" style="margin-top: 12px;">
+      For HUMAN RIGHTS COUNCIL FOR INDIA (HRCI), Regd. by NCT Delhi, Govt. of India under Trust Act 1882. This is a system-generated appointment letter.
+    </div>
+  </div>
+</body>
+</html>

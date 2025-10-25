@@ -118,6 +118,8 @@ router.post('/ai/rewrite', passport.authenticate('jwt', { session: false }), req
  *   post:
  *     summary: Submit short news (citizen reporter)
  *     tags: [ShortNews]
+ *     description: |
+ *       Posts are associated with the author's language. When language enforcement is enabled, the server will reject content that is clearly written in a different script (e.g., Hindi/Devanagari posted under Telugu) with error LANGUAGE_MISMATCH. Configure via env SHORTNEWS_LANGUAGE_ENFORCE (default true) and SHORTNEWS_LANGUAGE_STRICTNESS (default 0.6).
  *     requestBody:
  *       required: true
  *       content:
@@ -488,6 +490,12 @@ router.get('/:id/jsonld', shortNewsController.getShortNewsJsonLd);
  *           type: string
  *         description: Optional language ID filter. If provided, only items in this language are returned.
  *       - in: query
+ *         name: languageCode
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Optional language CODE filter (e.g., "en", "te"). If provided (and languageId is not), items in this language are returned.
+ *       - in: query
  *         name: limit
  *         schema:
  *           type: integer
@@ -513,6 +521,12 @@ router.get('/:id/jsonld', shortNewsController.getShortNewsJsonLd);
  *           type: number
  *           format: float
  *         description: Optional longitude. If both latitude and longitude are provided, results are filtered to within ~30 km radius.
+ *       - in: query
+ *         name: radiusKm
+ *         required: false
+ *         schema:
+ *           type: number
+ *         description: Optional search radius in kilometers (default 30, min 1, max 200) applied when latitude and longitude are provided.
  *     responses:
  *       200:
  *         description: Approved short news list enriched with categoryName, author (object), authorName (legacy), place/address, lat/lon, canonicalUrl, jsonLd, primary media, and optional isOwner/isRead flags if bearer token supplied. May include injected ads when feature flag ADS_ENABLED is true.
@@ -580,6 +594,18 @@ router.get('/public', shortNewsController.listApprovedShortNews);
  *         schema:
  *           type: string
  *         description: The ShortNews ID
+ *       - in: query
+ *         name: languageId
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Optional language ID guard. If provided and the item's language differs, 404 is returned.
+ *       - in: query
+ *         name: languageCode
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Optional language CODE guard (e.g., "en", "te"). If provided (and languageId is not), and the item's language differs, 404 is returned.
  *     responses:
  *       200:
  *         description: Single approved short news item with enriched data

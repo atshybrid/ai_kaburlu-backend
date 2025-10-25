@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
 import { requireAuth, requireAdmin, requireHrcAdmin } from '../middlewares/authz';
+import { ensureAppointmentLetterForUser } from '../auth/auth.service';
 import QRCode from 'qrcode';
 
 const router = Router();
@@ -325,3 +326,91 @@ router.get('/:cardNumber/qr', async (req, res) => {
 });
 
 export default router;
+/**
+ * Admin endpoint to regenerate an appointment letter PDF for a specific member.
+ * Accepts either a userId or a cardNumber and forces regeneration using the
+ * existing generator. Returns the new/public URL if eligible, otherwise a clear
+ * message stating the reason (e.g., not ACTIVE or KYC not approved).
+ */
+/**
+ * @swagger
+ * /hrci/idcard/appointments/regenerate:
+ *   post:
+ *     tags: [HRCI ID Cards]
+ *     summary: Regenerate appointment letter for a member (admin)
+ *     description: "Forces appointment letter PDF regeneration. Provide either userId or cardNumber. Requires HRCI admin."
+ *     security: [ { bearerAuth: [] } ]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               userId:
+ *                 type: string
+ *                 description: User ID to regenerate for
+ *               cardNumber:
+ *                 type: string
+ *                 description: ID card number to resolve the user
+ *               force:
+ *                 type: boolean
+ *                 description: "Force regeneration even if URL already exists (default: true)"
+ *           examples:
+ *             byUserId:
+ *               value: { userId: "cmgqqzsuz000ijo1eg8g0bzjf" }
+ *             byCardNumber:
+ *               value: { cardNumber: "hrci-2510-00006" }
+ *     responses:
+ *       200:
+ *         description: Regeneration result
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     userId: { type: string }
+ *                     cardNumber: { type: string, nullable: true }
+ *                     appointmentLetterPdfUrl: { type: string, nullable: true }
+ *                     eligible: { type: boolean }
+ *                     message: { type: string, nullable: true }
+ *       400:
+ *         description: Missing parameters
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden (requires HRCI admin)
+ *       404:
+ *         description: Card not found (when cardNumber provided)
+ */
+router.post('/appointments/regenerate', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const { userId, cardNumber } = (req.body || {}) as { userId?: string; cardNumber?: string; force?: boolean };
+    let uid = userId?.trim() || '';
+
+    // If userId not provided, resolve from cardNumber
+    if (!uid && cardNumber) {
+      const card = await prisma.iDCard.findUnique({ where: { cardNumber } });
+      if (!card) return res.status(404).json({ success: false, error: 'CARD_NOT_FOUND', message: `No IDCard found for cardNumber '${cardNumber}'.` });
+      const membership = await prisma.membership.findUnique({ where: { id: card.membershipId } });
+      if (!membership?.userId) return res.status(404).json({ success: false, error: 'USER_NOT_FOUND_FOR_CARD', message: 'Could not resolve user from the provided cardNumber.' });
+      uid = membership.userId;
+    }
+    if (!uid) return res.status(400).json({ success: false, error: 'MISSING_PARAM', message: 'Provide either userId or cardNumber in the request body.' });
+
+    // Force regeneration by default for this admin API.
+    const url = await ensureAppointmentLetterForUser(uid, true);
+
+    // Also return the cardNumber for convenience
+    const latest = await prisma.membership.findFirst({ where: { userId: uid }, orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }], include: { idCard: true } });
+    const cn = (latest as any)?.idCard?.cardNumber || null;
+
+    return res.json({ success: true, data: { userId: uid, cardNumber: cn, appointmentLetterPdfUrl: url, eligible: Boolean(url), message: url ? null : 'User not eligible (requires ACTIVE membership, KYC approved, and ID card generated).' } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'FAILED_TO_REGENERATE', message: e?.message || 'Unknown error' });
+  }
+});
