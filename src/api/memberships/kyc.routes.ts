@@ -106,7 +106,15 @@ router.get('/pending', requireAuth, requireHrcAdmin, async (req, res) => {
     
     const where: any = {};
     if (status && ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'].includes(String(status))) {
-      where.status = String(status);
+      if (String(status) === 'PENDING') {
+        // Include both explicit 'PENDING' and NULL status (default to pending)
+        where.OR = [
+          { status: 'PENDING' },
+          { status: null }
+        ];
+      } else {
+        where.status = String(status);
+      }
     }
     
     const [kycRecords, total] = await Promise.all([
@@ -130,6 +138,7 @@ router.get('/pending', requireAuth, requireHrcAdmin, async (req, res) => {
               updatedAt: true,
               cell: { select: { id: true, name: true, code: true } },
               designation: { select: { id: true, name: true, code: true } },
+              idCard: { select: { cardNumber: true } }
             }
           }
         }
@@ -137,9 +146,15 @@ router.get('/pending', requireAuth, requireHrcAdmin, async (req, res) => {
       (prisma as any).membershipKyc.count({ where })
     ]);
     
+    // Normalize status field (null -> 'PENDING') for consistent API response
+    const normalizedRecords = kycRecords.map((record: any) => ({
+      ...record,
+      status: record.status || 'PENDING'
+    }));
+
     return res.json({ 
       success: true, 
-      data: kycRecords,
+      data: normalizedRecords,
       meta: { total, limit: limitNum, offset: offsetNum }
     });
   } catch (e: any) {
@@ -467,118 +482,6 @@ router.post('/me', requireAuth, async (req, res) => {
   }
 });
 
-/**
- * @swagger
- * /memberships/kyc/pending:
- *   get:
- *     tags: [HRCI Membership - Admin APIs]
- *     summary: Get all pending KYC submissions (HRCI Admin only)
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: status
- *         schema: 
- *           type: string
- *           enum: [PENDING, UNDER_REVIEW, APPROVED, REJECTED]
- *         description: Filter by KYC status (optional, defaults to PENDING)
- *       - in: query
- *         name: limit
- *         schema: { type: integer, minimum: 1, maximum: 100 }
- *         description: Limit number of results (optional, defaults to 50)
- *       - in: query
- *         name: offset
- *         schema: { type: integer, minimum: 0 }
- *         description: Number of records to skip (optional, defaults to 0)
- *     responses:
- *       200:
- *         description: List of KYC submissions
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success: { type: boolean }
- *                 data:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       id: { type: string }
- *                       membershipId: { type: string }
- *                       status: { type: string }
- *                       remarks: { type: string }
- *                       createdAt: { type: string, format: date-time }
- *                       updatedAt: { type: string, format: date-time }
- *                       membership:
- *                         type: object
- *                         properties:
- *                           id: { type: string }
- *                           membershipNumber: { type: string }
- *                           user:
- *                             type: object
- *                             properties:
- *                               fullName: { type: string }
- *                               email: { type: string }
- *                 meta:
- *                   type: object
- *                   properties:
- *                     total: { type: integer }
- *                     limit: { type: integer }
- *                     offset: { type: integer }
- *       401:
- *         description: Authentication required
- *       403:
- *         description: HRCI Admin access required
- */
-router.get('/pending', requireAuth, requireHrcAdmin, async (req, res) => {
-  try {
-    const { status = 'PENDING', limit = '50', offset = '0' } = req.query;
-    const limitNum = Math.min(Math.max(parseInt(String(limit)), 1), 100);
-    const offsetNum = Math.max(parseInt(String(offset)), 0);
-    
-    const where: any = {};
-    if (status && ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'].includes(String(status))) {
-      where.status = String(status);
-    }
-    
-    const [kycRecords, total] = await Promise.all([
-      (prisma as any).membershipKyc.findMany({
-        where,
-        take: limitNum,
-        skip: offsetNum,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          membership: {
-            select: {
-              id: true,
-              membershipNumber: true,
-              user: {
-                select: {
-                  fullName: true,
-                  email: true,
-                }
-              }
-            }
-          }
-        }
-      }),
-      (prisma as any).membershipKyc.count({ where })
-    ]);
-    
-    return res.json({ 
-      success: true, 
-      data: kycRecords,
-      meta: { total, limit: limitNum, offset: offsetNum }
-    });
-  } catch (e: any) {
-    return res.status(500).json({ 
-      success: false, 
-      error: 'KYC_LIST_FAILED', 
-      message: e?.message 
-    });
-  }
-});
 
 /**
  * @swagger

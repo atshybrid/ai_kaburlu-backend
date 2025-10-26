@@ -1,4 +1,5 @@
 import { getMessaging, isFirebaseReady, validateFCMToken } from './firebase';
+import { isExpoPushToken, sendExpoNotifications } from './expo';
 import prisma from './prisma';
 
 // Types for better TypeScript support
@@ -126,8 +127,20 @@ async function updateNotificationLog(
   return updatedLog;
 }
 
-// Validate and clean FCM tokens
-async function validateTokens(tokens: string[]): Promise<string[]> {
+// Split incoming tokens into Expo vs FCM candidates, and validate FCM tokens
+function splitTokens(tokens: string[]): { expoTokens: string[]; fcmCandidates: string[] } {
+  const unique = [...new Set(tokens.filter(Boolean))];
+  const expoTokens: string[] = [];
+  const fcmCandidates: string[] = [];
+  for (const t of unique) {
+    if (isExpoPushToken(t)) expoTokens.push(t);
+    else fcmCandidates.push(t);
+  }
+  return { expoTokens, fcmCandidates };
+}
+
+// Validate and clean FCM tokens (does not consider Expo tokens)
+async function validateFcmTokens(tokens: string[]): Promise<string[]> {
   if (!tokens || tokens.length === 0) return [];
   
   // Remove duplicates first
@@ -160,27 +173,19 @@ export async function sendToTokensEnhanced(
   options: NotificationOptions = {}
 ): Promise<DeliveryResult> {
   
-  // Check if Firebase is ready before attempting to send
-  if (!isFirebaseReady()) {
-    console.error('[FCM Enhanced] Firebase is not ready for sending notifications');
-    return {
-      success: false,
-      logId: '',
-      successCount: 0,
-      failureCount: tokens.length,
-      totalTargets: tokens.length,
-      errors: [{ error: 'Firebase is not properly initialized' }]
-    };
-  }
+  // We support both Expo and FCM tokens. Firebase readiness is only required for FCM branch.
 
   // Validate inputs
   if (!payload.title || !payload.body) {
     throw new Error('Title and body are required for push notifications');
   }
 
-  const validTokens = await validateTokens(tokens);
-  if (validTokens.length === 0) {
-    console.warn('[FCM Enhanced] No valid tokens provided');
+  // Split tokens into Expo vs FCM, then validate FCM
+  const { expoTokens, fcmCandidates } = splitTokens(tokens || []);
+  const validFcmTokens = await validateFcmTokens(fcmCandidates);
+  const combinedTokens = [...expoTokens, ...validFcmTokens];
+  if (combinedTokens.length === 0) {
+    console.warn('[FCM Enhanced] No valid tokens provided (after Expo/FCM split)');
     return {
       success: false,
       logId: '',
@@ -196,134 +201,131 @@ export async function sendToTokensEnhanced(
     'TOKEN',
     payload,
     options,
-    validTokens
+    combinedTokens
   );
 
   try {
     // Update status to sending
     await updateNotificationLog(notificationLog.id, 'SENDING', {});
+    // Aggregate results from Expo and FCM branches
+    let aggSuccess = 0;
+    let aggFailure = 0;
+    const aggErrors: any[] = [];
+    let lastFcmResponse: any | undefined;
 
-    const messaging = getMessaging();
-    
-    // Prepare FCM message
-    const fcmMessage: any = {
-      tokens: validTokens,
-      notification: { 
-        title: payload.title, 
-        body: payload.body
-      },
-      data: payload.data || {},
-      android: { 
-        priority: options.priority === 'high' ? 'high' : 'normal',
-        notification: {
-          ...(payload.image && { imageUrl: payload.image }),
-          channelId: 'default',
-          sound: 'default'
-        }
-      },
-      apns: { 
-        headers: { 
-          'apns-priority': options.priority === 'high' ? '10' : '5' 
-        },
-        payload: {
-          aps: {
-            sound: 'default',
-            badge: 1
-          }
-        }
-      }
-    };
-
-    // Add image if provided
-    if (payload.image) {
-      fcmMessage.notification.image = payload.image;
-    }
-
-    console.log(`[FCM Enhanced] Sending to ${validTokens.length} tokens`, {
-      logId: notificationLog.id,
-      title: payload.title,
-      hasImage: !!payload.image,
-      priority: options.priority,
-      dataKeys: Object.keys(payload.data || {})
-    });
-
-    // Send notification
-    const response = await messaging.sendEachForMulticast(fcmMessage);
-
-    console.log(`[FCM Enhanced] FCM Response received`, {
-      logId: notificationLog.id,
-      successCount: response.successCount,
-      failureCount: response.failureCount,
-      totalCount: validTokens.length
-    });
-
-    // Process response and handle token cleanup
-    const errors: any[] = [];
-    const invalidTokens: string[] = [];
-    
-    await Promise.all(
-      response.responses.map(async (r: { success: boolean; error?: any; messageId?: string }, idx: number) => {
-        if (!r.success && r.error) {
-          const error = r.error;
-          const token = validTokens[idx];
-          
-          errors.push({
-            token: token.substring(0, 20) + '...', // Log partial token for debugging
-            error: error.message || error.code || 'Unknown error',
-            code: error.errorInfo?.code || error.code
-          });
-
-          // Check for invalid token errors
-          const errorCode = error.errorInfo?.code || error.code || '';
-          if (errorCode.includes('registration-token-not-registered') || 
-              errorCode.includes('invalid-argument') ||
-              errorCode.includes('invalid-registration-token')) {
-            invalidTokens.push(token);
-          }
-        }
-      })
-    );
-
-    // Clean up invalid tokens from database
-    if (invalidTokens.length > 0) {
+    // 1) Expo branch
+    if (expoTokens.length > 0) {
+      console.log(`[Notifications] Sending via Expo to ${expoTokens.length} tokens`, { logId: notificationLog.id });
       try {
-        const cleanupResult = await prisma.device.updateMany({
-          where: { pushToken: { in: invalidTokens } },
-          data: { pushToken: null }
-        });
-        
-        console.log(`[FCM Enhanced] Cleaned up ${cleanupResult.count} invalid tokens from database`);
-      } catch (cleanupError) {
-        console.error(`[FCM Enhanced] Failed to cleanup invalid tokens:`, cleanupError);
+        const expoResult = await sendExpoNotifications(expoTokens, payload, { priority: options.priority });
+        aggSuccess += expoResult.successCount;
+        aggFailure += expoResult.failureCount;
+        if (expoResult.errors.length) aggErrors.push(...expoResult.errors);
+        if (expoResult.invalidTokens.length) {
+          try {
+            const cleanup = await prisma.device.updateMany({ where: { pushToken: { in: expoResult.invalidTokens } }, data: { pushToken: null } });
+            console.log(`[Notifications] Cleaned up ${cleanup.count} invalid Expo tokens`);
+          } catch (e) {
+            console.warn('[Notifications] Failed to cleanup Expo tokens (non-fatal):', String((e as any)?.message || e));
+          }
+        }
+      } catch (e: any) {
+        aggFailure += expoTokens.length;
+        aggErrors.push({ provider: 'expo', error: e?.message || String(e) });
       }
     }
 
-    // Determine final status
+    // 2) FCM branch
+    if (validFcmTokens.length > 0) {
+      if (!isFirebaseReady()) {
+        console.error('[FCM Enhanced] Firebase is not ready for FCM send');
+        aggFailure += validFcmTokens.length;
+        aggErrors.push({ provider: 'fcm', error: 'Firebase is not properly initialized' });
+      } else {
+        const messaging = getMessaging();
+
+        const fcmMessage: any = {
+          tokens: validFcmTokens,
+          notification: { title: payload.title, body: payload.body },
+          data: payload.data || {},
+          android: {
+            priority: options.priority === 'high' ? 'high' : 'normal',
+            notification: {
+              ...(payload.image && { imageUrl: payload.image }),
+              channelId: 'default',
+              sound: 'default'
+            }
+          },
+          apns: {
+            headers: { 'apns-priority': options.priority === 'high' ? '10' : '5' },
+            payload: { aps: { sound: 'default', badge: 1 } }
+          }
+        };
+        if (payload.image) fcmMessage.notification.image = payload.image;
+
+        console.log(`[FCM Enhanced] Sending via FCM to ${validFcmTokens.length} tokens`, { logId: notificationLog.id });
+        const response = await messaging.sendEachForMulticast(fcmMessage);
+        lastFcmResponse = response;
+
+        const errors: any[] = [];
+        const invalidTokens: string[] = [];
+        await Promise.all(
+          response.responses.map(async (r: { success: boolean; error?: any }, idx: number) => {
+            if (!r.success && r.error) {
+              const error = r.error;
+              const token = validFcmTokens[idx];
+              errors.push({
+                provider: 'fcm',
+                token: token.substring(0, 20) + '...',
+                error: error.message || error.code || 'Unknown error',
+                code: error.errorInfo?.code || error.code
+              });
+              const errorCode = error.errorInfo?.code || error.code || '';
+              if (
+                errorCode.includes('registration-token-not-registered') ||
+                errorCode.includes('invalid-argument') ||
+                errorCode.includes('invalid-registration-token')
+              ) {
+                invalidTokens.push(token);
+              }
+            }
+          })
+        );
+
+        if (invalidTokens.length) {
+          try {
+            const cleanupResult = await prisma.device.updateMany({ where: { pushToken: { in: invalidTokens } }, data: { pushToken: null } });
+            console.log(`[FCM Enhanced] Cleaned up ${cleanupResult.count} invalid FCM tokens from database`);
+          } catch (cleanupError) {
+            console.error(`[FCM Enhanced] Failed to cleanup invalid tokens:`, cleanupError);
+          }
+        }
+
+        aggSuccess += response.successCount;
+        aggFailure += response.failureCount;
+        if (errors.length) aggErrors.push(...errors);
+      }
+    }
+
+    // Determine final status across both providers
     let finalStatus = 'SUCCESS';
-    if (response.failureCount > 0) {
-      finalStatus = response.successCount > 0 ? 'PARTIAL_SUCCESS' : 'FAILED';
-    }
+    if (aggFailure > 0) finalStatus = aggSuccess > 0 ? 'PARTIAL_SUCCESS' : 'FAILED';
 
-    // Update log with final results
     await updateNotificationLog(notificationLog.id, finalStatus, {
-      successCount: response.successCount,
-      failureCount: response.failureCount,
-      errors,
-      fcmResponse: {
-        successCount: response.successCount,
-        failureCount: response.failureCount,
-        invalidTokensCleaned: invalidTokens.length
-      }
+      successCount: aggSuccess,
+      failureCount: aggFailure,
+      errors: aggErrors,
+      ...(lastFcmResponse && { fcmResponse: lastFcmResponse })
     });
 
     return {
-      success: response.successCount > 0,
+      success: aggSuccess > 0,
       logId: notificationLog.id,
-      successCount: response.successCount,
-      failureCount: response.failureCount,
-      totalTargets: validTokens.length,
-      errors,
-      fcmResponse: response
+      successCount: aggSuccess,
+      failureCount: aggFailure,
+      totalTargets: combinedTokens.length,
+      errors: aggErrors,
+      ...(lastFcmResponse && { fcmResponse: lastFcmResponse })
     };
 
   } catch (error: any) {
@@ -332,7 +334,7 @@ export async function sendToTokensEnhanced(
     // Update log with error
     await updateNotificationLog(notificationLog.id, 'FAILED', {
       successCount: 0,
-      failureCount: validTokens.length,
+      failureCount: combinedTokens.length,
       errors: [{ error: error.message }]
     });
 
@@ -340,8 +342,8 @@ export async function sendToTokensEnhanced(
       success: false,
       logId: notificationLog.id,
       successCount: 0,
-      failureCount: validTokens.length,
-      totalTargets: validTokens.length,
+      failureCount: combinedTokens.length,
+      totalTargets: combinedTokens.length,
       errors: [{ error: error.message }]
     };
   }
@@ -545,7 +547,8 @@ export async function subscribeToTopicEnhanced(
   options: NotificationOptions = {}
 ): Promise<{ success: boolean; logId?: string; errors: any[] }> {
   
-  const validTokens = await validateTokens(tokens);
+  const { fcmCandidates } = splitTokens(tokens);
+  const validTokens = await validateFcmTokens(fcmCandidates);
   if (validTokens.length === 0) {
     console.warn(`[FCM Enhanced] No valid tokens for topic subscription: ${topic}`);
     return { success: false, errors: [{ error: 'No valid tokens provided' }] };
@@ -579,7 +582,8 @@ export async function unsubscribeFromTopicEnhanced(
   options: NotificationOptions = {}
 ): Promise<{ success: boolean; logId?: string; errors: any[] }> {
   
-  const validTokens = await validateTokens(tokens);
+  const { fcmCandidates } = splitTokens(tokens);
+  const validTokens = await validateFcmTokens(fcmCandidates);
   if (validTokens.length === 0) {
     console.warn(`[FCM Enhanced] No valid tokens for topic unsubscription: ${topic}`);
     return { success: false, errors: [{ error: 'No valid tokens provided' }] };

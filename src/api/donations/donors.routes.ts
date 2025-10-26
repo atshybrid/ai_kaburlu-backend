@@ -330,11 +330,9 @@ router.put('/admin/donors/photo', requireAuth, requireHrcAdmin, upload.single('p
 
     // If donationId is provided, always update that donation's donorPhotoUrl directly
     if (donationRow) {
-      await prisma.$executeRawUnsafe(
-        `UPDATE "Donation" SET "donorPhotoUrl" = $1, "updatedAt" = NOW() WHERE id = $2`,
-        finalPhotoUrl,
-        String(donationId)
-      );
+      await prisma.$executeRaw`
+        UPDATE "Donation" SET "donorPhotoUrl" = ${finalPhotoUrl}, "updatedAt" = NOW() WHERE id = ${String(donationId)}
+      `;
       // If there are no identifiers to build or match a profile, return success now
       if (!keyMobile && !keyEmail && !keyPan) {
         return res.json({ success: true, data: { donationId: String(donationId), donorPhotoUrl: finalPhotoUrl } });
@@ -360,47 +358,51 @@ router.put('/admin/donors/photo', requireAuth, requireHrcAdmin, upload.single('p
 
     if (profRows && profRows.length) {
       const id = profRows[0].id;
-      const rows = await prisma.$queryRaw<any[]>`
+      // Avoid RETURNING quoted mixed-case columns (createdAt) which may not exist depending on how
+      // the table was created. Update first, then SELECT the row explicitly.
+      await prisma.$executeRaw`
         UPDATE "DonationDonorProfile"
-        SET photoUrl = ${finalPhotoUrl}, "updatedAt" = NOW(),
-            donorMobile = COALESCE(donorMobile, ${keyMobile || null}),
-            donorEmail = COALESCE(donorEmail, ${keyEmail || null}),
-            donorPan = COALESCE(donorPan, ${keyPan || null})
+        SET photoUrl = ${finalPhotoUrl}, updatedat = NOW(),
+            donorMobile = COALESCE(donorMobile, CAST(${keyMobile || null} AS text)),
+            donorEmail = COALESCE(donorEmail, CAST(${keyEmail || null} AS text)),
+            donorPan = COALESCE(donorPan, CAST(${keyPan || null} AS text))
         WHERE id = ${id}
-        RETURNING id, name, donorMobile, donorEmail, donorPan, photoUrl, "createdAt", "updatedAt"
+      `;
+      const rows = await prisma.$queryRaw<any[]>
+      `
+        SELECT id, name, donorMobile, donorEmail, donorPan, photoUrl,
+               createdat AS "createdAt", updatedat AS "updatedAt"
+        FROM "DonationDonorProfile" WHERE id = ${id} LIMIT 1
       `;
       // Also denormalize onto Donation rows for convenience in admin lists
-      await prisma.$executeRawUnsafe(
-        `UPDATE "Donation" SET "donorPhotoUrl" = $1, "updatedAt" = NOW()
-          WHERE ($2 IS NOT NULL AND "donorMobile" = $2)
-             OR ($3 IS NOT NULL AND "donorEmail" = $3)
-             OR ($4 IS NOT NULL AND UPPER(COALESCE("donorPan",'')) = $4)`,
-        finalPhotoUrl,
-        keyMobile || null,
-        keyEmail || null,
-        keyPan || null
-      );
+      await prisma.$executeRaw`
+        UPDATE "Donation" SET "donorPhotoUrl" = ${finalPhotoUrl}, "updatedAt" = NOW()
+        WHERE (CAST(${keyMobile || null} AS text) IS NOT NULL AND "donorMobile" = CAST(${keyMobile || null} AS text))
+           OR (CAST(${keyEmail || null} AS text) IS NOT NULL AND "donorEmail" = CAST(${keyEmail || null} AS text))
+           OR (CAST(${(keyPan ? keyPan.toUpperCase() : null) as any} AS text) IS NOT NULL AND UPPER(COALESCE("donorPan",'')) = CAST(${(keyPan ? keyPan.toUpperCase() : null) as any} AS text))
+      `;
       return res.json({ success: true, data: rows[0] });
     }
 
     const id = randomUUID();
     const nameGuess = req.body?.name || undefined;
-    const rows = await prisma.$queryRaw<any[]>`
+    await prisma.$executeRaw`
       INSERT INTO "DonationDonorProfile" (id, name, donorMobile, donorEmail, donorPan, photoUrl)
       VALUES (${id}, ${nameGuess || null}, ${keyMobile || null}, ${keyEmail || null}, ${keyPan || null}, ${finalPhotoUrl})
-      RETURNING id, name, donorMobile, donorEmail, donorPan, photoUrl, "createdAt", "updatedAt"
+    `;
+    const rows = await prisma.$queryRaw<any[]>
+    `
+      SELECT id, name, donorMobile, donorEmail, donorPan, photoUrl,
+             createdat AS "createdAt", updatedat AS "updatedAt"
+      FROM "DonationDonorProfile" WHERE id = ${id} LIMIT 1
     `;
     // Also denormalize onto Donation rows for convenience in admin lists
-    await prisma.$executeRawUnsafe(
-      `UPDATE "Donation" SET "donorPhotoUrl" = $1, "updatedAt" = NOW()
-        WHERE ($2 IS NOT NULL AND "donorMobile" = $2)
-           OR ($3 IS NOT NULL AND "donorEmail" = $3)
-           OR ($4 IS NOT NULL AND UPPER(COALESCE("donorPan",'')) = $4)`,
-      finalPhotoUrl,
-      keyMobile || null,
-      keyEmail || null,
-      keyPan || null
-    );
+    await prisma.$executeRaw`
+      UPDATE "Donation" SET "donorPhotoUrl" = ${finalPhotoUrl}, "updatedAt" = NOW()
+      WHERE (CAST(${keyMobile || null} AS text) IS NOT NULL AND "donorMobile" = CAST(${keyMobile || null} AS text))
+         OR (CAST(${keyEmail || null} AS text) IS NOT NULL AND "donorEmail" = CAST(${keyEmail || null} AS text))
+         OR (CAST(${(keyPan ? keyPan.toUpperCase() : null) as any} AS text) IS NOT NULL AND UPPER(COALESCE("donorPan",'')) = CAST(${(keyPan ? keyPan.toUpperCase() : null) as any} AS text))
+    `;
     return res.json({ success: true, data: rows[0] });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'DONOR_PHOTO_UPDATE_FAILED', message: e?.message });

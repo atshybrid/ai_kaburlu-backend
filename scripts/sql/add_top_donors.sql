@@ -20,7 +20,7 @@ CREATE INDEX IF NOT EXISTS idx_ddp_pan ON "DonationDonorProfile" (donorPan);
 -- Create or replace function, then (re)create trigger safely
 CREATE OR REPLACE FUNCTION set_updated_at_ddp() RETURNS TRIGGER AS $$
 BEGIN
-  NEW."updatedAt" = NOW();
+  NEW.updatedat = NOW();
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
 
