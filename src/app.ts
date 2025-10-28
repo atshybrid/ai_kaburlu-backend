@@ -57,6 +57,7 @@ import meetRoutes from './api/meet/meet.routes';
 import adsRoutes from './api/ads/ads.routes';
 import paymentWebhookRoutes from './api/payments/webhook.routes';
 import { startAdsExpiryScheduler } from './services/adsExpiryScheduler';
+import adminBootstrapRoutes from './api/admin/bootstrap.routes';
 
 const app = express();
 
@@ -190,6 +191,8 @@ app.use('/meet', meetRoutes);
 app.use('/hrci/meet', meetRoutes);
 app.use('/ads', adsRoutes);
 app.use('/payment', paymentWebhookRoutes); // exposes POST /payment/webhook
+// Admin bootstrap (token-guarded, no JWT needed): POST /admin/bootstrap-accounts
+app.use('/admin', adminBootstrapRoutes);
 // Public joining endpoints (no version prefix per request)
 app.use('/hrci/geo', geoHrcRoutes); // expose HRCI geo reads without versioned base
 app.use('/hrci/geo/admin', geoHrcAdminRoutes); // protected via JWT + admin
@@ -267,6 +270,8 @@ apiV1.use('/meet', meetRoutes);
 apiV1.use('/hrci/meet', meetRoutes);
 apiV1.use('/ads', adsRoutes);
 apiV1.use('/payment', paymentWebhookRoutes); // exposes POST /api/v1/payment/webhook
+// Also mount under versioned base: POST /api/v1/admin/bootstrap-accounts
+apiV1.use('/admin', adminBootstrapRoutes);
 apiV1.use('/hrci/geo', geoHrcRoutes);
 apiV1.use('/hrci/cells', hrciCellsRoutes);
 apiV1.use('/hrci/designations', hrciDesignationsRoutes);

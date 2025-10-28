@@ -1,4 +1,11 @@
-import 'dotenv/config';
+// Load environment variables from .env.* using dotenv-flow (CommonJS require to avoid TS type dependency)
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const dotenvFlow = require('dotenv-flow');
+dotenvFlow.config();
+// Normalize environment first (sets DATABASE_URL/BASE_URL based on ENV_TYPE and DEV_/PROD_ vars)
+import './config/env';
+import { runPrismaMigrationsIfEnabled } from './lib/prismaMigrate';
+import { runSeedsIfEnabled } from './lib/seedOnStart';
 import 'reflect-metadata';
 import app from './app';
 import { PrismaClient } from '@prisma/client';
@@ -19,6 +26,25 @@ async function prismaConnectWithTimeout(ms: number) {
 
 async function start() {
   try {
+    // Optionally run Prisma migrations (deploy/push) before app init
+    try {
+      const mig = await runPrismaMigrationsIfEnabled();
+      if (mig.ran) {
+        console.log(`[startup] prisma migrate mode=${mig.mode} ok=${mig.ok}`);
+      }
+    } catch (e: any) {
+      console.error('[startup] prisma migrate fatal:', e?.message || e);
+      // fallthrough; process may continue if DB connection also optional
+    }
+
+    // Optionally run seed after schema is in place
+    try {
+      const s = await runSeedsIfEnabled();
+      if (s.ran) console.log(`[startup] seed ok=${s.ok}`);
+    } catch (e: any) {
+      console.error('[startup] seed fatal:', e?.message || e);
+    }
+
     if (process.env.DATABASE_URL) {
       try {
         await prismaConnectWithTimeout(Number(process.env.PRISMA_CONNECT_TIMEOUT_MS) || 10000);

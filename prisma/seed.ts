@@ -11,6 +11,11 @@
  *  - FULL_SEED enables creation of sample content (articles, short news, devices, metrics)
  */
 
+// Load environment variables and normalize dev/prod mapping for DATABASE_URL etc.
+// Using require() to avoid subpath import issues in some environments.
+require('dotenv-flow').config();
+import '../src/config/env';
+
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
