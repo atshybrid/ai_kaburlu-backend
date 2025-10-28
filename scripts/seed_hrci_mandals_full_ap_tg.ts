@@ -9,6 +9,8 @@
  *   STRICT=1         -> Throw error if district not found (instead of warning)
  *   CREATE_DISTRICT=1 -> If district missing, create it (uses state's zone inferred)
  */
+require('dotenv-flow').config();
+import '../src/config/env';
 import { createReadStream } from 'fs';
 import path from 'path';
 import { PrismaClient } from '@prisma/client';
@@ -34,7 +36,7 @@ async function loadCsv(file: string): Promise<MandalRow[]> {
   const rows: MandalRow[] = [];
   return new Promise((resolve, reject) => {
     createReadStream(path.resolve(file))
-      .pipe(csv())
+      .pipe(csv({ skipComments: true }))
       .on('data', (r: any) => {
         if (!r.state || !r.district || !r.mandal) return;
         const state = String(r.state).trim();

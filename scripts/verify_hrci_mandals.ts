@@ -6,6 +6,8 @@
  *   EXPECT_AP=679      -> expected mandal count for Andhra Pradesh
  *   EXPECT_TG=612      -> expected mandal count for Telangana
  */
+require('dotenv-flow').config();
+import '../src/config/env';
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 const p: any = prisma;
