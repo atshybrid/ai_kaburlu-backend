@@ -1,5 +1,37 @@
 import swaggerJSDoc from 'swagger-jsdoc';
+// Load env and normalize DEV/PROD mapping so server URLs reflect ENV_TYPE
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+require('dotenv-flow').config();
+import '../config/env';
 import { userSwagger } from '../api/users/users.swagger';
+
+// Build servers dynamically
+const isProd = process.env.ENV_TYPE === 'prod' || process.env.NODE_ENV === 'production';
+const devRoot = 'http://localhost:3001';
+const devV1 = process.env.DEV_BASE_URL || `${devRoot}/api/v1`;
+const rawProdBase = process.env.PROD_BASE_URL || 'https://api.humanrightscouncilforindia.org';
+// If PROD_BASE_URL already includes /api/v1, strip for root, add v1 separately
+const prodRoot = rawProdBase.replace(/\/?api\/v1\/?$/, '');
+
+const servers: { url: string; description: string }[] = [];
+if (isProd) {
+  servers.push(
+    { url: prodRoot, description: 'Production (root)' },
+    { url: `${prodRoot}/api/v1`, description: 'Production (v1 legacy)' }
+  );
+} else {
+  servers.push(
+    { url: devRoot, description: 'Local server (root)' },
+    { url: `${devRoot}/api/v1`, description: 'Local server (v1 legacy)' }
+  );
+  if (devV1 && !devV1.includes('localhost')) {
+    const guessRoot = devV1.replace(/\/?api\/v1\/?$/, '');
+    servers.push(
+      { url: guessRoot, description: 'Remote dev (root)' },
+      { url: devV1, description: 'Remote dev (v1 legacy)' }
+    );
+  }
+}
 
 const swaggerDefinition = {
   openapi: '3.0.0',
@@ -8,28 +40,7 @@ const swaggerDefinition = {
     version: '1.0.0',
     description: 'REST API for Kaburlu platform, covering Superadmin, Language Admin, News Desk, Citizen Reporter, Categories & Category Translations.'
   },
-  servers: [
-    {
-      url: 'http://localhost:3001',
-      description: 'Local server (root)'
-    },
-    {
-      url: 'https://app.hrcitodaynews.in',
-      description: 'Render server (root)'
-    },
-    {
-      url: 'http://localhost:3001/api/v1',
-      description: 'Local server (v1 legacy)'
-    },
-    {
-      url: 'https://app.hrcitodaynews.in/api/v1',
-      description: 'Render server (v1 legacy)'
-    },
-        {
-      url: 'https://app.humanrightscouncilforindia.org/api/v1',
-      description: 'Render server (v1 legacy)'
-    }
-  ],
+  servers,
   tags: [
     { name: 'Auth' },
     { name: 'Users' },
