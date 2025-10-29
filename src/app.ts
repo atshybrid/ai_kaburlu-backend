@@ -41,6 +41,7 @@ import hrciCellsRoutes from './api/hrci/cells.routes';
 import hrciDesignationsRoutes from './api/hrci/designations.routes';
 import hrciCasesRoutes from './api/hrci/cases.routes';
 import hrciReportsRoutes from './api/hrci/reports.admin.routes';
+import hrciDesignationPricesRoutes from './api/hrci/designationPrices.routes';
 import membershipsPublicRoutes from './api/memberships/public.routes';
 import membershipsPaymentsRoutes from './api/memberships/payments.routes';
 import membershipsPayFirstRoutes from './api/memberships/payfirst.routes';
@@ -198,6 +199,7 @@ app.use('/hrci/geo', geoHrcRoutes); // expose HRCI geo reads without versioned b
 app.use('/hrci/geo/admin', geoHrcAdminRoutes); // protected via JWT + admin
 app.use('/hrci/cells', hrciCellsRoutes); // public cells listing
 app.use('/hrci/designations', hrciDesignationsRoutes); // public designations listing
+app.use('/hrci', hrciDesignationPricesRoutes); // HRCI designation prices (upload & upsert)
 app.use('/hrci/cases', hrciCasesRoutes); // cases endpoints (JWT required inside)
 app.use('/hrci/reports', hrciReportsRoutes); // HRCI Admin reports
 app.use('/hrci/idcard', idcardRoutes); // settings + public card JSON/HTML/QR
@@ -275,6 +277,7 @@ apiV1.use('/admin', adminBootstrapRoutes);
 apiV1.use('/hrci/geo', geoHrcRoutes);
 apiV1.use('/hrci/cells', hrciCellsRoutes);
 apiV1.use('/hrci/designations', hrciDesignationsRoutes);
+apiV1.use('/hrci', hrciDesignationPricesRoutes);
 apiV1.use('/hrci/cases', hrciCasesRoutes);
 apiV1.use('/hrci/idcard', idcardRoutes);
 apiV1.use('/hrci/reports', hrciReportsRoutes);

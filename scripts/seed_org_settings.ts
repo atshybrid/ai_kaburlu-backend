@@ -1,3 +1,6 @@
+// Ensure environment is loaded before Prisma client is instantiated
+require('dotenv-flow').config();
+import '../src/config/env';
 import prisma from '../src/lib/prisma';
 
 async function main() {

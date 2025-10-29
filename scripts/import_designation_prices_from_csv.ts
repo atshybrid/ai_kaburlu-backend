@@ -1,3 +1,7 @@
+// Load env so DATABASE_URL resolves (dev/prod mapping inside src/config/env)
+require('dotenv-flow').config();
+import '../src/config/env';
+
 import { createReadStream } from 'fs';
 import path from 'path';
 import csv from 'csv-parser';
@@ -63,13 +67,14 @@ async function upsertPrice(designationId: string, cellId: string, level: string,
   return 'created';
 }
 
-async function run(filePath: string) {
+export async function importDesignationPrices(filePath: string) {
   const rows: any[] = [];
   await new Promise<void>((resolve, reject) => {
     createReadStream(filePath).pipe(csv()).on('data', (row) => rows.push(row)).on('end', resolve).on('error', reject);
   });
 
   let created = 0, updated = 0, skipped = 0;
+  const desigCache: Record<string, any> = {};
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     try {
@@ -79,13 +84,37 @@ async function run(filePath: string) {
       const desigName = r['Designation name'];
       const feeRaw = r['ID Card Amount'];
       const validityRaw = r['Validity ID card in days'];
+      const capacityRaw = r['Number of post available'] || r['Capacity'];
+      const parentNameRaw = r['Parent name'] || r['Parent'];
       if (!cellName || !desigName || !feeRaw) { skipped++; continue; }
       const fee = Number(String(feeRaw).trim());
       const validityDays = validityRaw ? Number(String(validityRaw).trim()) : undefined;
       if (!Number.isFinite(fee)) { skipped++; continue; }
 
       const cell = await upsertCellByName(cellName);
-      const desig = await upsertDesignationByName(desigName);
+      // Upsert designation and cache by name for parent linkage
+      const desig = desigCache[desigName] || await upsertDesignationByName(desigName);
+      desigCache[desigName] = desig;
+
+      // If capacity provided, update defaultCapacity once
+      const capacity = capacityRaw ? Number(String(capacityRaw).trim()) : undefined;
+      if (Number.isFinite(capacity) && capacity! >= 0) {
+        try { await prisma.designation.update({ where: { id: desig.id }, data: { defaultCapacity: Math.trunc(capacity!) } }); } catch {}
+      }
+
+      // Parent linkage if available
+      if (parentNameRaw && String(parentNameRaw).trim().length > 0) {
+        const parentName = String(parentNameRaw).trim();
+        const parent = desigCache[parentName] || await upsertDesignationByName(parentName);
+        desigCache[parentName] = parent;
+        if (!desig.parentId || desig.parentId !== parent.id) {
+          try {
+            await prisma.designation.update({ where: { id: desig.id }, data: { parentId: parent.id } });
+            desig.parentId = parent.id;
+          } catch {}
+        }
+      }
+
       const lvl = level || 'NATIONAL';
       const res = await upsertPrice(desig.id, cell.id, lvl, zone, Math.round(fee), validityDays);
       if (res === 'created') created++; else updated++;
@@ -98,4 +127,8 @@ async function run(filePath: string) {
 
 const defaultFile = path.join(__dirname, 'data', 'hrci_fees.csv');
 const file = process.argv[2] || defaultFile;
-run(file).catch((e) => { console.error(e); process.exit(1); }).finally(async () => { await (prisma as any).$disconnect(); });
+
+// Execute only when run directly from CLI; when imported from prisma/seed.ts this won't auto-execute
+if ((require as any).main === module) {
+  importDesignationPrices(file).catch((e) => { console.error(e); process.exit(1); }).finally(async () => { await (prisma as any).$disconnect(); });
+}

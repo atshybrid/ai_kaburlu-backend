@@ -18,6 +18,9 @@ import '../src/config/env';
 
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import * as fs from 'fs';
+import * as path from 'path';
+import { importDesignationPrices } from '../scripts/import_designation_prices_from_csv';
 
 const prisma = new PrismaClient();
 
@@ -403,6 +406,19 @@ async function main() {
     await seedSampleContent(roleMap, languageMap);
     await seedDevices(roleMap, languageMap);
     await seedComments();
+    // Optional: Import designation prices from CSV if available
+    try {
+        const csvPath = process.env.DESIGNATION_CSV_PATH || path.join(__dirname, '..', 'scripts', 'data', 'hrci_fees.csv');
+        if (fs.existsSync(csvPath)) {
+            log('designations','importing designation prices from CSV');
+            await importDesignationPrices(csvPath);
+            log('designations','CSV import completed');
+        } else {
+            log('designations',`CSV not found at ${csvPath} – skipping`);
+        }
+    } catch (e: any) {
+        log('designations',`CSV import skipped/failed: ${e?.message || e}`);
+    }
     // Summary counts (best-effort)
     try {
         const [userCount, articleCount, snCount, commentCount, deviceCount, reactCount] = await Promise.all([

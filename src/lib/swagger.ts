@@ -24,6 +24,10 @@ const swaggerDefinition = {
     {
       url: 'https://app.hrcitodaynews.in/api/v1',
       description: 'Render server (v1 legacy)'
+    },
+        {
+      url: 'https://app.humanrightscouncilforindia.org/api/v1',
+      description: 'Render server (v1 legacy)'
     }
   ],
   tags: [
