@@ -33,12 +33,19 @@ if (isProd) {
   }
 }
 
+// Always include a convenient local v1 server for quick testing in Swagger
+// Avoid duplicates if already present from dev block above
+const localV1 = 'http://localhost:3001/api/v1';
+if (!servers.some(s => s.url === localV1)) {
+  servers.push({ url: localV1, description: 'Local server (v1)' });
+}
+
 const swaggerDefinition = {
   openapi: '3.0.0',
   info: {
-    title: 'Kaburlu News Platform API',
+    title: 'Khabarx News Platform API',
     version: '1.0.0',
-    description: 'REST API for Kaburlu platform, covering Superadmin, Language Admin, News Desk, Citizen Reporter, Categories & Category Translations.'
+    description: 'REST API for Khabarx platform, covering Superadmin, Language Admin, News Desk, Citizen Reporter, Categories & Category Translations.'
   },
   servers,
   tags: [
