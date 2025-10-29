@@ -1,6 +1,5 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import type { Element } from 'domhandler';
 
 /*
   Utility script: Fetch Andhra Pradesh mandal names from Wikipedia.
@@ -26,7 +25,8 @@ async function main() {
   // The page uses a big table; We'll collect all cells containing 'mandal' token.
   const mandalSet = new Set<string>();
 
-  $('table, tr, td, li').each((_: number, el: Element) => {
+  // Avoid relying on specific Cheerio element types for maximum compatibility
+  $('table, tr, td, li').each((_: number, el) => {
     const text = $(el).text().trim();
     if (!text) return;
     // Heuristic: lines ending with ' mandal' or containing ' mandal ' or with 'Mandal' (case-insensitive)
