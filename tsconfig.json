@@ -13,7 +13,8 @@
   "emitDecoratorMetadata": true,
   "moduleResolution": "node",
   "allowJs": true,
-  "typeRoots": ["./src/types", "./node_modules/@types"]
+  "typeRoots": ["./src/types", "./node_modules/@types"],
+  "types": ["node"]
   },
   "include": [
     "src/**/*",
