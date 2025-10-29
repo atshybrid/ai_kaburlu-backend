@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "npm run start:dev",
     "build:clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "npm run build:clean && tsc -p tsconfig.build.json && npm run copy:assets && npm run postbuild",
+  "build": "node scripts/ensureInstall.js && npm run build:clean && tsc -p tsconfig.build.json && npm run copy:assets && npm run postbuild",
     "postbuild": "node scripts/postbuild.js",
     "copy:assets": "node scripts/copyAssets.js",
     "start": "cross-env NODE_ENV=production node dist/index.js",
