@@ -280,3 +280,193 @@ router.get('/discounts/preview', async (req, res) => {
     return res.status(500).json({ success: false, error: 'PREVIEW_FAILED', message: e?.message });
   }
 });
+
+// --------------------
+// Public: Members listing for tree display
+// --------------------
+
+/**
+ * @swagger
+ * /memberships/public/members:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Public members listing (tree display)
+ *     description: List ACTIVE members with level, cell, designation, location chain and profile photo URL.
+ *     parameters:
+ *       - in: query
+ *         name: level
+ *         schema: { type: string, enum: [NATIONAL, ZONE, STATE, DISTRICT, MANDAL] }
+ *       - in: query
+ *         name: cell
+ *         schema: { type: string }
+ *         description: Filter by Cell id/code/name
+ *       - in: query
+ *         name: designationCode
+ *         schema: { type: string }
+ *       - in: query
+ *         name: zone
+ *         schema: { type: string, enum: [NORTH, SOUTH, EAST, WEST, CENTRAL] }
+ *       - in: query
+ *         name: hrcStateId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: hrcDistrictId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: hrcMandalId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: q
+ *         schema: { type: string }
+ *         description: Search by member name or mobile (substring)
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, minimum: 1 }
+ *         default: 1
+ *       - in: query
+ *         name: pageSize
+ *         schema: { type: integer, minimum: 1, maximum: 200 }
+ *         default: 50
+ *     responses:
+ *       200:
+ *         description: Member list
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     total: { type: integer }
+ *                     page: { type: integer }
+ *                     pageSize: { type: integer }
+ *                     items:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           memberName: { type: string, nullable: true }
+ *                           mobileNumber: { type: string, nullable: true }
+ *                           level: { type: string }
+ *                           cellName: { type: string }
+ *                           designationName: { type: string }
+ *                           location:
+ *                             type: object
+ *                             properties:
+ *                               zone: { type: string, nullable: true }
+ *                               state: { type: object, nullable: true, properties: { id: { type: string }, name: { type: string } } }
+ *                               district: { type: object, nullable: true, properties: { id: { type: string }, name: { type: string }, stateName: { type: string, nullable: true } } }
+ *                               mandal: { type: object, nullable: true, properties: { id: { type: string }, name: { type: string }, districtName: { type: string, nullable: true }, stateName: { type: string, nullable: true } } }
+ *                           profilePhotoUrl: { type: string, nullable: true }
+ */
+router.get('/members', async (req, res) => {
+  try {
+    const { level, cell, designationCode, zone, hrcStateId, hrcDistrictId, hrcMandalId, q } = req.query as any;
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, parseInt(String(req.query.pageSize || '50'), 10) || 50));
+
+    // Resolve cell filter if provided (allow id/code/name)
+    let cellIdFilter: string | undefined;
+    if (cell) {
+      const c = await prisma.cell.findFirst({ where: { OR: [ { id: String(cell) }, { code: String(cell) }, { name: String(cell) } ] } });
+      if (!c) return res.status(404).json({ success: false, error: 'CELL_NOT_FOUND' });
+      cellIdFilter = c.id;
+    }
+
+    // Resolve designation if provided (code or id)
+    let designationIdFilter: string | undefined;
+    if (designationCode) {
+      const d = await prisma.designation.findFirst({ where: { OR: [ { id: String(designationCode) }, { code: String(designationCode) } ] } });
+      if (!d) return res.status(404).json({ success: false, error: 'DESIGNATION_NOT_FOUND' });
+      designationIdFilter = d.id;
+    }
+
+    // Base membership where: only ACTIVE for public tree
+    const where: any = { status: 'ACTIVE' };
+    if (level) where.level = String(level);
+    if (cellIdFilter) where.cellId = cellIdFilter;
+    if (designationIdFilter) where.designationId = designationIdFilter;
+    if (zone) where.zone = String(zone);
+    if (hrcStateId) where.hrcStateId = String(hrcStateId);
+    if (hrcDistrictId) where.hrcDistrictId = String(hrcDistrictId);
+    if (hrcMandalId) where.hrcMandalId = String(hrcMandalId);
+
+    const total = await prisma.membership.count({ where });
+    const memberships = await prisma.membership.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      include: { cell: true, designation: true }
+    });
+
+    const userIds = Array.from(new Set(memberships.map(m => m.userId)));
+    const users = await prisma.user.findMany({
+      where: { id: { in: userIds } },
+      select: {
+        id: true,
+        mobileNumber: true,
+        profile: { select: { fullName: true, profilePhotoUrl: true, profilePhotoMedia: { select: { url: true } } } }
+      }
+    });
+    const userMap = new Map(users.map(u => [u.id, u]));
+
+    // Gather location IDs
+    const stateIds = Array.from(new Set(memberships.map(m => m.hrcStateId).filter(Boolean))) as string[];
+    const districtIds = Array.from(new Set(memberships.map(m => m.hrcDistrictId).filter(Boolean))) as string[];
+    const mandalIds = Array.from(new Set(memberships.map(m => m.hrcMandalId).filter(Boolean))) as string[];
+
+    const [states, districts, mandals] = await Promise.all([
+      stateIds.length ? prisma.hrcState.findMany({ where: { id: { in: stateIds } }, select: { id: true, name: true, zone: true } }) : Promise.resolve([]),
+      districtIds.length ? prisma.hrcDistrict.findMany({ where: { id: { in: districtIds } }, select: { id: true, name: true, stateId: true } }) : Promise.resolve([]),
+      mandalIds.length ? prisma.hrcMandal.findMany({ where: { id: { in: mandalIds } }, select: { id: true, name: true, districtId: true } }) : Promise.resolve([])
+    ]);
+    const stateMap = new Map(states.map(s => [s.id, s]));
+    const districtMap = new Map(districts.map(d => [d.id, d]));
+    const mandalMap = new Map(mandals.map(m => [m.id, m]));
+
+    // Optional simple search q by name/mobile
+    const qLower = (String(q || '')).trim().toLowerCase();
+
+    const items = memberships
+      .map(m => {
+        const u = userMap.get(m.userId as string);
+        const prof = u?.profile;
+        const state = m.hrcStateId ? stateMap.get(m.hrcStateId) : undefined;
+        const district = m.hrcDistrictId ? districtMap.get(m.hrcDistrictId) : undefined;
+        const mandal = m.hrcMandalId ? mandalMap.get(m.hrcMandalId) : undefined;
+        const profilePhotoUrl = prof?.profilePhotoUrl || prof?.profilePhotoMedia?.url || null;
+        return {
+          memberName: prof?.fullName || null,
+          mobileNumber: u?.mobileNumber || null,
+          level: m.level,
+          cellName: (m as any).cell?.name || '',
+          designationName: (m as any).designation?.name || '',
+          location: {
+            zone: (m as any).zone || state?.zone || null,
+            state: state ? { id: state.id, name: state.name } : null,
+            district: district ? { id: district.id, name: district.name, stateName: stateMap.get(district.stateId)?.name || null } : null,
+            mandal: mandal ? {
+              id: mandal.id,
+              name: mandal.name,
+              districtName: districtMap.get(mandal.districtId)?.name || null,
+              stateName: (() => { const d = districtMap.get(mandal.districtId); return d ? (stateMap.get(d.stateId)?.name || null) : null; })()
+            } : null
+          },
+          profilePhotoUrl
+        };
+      })
+      .filter(item => {
+        if (!qLower) return true;
+        const name = (item.memberName || '').toLowerCase();
+        const mobile = (item.mobileNumber || '').toLowerCase();
+        return name.includes(qLower) || mobile.includes(qLower);
+      });
+
+    return res.json({ success: true, data: { total, page, pageSize, items } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'LIST_FAILED', message: e?.message });
+  }
+});
