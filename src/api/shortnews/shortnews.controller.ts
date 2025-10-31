@@ -1056,23 +1056,33 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
     });
     // Inject sponsor ads every 5 items (if any ACTIVE ads)
     async function getActiveAds(langId?: string) {
-      const now = new Date();
-      // Include ACTIVE ads that are in-window, and when a feed language is known,
-      // include both language-matched and global (languageId = null).
-      const timeWindow = {
-        OR: [
-          { startAt: null, endAt: null },
-          { startAt: { lte: now }, endAt: null },
-          { startAt: null, endAt: { gte: now } },
-          { startAt: { lte: now }, endAt: { gte: now } },
-        ],
-      };
-      const where: any = { status: 'ACTIVE' as any, AND: [timeWindow] };
-      if (langId) {
-        where.AND.push({ OR: [ { languageId: langId }, { languageId: null } ] });
+      try {
+        const now = new Date();
+        // Include ACTIVE ads that are in-window, and when a feed language is known,
+        // include both language-matched and global (languageId = null).
+        const timeWindow = {
+          OR: [
+            { startAt: null, endAt: null },
+            { startAt: { lte: now }, endAt: null },
+            { startAt: null, endAt: { gte: now } },
+            { startAt: { lte: now }, endAt: { gte: now } },
+          ],
+        };
+        const where: any = { status: 'ACTIVE' as any, AND: [timeWindow] };
+        if (langId) {
+          where.AND.push({ OR: [ { languageId: langId }, { languageId: null } ] });
+        }
+        const adClient = (prisma as any).ad;
+        if (!adClient || typeof adClient.findMany !== 'function') {
+          // Ads model not available in this environment or schema not yet migrated
+          return [];
+        }
+        const ads = await adClient.findMany({ where, orderBy: { updatedAt: 'desc' }, take: 100 });
+        return ads;
+      } catch {
+        // If Ads table is missing or any DB error occurs, fail open without ads
+        return [];
       }
-      const ads = await (prisma as any).ad.findMany({ where, orderBy: { updatedAt: 'desc' }, take: 100 });
-      return ads;
     }
     function pickWeighted(ads: any[], lastId?: string) {
       const pool = lastId ? ads.filter(a => a.id !== lastId) : ads;
