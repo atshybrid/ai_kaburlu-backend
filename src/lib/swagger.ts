@@ -5,9 +5,9 @@ require('dotenv-flow').config();
 import '../config/env';
 import { userSwagger } from '../api/users/users.swagger';
 
-// Build servers dynamically per environment
-const isProd = process.env.ENV_TYPE === 'prod' || process.env.NODE_ENV === 'production';
-const devV1 = process.env.DEV_BASE_URL || 'http://localhost:3001/api/v1';
+// Build servers: always show Local, Remote Dev, and Production v1 endpoints
+const localV1 = 'http://localhost:3001/api/v1';
+const devV1 = process.env.DEV_BASE_URL || 'https://app.hrcitodaynews.in/api/v1';
 const prodV1 = process.env.PROD_BASE_URL || 'https://api.humanrightscouncilforindia.org/api/v1';
 
 const servers: { url: string; description: string }[] = [];
@@ -19,16 +19,10 @@ const addServer = (url: string, description: string) => {
   }
 };
 
-if (isProd) {
-  // Production: only the Production v1 endpoint
-  addServer(prodV1, 'Production (v1)');
-} else {
-  // Development: Local v1 + Remote Dev v1 (if not localhost)
-  addServer('http://localhost:3001/api/v1', 'Local (v1)');
-  if (devV1 && !/localhost|127\.0\.0\.1/.test(devV1)) {
-    addServer(devV1, 'Remote Dev (v1)');
-  }
-}
+// Order: Local -> Remote Dev -> Production
+addServer(localV1, 'Local (v1)');
+addServer(devV1, 'Remote Dev (v1)');
+addServer(prodV1, 'Production (v1)');
 
 const swaggerDefinition = {
   openapi: '3.0.0',
