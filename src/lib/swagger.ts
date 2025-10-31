@@ -14,31 +14,37 @@ const rawProdBase = process.env.PROD_BASE_URL || 'https://api.humanrightscouncil
 const prodRoot = rawProdBase.replace(/\/?api\/v1\/?$/, '');
 
 const servers: { url: string; description: string }[] = [];
+const addServer = (url: string, description: string) => {
+  if (!url) return;
+  const clean = url.replace(/\/$/, '');
+  if (!servers.some(s => s.url.replace(/\/$/, '') === clean)) {
+    servers.push({ url: clean, description });
+  }
+};
 if (isProd) {
-  servers.push(
-    { url: prodRoot, description: 'Production (root)' },
-    { url: `${prodRoot}/api/v1`, description: 'Production (v1 legacy)' }
-  );
+  addServer(prodRoot, 'Production (root)');
+  addServer(`${prodRoot}/api/v1`, 'Production (v1)');
 } else {
-  servers.push(
-    { url: devRoot, description: 'Local server (root)' },
-    { url: `${devRoot}/api/v1`, description: 'Local server (v1 legacy)' }
-  );
+  addServer(devRoot, 'Local (root)');
+  addServer(`${devRoot}/api/v1`, 'Local (v1)');
   if (devV1 && !devV1.includes('localhost')) {
     const guessRoot = devV1.replace(/\/?api\/v1\/?$/, '');
-    servers.push(
-      { url: guessRoot, description: 'Remote dev (root)' },
-      { url: devV1, description: 'Remote dev (v1 legacy)' }
-    );
+    addServer(guessRoot, 'Remote Dev (root)');
+    addServer(devV1, 'Remote Dev (v1)');
   }
 }
 
 // Always include a convenient local v1 server for quick testing in Swagger
 // Avoid duplicates if already present from dev block above
 const localV1 = 'http://localhost:3001/api/v1';
-if (!servers.some(s => s.url === localV1)) {
-  servers.push({ url: localV1, description: 'Local server (v1)' });
-}
+addServer(localV1, 'Local (v1)');
+
+// Always include explicit DEV_BASE_URL and PROD_BASE_URL v1 endpoints in Swagger servers
+const prodV1 = (process.env.PROD_BASE_URL && process.env.PROD_BASE_URL.match(/api\/(v\d+)/))
+  ? process.env.PROD_BASE_URL
+  : `${prodRoot}/api/v1`;
+addServer(prodV1, 'Production (v1)');
+addServer(devV1, 'Remote Dev (v1)');
 
 const swaggerDefinition = {
   openapi: '3.0.0',
