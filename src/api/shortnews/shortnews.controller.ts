@@ -823,8 +823,19 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
   try {
     const limit = Math.min(parseInt((req.query.limit as string) || '10', 10), 50);
     const cursorRaw = (req.query.cursor as string) || '';
-  const languageIdParam = ((req.query.languageId as string) || '').trim();
-  const languageCodeParamRaw = ((req.query.languageCode as string) || '').trim();
+  // Accept aliases for flexibility: languageId | langId | language | lang, and languageCode | code
+  const languageIdParam = (
+    (req.query.languageId as string) ||
+    (req.query.langId as string) ||
+    (req.query.language as string) ||
+    (req.query.lang as string) ||
+    ''
+  ).trim();
+  const languageCodeParamRaw = (
+    (req.query.languageCode as string) ||
+    (req.query.code as string) ||
+    ''
+  ).trim();
   const languageCodeParam = languageCodeParamRaw ? languageCodeParamRaw.toLowerCase() : '';
     // Optional language filter: if provided, validate exists; else show all languages
     let cursor: { id: string; date: string } | null = null;
@@ -838,18 +849,28 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
       } catch {}
     }
     // Resolve language filter from id or code
-    let resolvedLanguageId: string | null = null;
+    let resolvedLang: { id: string; code: string } | null = null;
     if (languageIdParam) {
       const langCheck = await prisma.language.findUnique({ where: { id: languageIdParam } });
       if (!langCheck) return res.status(400).json({ success: false, error: 'Invalid languageId' });
-      resolvedLanguageId = langCheck.id;
+      resolvedLang = { id: langCheck.id, code: langCheck.code };
     } else if (languageCodeParam) {
       const langCheck = await prisma.language.findFirst({ where: { code: { equals: languageCodeParam, mode: 'insensitive' } } });
       if (!langCheck) return res.status(400).json({ success: false, error: 'Invalid languageCode' });
-      resolvedLanguageId = langCheck.id;
+      resolvedLang = { id: langCheck.id, code: langCheck.code };
     }
     const where: any = { status: { in: ['DESK_APPROVED', 'AI_APPROVED'] } };
-    if (resolvedLanguageId) where.language = resolvedLanguageId;
+    if (resolvedLang) {
+      // Backward compatibility: some rows store Language.id, others may store Language.code in ShortNews.language
+      where.AND = [
+        {
+          OR: [
+            { language: resolvedLang.id },
+            { language: { equals: resolvedLang.code, mode: 'insensitive' } },
+          ],
+        },
+      ];
+    }
 
     // Optional geo filter: if both lat and lon provided, filter within radiusKm (default ~30km)
     const latStr = (req.query.latitude as string) || '';
@@ -921,15 +942,26 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
     const slice = filtered.slice(0, limit);
     const last = slice[slice.length - 1];
     const nextCursor = last ? Buffer.from(JSON.stringify({ id: last.id, date: last.createdAt.toISOString() })).toString('base64') : null;
-    // attach language info
-    const langIds = Array.from(new Set(slice.map((i) => i.language).filter((x): x is string => !!x)));
-    const langs = await prisma.language.findMany({ where: { id: { in: langIds } } });
-    const langMap = new Map(langs.map((l) => [l.id, l]));
+    // attach language info (support when ShortNews.language holds either id or code)
+    const langVals = Array.from(new Set(slice.map((i) => i.language).filter((x): x is string => !!x)));
+    const langsById = await prisma.language.findMany({ where: { id: { in: langVals } } });
+    const foundIds = new Set(langsById.map(l => l.id));
+    const codeCandidates = langVals.filter(v => !foundIds.has(v));
+    const langsByCode = codeCandidates.length
+      ? await prisma.language.findMany({ where: { code: { in: codeCandidates } } })
+      : [];
+    const langMapById = new Map(langsById.map((l) => [l.id, l]));
+    const langMapByCode = new Map(langsByCode.map((l) => [l.code, l]));
     // category names (language-aware: use each item's language)
     const categoryIds = Array.from(new Set(slice.map((i: any) => i.categoryId).filter((x: any) => !!x)));
     const sliceLangIds = Array.from(new Set(slice.map((i: any) => i.language).filter((x: any) => !!x)));
+    // Prefer category translations in each item's actual language code
+    const sliceLangCodes = Array.from(new Set(slice.map((i: any) => {
+      const l = i.language ? (langMapById.get(i.language as any) || langMapByCode.get(i.language as any)) : undefined;
+      return l?.code;
+    }).filter((x): x is string => !!x)));
     const [catTranslations, cats] = await Promise.all([
-      prisma.categoryTranslation.findMany({ where: { categoryId: { in: categoryIds }, language: { in: sliceLangIds as any } } }),
+      prisma.categoryTranslation.findMany({ where: { categoryId: { in: categoryIds }, language: { in: sliceLangCodes as any } } }),
       prisma.category.findMany({ where: { id: { in: categoryIds } } }),
     ]);
     const catNameById = new Map<string, string>();
@@ -954,7 +986,8 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
       readSet = new Set(readRows.map(r => r.shortNewsId));
     }
   const dataNews = slice.map((i: any) => {
-      const l = i.language ? langMap.get(i.language as any) : undefined;
+  // Resolve language regardless of whether value is id or code
+  const l = i.language ? (langMapById.get(i.language as any) || langMapByCode.get(i.language as any)) : undefined;
   const categoryName = i.categoryId ? (catNameByCatLang.get(`${i.categoryId}:${i.language}`) ?? catNameById.get(i.categoryId) ?? null) : null;
   const author = i.author as any;
   const authorName = author?.profile?.fullName || author?.email || author?.mobileNumber || null;
@@ -1148,18 +1181,29 @@ export const getApprovedShortNewsById = async (req: Request, res: Response) => {
     if (!id) {
       return res.status(400).json({ success: false, error: 'ShortNews ID is required' });
     }
-  const qLangId = ((req.query.languageId as string) || '').trim();
-  const qLangCodeRaw = ((req.query.languageCode as string) || '').trim();
+  // Accept aliases for language guard as well
+  const qLangId = (
+    (req.query.languageId as string) ||
+    (req.query.langId as string) ||
+    (req.query.language as string) ||
+    (req.query.lang as string) ||
+    ''
+  ).trim();
+  const qLangCodeRaw = (
+    (req.query.languageCode as string) ||
+    (req.query.code as string) ||
+    ''
+  ).trim();
   const qLangCode = qLangCodeRaw ? qLangCodeRaw.toLowerCase() : '';
-    let guardLanguageId: string | null = null;
+    let guardLang: { id: string; code: string } | null = null;
     if (qLangId) {
       const lang = await prisma.language.findUnique({ where: { id: qLangId } });
       if (!lang) return res.status(400).json({ success: false, error: 'Invalid languageId' });
-      guardLanguageId = lang.id;
+      guardLang = { id: lang.id, code: lang.code };
     } else if (qLangCode) {
       const lang = await prisma.language.findFirst({ where: { code: { equals: qLangCode, mode: 'insensitive' } } });
       if (!lang) return res.status(400).json({ success: false, error: 'Invalid languageCode' });
-      guardLanguageId = lang.id;
+      guardLang = { id: lang.id, code: lang.code };
     }
 
     // Find the short news item - must be approved to be publicly accessible
@@ -1188,19 +1232,24 @@ export const getApprovedShortNewsById = async (req: Request, res: Response) => {
     }
 
     // Optional language guard: if provided, ensure item matches
-    if (guardLanguageId && String(item.language) !== guardLanguageId) {
+    if (guardLang && (String(item.language) !== guardLang.id && String(item.language).toLowerCase() !== guardLang.code.toLowerCase())) {
       return res.status(404).json({ success: false, error: 'LANGUAGE_MISMATCH' });
     }
 
     // Get language info
-    const lang = item.language ? await prisma.language.findUnique({ where: { id: item.language as any } }) : null;
+    // Resolve language info: try by ID, then fallback by code
+    let lang = item.language ? await prisma.language.findUnique({ where: { id: item.language as any } }) : null;
+    if (!lang && item.language) {
+      lang = await prisma.language.findFirst({ where: { code: { equals: String(item.language), mode: 'insensitive' } } });
+    }
 
     // Get category name (in the item's language if available)
     let categoryName: string | null = null;
     if (item.categoryId) {
-      const catTranslation = await prisma.categoryTranslation.findUnique({
-        where: { categoryId_language: { categoryId: item.categoryId, language: item.language as any } }
-      });
+      const langCodeForCat = lang?.code || (typeof item.language === 'string' ? String(item.language) : undefined);
+      const catTranslation = langCodeForCat ? await prisma.categoryTranslation.findUnique({
+        where: { categoryId_language: { categoryId: item.categoryId, language: langCodeForCat as any } }
+      }) : null;
       if (catTranslation) {
         categoryName = catTranslation.name;
       } else {
