@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../../lib/prisma';
 import { subscribeToTopic, unsubscribeFromTopic } from '../../lib/fcm';
+import { withTimeout } from '../../lib/promiseTimeout';
 
 /**
  * Update user preferences (location, language, FCM token)
@@ -59,7 +60,7 @@ export const updateUserPreferencesController = async (req: Request, res: Respons
     // Validate language if provided
     let languageData = null;
     if (languageId) {
-      languageData = await prisma.language.findUnique({ where: { id: languageId } });
+  languageData = await withTimeout(prisma.language.findUnique({ where: { id: languageId } }), Number(process.env.API_DB_TIMEOUT_MS || 5000), 'getLanguage');
       if (!languageData) {
         return res.status(400).json({
           success: false,
@@ -76,14 +77,14 @@ export const updateUserPreferencesController = async (req: Request, res: Respons
     // Find user and device based on provided identifier
     if (userId) {
       // Registered user case
-      targetUser = await prisma.user.findUnique({
+      targetUser = await withTimeout(prisma.user.findUnique({
         where: { id: userId },
         include: { 
           role: true,
           language: true,
           devices: deviceId ? { where: { deviceId } } : true
         }
-      });
+      }), Number(process.env.API_DB_TIMEOUT_MS || 8000), 'getUser');
 
       if (!targetUser) {
         return res.status(404).json({
@@ -97,14 +98,14 @@ export const updateUserPreferencesController = async (req: Request, res: Respons
       if (deviceId) {
         targetDevice = targetUser.devices.find(d => d.deviceId === deviceId);
         if (!targetDevice) {
-          targetDevice = await prisma.device.create({
+          targetDevice = await withTimeout(prisma.device.create({
             data: {
               deviceId,
               deviceModel: deviceModel || 'unknown',
               userId: targetUser.id,
               pushToken
             }
-          });
+          }), Number(process.env.API_DB_TIMEOUT_MS || 8000), 'createDevice');
         }
       } else if ((targetUser as any).devices.length > 0) {
         // Use the most recently updated device if no deviceId specified
@@ -116,32 +117,32 @@ export const updateUserPreferencesController = async (req: Request, res: Respons
       } else {
         // Create a new device for this user if none exists
         const newDeviceId = `auto-device-${Date.now()}`;
-        targetDevice = await prisma.device.create({
+        targetDevice = await withTimeout(prisma.device.create({
           data: {
             deviceId: newDeviceId,
             deviceModel: deviceModel || 'unknown',
             userId: targetUser.id,
             pushToken
           }
-        });
+        }), Number(process.env.API_DB_TIMEOUT_MS || 8000), 'createDevice');
       }
     } else if (deviceId) {
       // Guest user case - find device first
-      targetDevice = await prisma.device.findUnique({
+      targetDevice = await withTimeout(prisma.device.findUnique({
         where: { deviceId },
         include: {
           user: {
             include: { role: true, language: true }
           }
         }
-      });
+      }), Number(process.env.API_DB_TIMEOUT_MS || 8000), 'getDevice');
 
       if (targetDevice?.user) {
         targetUser = targetDevice.user;
         isGuestUser = targetUser.role?.name === 'GUEST';
       } else {
         // Create guest user and device
-        const guestRole = await prisma.role.findUnique({ where: { name: 'GUEST' } });
+  const guestRole = await withTimeout(prisma.role.findUnique({ where: { name: 'GUEST' } }), Number(process.env.API_DB_TIMEOUT_MS || 5000), 'getGuestRole');
         if (!guestRole) {
           return res.status(500).json({
             success: false,
@@ -151,7 +152,7 @@ export const updateUserPreferencesController = async (req: Request, res: Respons
         }
 
         // Use default language or provided language
-        const defaultLanguage = languageData || await prisma.language.findFirst({ where: { code: 'en' } });
+  const defaultLanguage = languageData || await withTimeout(prisma.language.findFirst({ where: { code: 'en' } }), Number(process.env.API_DB_TIMEOUT_MS || 5000), 'getDefaultLanguage');
         if (!defaultLanguage) {
           return res.status(500).json({
             success: false,
@@ -161,7 +162,7 @@ export const updateUserPreferencesController = async (req: Request, res: Respons
         }
 
         // Create guest user with device
-        targetUser = await prisma.user.create({
+        targetUser = await withTimeout(prisma.user.create({
           data: {
             roleId: guestRole.id,
             languageId: languageId || defaultLanguage.id,
@@ -175,7 +176,7 @@ export const updateUserPreferencesController = async (req: Request, res: Respons
             }
           },
           include: { role: true, language: true, devices: true }
-        });
+        }), Number(process.env.API_DB_TIMEOUT_MS || 8000), 'createGuestUser');
 
         targetDevice = targetUser.devices[0];
         isGuestUser = true;
@@ -282,17 +283,17 @@ export const updateUserPreferencesController = async (req: Request, res: Respons
     }
 
     // Execute all updates
-    const results = await Promise.all(promises);
+  const results = await withTimeout(Promise.all(promises), Number(process.env.API_DB_TIMEOUT_MS || 10000), 'preferencesUpdate');
     
     // Get fresh data after updates
-    const finalUser = await prisma.user.findUnique({
+    const finalUser = await withTimeout(prisma.user.findUnique({
       where: { id: targetUser.id },
       include: { role: true, language: true }
-    });
+    }), Number(process.env.API_DB_TIMEOUT_MS || 6000), 'getUserFinal');
     
-    const finalDevice = await prisma.device.findUnique({
+    const finalDevice = await withTimeout(prisma.device.findUnique({
       where: { id: targetDevice.id }
-    });
+    }), Number(process.env.API_DB_TIMEOUT_MS || 6000), 'getDeviceFinal');
 
     // Handle FCM topic subscriptions for language changes
     if (pushToken && languageId && oldLanguageCode !== languageData?.code) {

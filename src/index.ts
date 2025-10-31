@@ -9,6 +9,7 @@ import { runSeedsIfEnabled } from './lib/seedOnStart';
 import 'reflect-metadata';
 import app from './app';
 import { PrismaClient } from '@prisma/client';
+import { sleep } from './lib/promiseTimeout';
 import http from 'http';
 import { startDonationsReconcileJob, stopDonationsReconcileJob } from './jobs/donationsReconcile';
 
@@ -66,6 +67,23 @@ async function start() {
 
     // start background jobs
     startDonationsReconcileJob();
+
+    // Optional DB keepalive to reduce cold-start timeouts on PaaS
+    const keepAliveMs = Number(process.env.DB_KEEPALIVE_MS || (process.env.ENV_TYPE === 'prod' ? 60000 : 0));
+    if (keepAliveMs > 0 && process.env.DATABASE_URL) {
+      (async function dbKeepAliveLoop() {
+        for (;;) {
+          try {
+            // Simple ping; avoid throwing on failure to not crash
+            await prisma.$queryRawUnsafe('SELECT 1');
+          } catch (e) {
+            // log once every 10 failures to reduce noise
+          }
+          await sleep(keepAliveMs);
+        }
+      })().catch(() => {});
+      console.log(`[startup] DB keepalive enabled every ${keepAliveMs}ms`);
+    }
 
     // graceful shutdown
     const graceful = async (signal?: string) => {
