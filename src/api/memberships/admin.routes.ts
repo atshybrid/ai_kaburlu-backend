@@ -385,16 +385,55 @@ router.put('/:id/status', (req, res, next) => {
  */
 router.post('/:id/idcard', requireAuth, requireHrcAdmin, async (req, res) => {
   try {
-    const m = await prisma.membership.findUnique({ where: { id: req.params.id } });
-    if (!m) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
-    const existing = await prisma.iDCard.findUnique({ where: { membershipId: m.id } }).catch(() => null);
-    if (existing) return res.json({ success: true, data: existing });
+    const membership = await prisma.membership.findUnique({ where: { id: req.params.id }, include: { designation: true, cell: true } });
+    if (!membership) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
     // Enforce profile photo requirement
-    const user = await prisma.user.findUnique({ where: { id: m.userId }, include: { profile: true } });
+    const user = await prisma.user.findUnique({ where: { id: membership.userId }, include: { profile: true } });
     const hasPhoto = !!(user?.profile?.profilePhotoUrl || user?.profile?.profilePhotoMediaId);
     if (!user?.profile || !hasPhoto) return res.status(400).json({ success: false, error: 'PROFILE_PHOTO_REQUIRED' });
-  const cardNumber = await generateNextIdCardNumber(prisma as any);
-    const card = await prisma.iDCard.create({ data: { membershipId: m.id, cardNumber, expiresAt: new Date(Date.now() + 365*24*60*60*1000) } });
+
+    // Compute new card details
+    const cardNumber = await generateNextIdCardNumber(prisma as any);
+    const validityDays = (membership as any).designation?.validityDays || 365;
+    const expiresAt = new Date(Date.now() + (validityDays * 24 * 60 * 60 * 1000));
+    const fullName = (user as any).profile?.fullName || undefined;
+    const mobileNumber = (user as any).mobileNumber || undefined;
+    const designationName = (membership as any).designation?.name || undefined;
+    const cellName = (membership as any).cell?.name || undefined;
+
+    // Reissue: update existing card if present, else create
+    const existing = await prisma.iDCard.findUnique({ where: { membershipId: membership.id } }).catch(() => null);
+    let card;
+    if (existing) {
+      card = await prisma.iDCard.update({
+        where: { id: existing.id },
+        data: {
+          cardNumber,
+          issuedAt: new Date(),
+          expiresAt,
+          status: 'GENERATED' as any,
+          fullName,
+          mobileNumber,
+          designationName,
+          cellName,
+        } as any
+      });
+    } else {
+      card = await prisma.iDCard.create({
+        data: {
+          membershipId: membership.id,
+          cardNumber,
+          expiresAt,
+          status: 'GENERATED' as any,
+          fullName,
+          mobileNumber,
+          designationName,
+          cellName,
+        } as any
+      });
+    }
+    // Ensure membership reflects card generated
+    try { await prisma.membership.update({ where: { id: membership.id }, data: { idCardStatus: 'GENERATED' as any } }); } catch {}
     return res.json({ success: true, data: card });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'CARD_ISSUE_FAILED', message: e?.message });
