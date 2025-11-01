@@ -42,6 +42,7 @@ import hrciDesignationsRoutes from './api/hrci/designations.routes';
 import hrciCasesRoutes from './api/hrci/cases.routes';
 import hrciReportsRoutes from './api/hrci/reports.admin.routes';
 import hrciDesignationPricesRoutes from './api/hrci/designationPrices.routes';
+import hrciMemberUpgradeRoutes from './api/hrci/member.upgrade.routes';
 import membershipsPublicRoutes from './api/memberships/public.routes';
 import membershipsPaymentsRoutes from './api/memberships/payments.routes';
 import membershipsPayFirstRoutes from './api/memberships/payfirst.routes';
@@ -203,6 +204,7 @@ app.use('/hrci', hrciDesignationPricesRoutes); // HRCI designation prices (uploa
 app.use('/hrci/cases', hrciCasesRoutes); // cases endpoints (JWT required inside)
 app.use('/hrci/reports', hrciReportsRoutes); // HRCI Admin reports
 app.use('/hrci/idcard', idcardRoutes); // settings + public card JSON/HTML/QR
+app.use('/hrci/member/upgrade', hrciMemberUpgradeRoutes); // upgrade preview/apply
 app.use('/memberships/public', membershipsPublicRoutes); // open public
 // KYC: JWT required inside the router; mounted under member path. Public alias retained for backward compatibility.
 app.use('/memberships/kyc', membershipsKycRoutes);
@@ -282,6 +284,7 @@ apiV1.use('/hrci', hrciDesignationPricesRoutes);
 apiV1.use('/hrci/cases', hrciCasesRoutes);
 apiV1.use('/hrci/idcard', idcardRoutes);
 apiV1.use('/hrci/reports', hrciReportsRoutes);
+apiV1.use('/hrci/member/upgrade', hrciMemberUpgradeRoutes);
 apiV1.use('/memberships', membershipsRoutes);
 apiV1.use('/memberships/admin', membershipsAdminRoutes);
 apiV1.use('/memberships', membershipsSelfRoutes);

@@ -75,6 +75,213 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
 
 /**
  * @swagger
+ * /memberships/admin/{id}/assign:
+ *   put:
+ *     tags: [HRCI Membership - Admin APIs]
+ *     summary: Reassign membership seat (level/cell/designation/location)
+ *     description: |
+ *       Moves an existing membership to a new seat specification after verifying capacity.
+ *       - Validates designation capacity and optional cell-level aggregate capacity.
+ *       - Computes new fee using DesignationPrice overrides and adjusts payment status accordingly.
+ *       - If dryRun=true, returns the computed outcome without persisting changes.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [cell, level]
+ *             properties:
+ *               cell: { type: string, description: "Cell id or code or name" }
+ *               designationCode: { type: string, nullable: true }
+ *               designationId: { type: string, nullable: true }
+ *               level: { type: string, enum: [NATIONAL, ZONE, STATE, DISTRICT, MANDAL] }
+ *               zone: { type: string, nullable: true }
+ *               hrcCountryId: { type: string, nullable: true }
+ *               hrcStateId: { type: string, nullable: true }
+ *               hrcDistrictId: { type: string, nullable: true }
+ *               hrcMandalId: { type: string, nullable: true }
+ *               dryRun: { type: boolean, default: false }
+ *     responses:
+ *       200: { description: Reassignment result }
+ */
+router.put('/:id/assign', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const membershipId = String(req.params.id);
+    const { cell, designationCode, designationId, level, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId, dryRun } = req.body || {};
+    if (!cell) return res.status(400).json({ success: false, error: 'CELL_REQUIRED' });
+    if (!level) return res.status(400).json({ success: false, error: 'LEVEL_REQUIRED' });
+    if (!designationCode && !designationId) return res.status(400).json({ success: false, error: 'DESIGNATION_REQUIRED' });
+
+    // Level-specific mandatory fields
+    const lvl = String(level);
+    if (lvl === 'ZONE' && !zone) return res.status(400).json({ success: false, error: 'ZONE_REQUIRED' });
+    if (lvl === 'STATE' && !hrcStateId) return res.status(400).json({ success: false, error: 'HRC_STATE_ID_REQUIRED' });
+    if (lvl === 'DISTRICT' && !hrcDistrictId) return res.status(400).json({ success: false, error: 'HRC_DISTRICT_ID_REQUIRED' });
+    if (lvl === 'MANDAL' && !hrcMandalId) return res.status(400).json({ success: false, error: 'HRC_MANDAL_ID_REQUIRED' });
+
+  const outcome = await prisma.$transaction(async (tx) => {
+      const m = await tx.membership.findUnique({ where: { id: membershipId }, include: { payments: true } });
+      if (!m) throw new Error('MEMBERSHIP_NOT_FOUND');
+
+      const cellRow = await tx.cell.findFirst({ where: { OR: [ { id: String(cell) }, { code: String(cell) }, { name: String(cell) } ] } });
+      if (!cellRow) throw new Error('CELL_NOT_FOUND');
+      const desigRow = designationId
+        ? await tx.designation.findUnique({ where: { id: String(designationId) } })
+        : await tx.designation.findFirst({ where: { OR: [ { code: String(designationCode) }, { id: String(designationCode) } ] } });
+      if (!desigRow) throw new Error('DESIGNATION_NOT_FOUND');
+
+      // Build filters for capacity checks, excluding the current record to simulate move
+      const whereBase: any = {
+        cellId: cellRow.id,
+        designationId: desigRow.id,
+        level: lvl,
+        status: { in: ['PENDING_PAYMENT','PENDING_APPROVAL','ACTIVE'] },
+        NOT: { id: m.id },
+      };
+      if (lvl === 'ZONE') whereBase.zone = zone || null;
+      if (lvl === 'NATIONAL') whereBase.hrcCountryId = hrcCountryId || null;
+      if (lvl === 'STATE') whereBase.hrcStateId = hrcStateId || null;
+      if (lvl === 'DISTRICT') whereBase.hrcDistrictId = hrcDistrictId || null;
+      if (lvl === 'MANDAL') whereBase.hrcMandalId = hrcMandalId || null;
+
+      const used = await tx.membership.count({ where: whereBase });
+      if (used >= desigRow.defaultCapacity) {
+        return { accepted: false, reason: 'NO_SEATS_DESIGNATION', remaining: 0 };
+      }
+
+      // Level aggregate cap (if any). Note: capacity rows stored without geo for STATE/DISTRICT/MANDAL in current design.
+      const levelCap = await tx.cellLevelCapacity.findFirst({
+        where: {
+          cellId: cellRow.id,
+          level: lvl as any,
+          zone: lvl === 'ZONE' ? (zone || null) : null,
+          hrcStateId: null,
+          hrcDistrictId: null,
+          hrcMandalId: null,
+        }
+      });
+      if (levelCap) {
+        const aggWhere: any = {
+          cellId: cellRow.id,
+          level: lvl,
+          status: { in: ['PENDING_PAYMENT','PENDING_APPROVAL','ACTIVE'] },
+          NOT: { id: m.id },
+        };
+        if (lvl === 'ZONE') aggWhere.zone = zone || null;
+        if (lvl === 'NATIONAL') aggWhere.hrcCountryId = hrcCountryId || null;
+        if (lvl === 'STATE') aggWhere.hrcStateId = hrcStateId || null;
+        if (lvl === 'DISTRICT') aggWhere.hrcDistrictId = hrcDistrictId || null;
+        if (lvl === 'MANDAL') aggWhere.hrcMandalId = hrcMandalId || null;
+        const aggregateUsed = await tx.membership.count({ where: aggWhere });
+        if (aggregateUsed >= levelCap.capacity) {
+          return { accepted: false, reason: 'NO_SEATS_LEVEL_AGGREGATE', remaining: 0 };
+        }
+      }
+
+      // Determine next seatSequence for the target bucket (max+1 to avoid collisions)
+      const maxSeat = await tx.membership.aggregate({ where: whereBase, _max: { seatSequence: true } });
+      const nextSeat = (maxSeat._max.seatSequence || 0) + 1;
+
+      // Price via availability resolver (reuses override logic)
+      const availability = await (membershipService as any).getAvailability({
+        cellCodeOrName: cellRow.id,
+        designationCode: desigRow.id,
+        level: lvl,
+        zone,
+        hrcCountryId,
+        hrcStateId,
+        hrcDistrictId,
+        hrcMandalId,
+      });
+      const newFee: number = availability?.designation?.fee ?? 0;
+
+      // Payment impact
+      const paidSum = (m.payments || []).filter((p: any) => p.status === 'SUCCESS').reduce((s: number, p: any) => s + (p.amount || 0), 0);
+      const deltaDue = Math.max(0, newFee - paidSum);
+      const willRequirePayment = deltaDue > 0;
+
+      // Compute post-update statuses conservatively
+      let targetPaymentStatus = m.paymentStatus as any;
+      let targetStatus = m.status as any;
+      if (willRequirePayment) {
+        targetPaymentStatus = 'PENDING';
+        targetStatus = 'PENDING_PAYMENT';
+      } else {
+        // No further amount due. If previously pending payment and now zero-due, move to PENDING_APPROVAL (unless already ACTIVE)
+        if (m.status !== 'ACTIVE') {
+          targetStatus = 'PENDING_APPROVAL';
+        }
+        targetPaymentStatus = paidSum > 0 ? 'SUCCESS' : 'NOT_REQUIRED';
+      }
+
+      const preview = {
+        accepted: true,
+        membershipId,
+        to: {
+          cellId: cellRow.id,
+          designationId: desigRow.id,
+          level: lvl,
+          zone: lvl === 'ZONE' ? (zone || null) : null,
+          hrcCountryId: lvl === 'NATIONAL' ? (hrcCountryId || null) : null,
+          hrcStateId: lvl === 'STATE' ? (hrcStateId || null) : null,
+          hrcDistrictId: lvl === 'DISTRICT' ? (hrcDistrictId || null) : null,
+          hrcMandalId: lvl === 'MANDAL' ? (hrcMandalId || null) : null,
+          seatSequence: nextSeat,
+        },
+        pricing: { fee: newFee, paid: paidSum, deltaDue },
+        status: { from: { status: m.status, paymentStatus: m.paymentStatus }, to: { status: targetStatus, paymentStatus: targetPaymentStatus } },
+      };
+
+      if (dryRun) return preview;
+
+      // Persist assignment
+      const updated = await tx.membership.update({
+        where: { id: m.id },
+        data: {
+          cellId: cellRow.id,
+          designationId: desigRow.id,
+          level: lvl as any,
+          zone: lvl === 'ZONE' ? (zone || null) : null,
+          hrcCountryId: lvl === 'NATIONAL' ? (hrcCountryId || null) : null,
+          hrcStateId: lvl === 'STATE' ? (hrcStateId || null) : null,
+          hrcDistrictId: lvl === 'DISTRICT' ? (hrcDistrictId || null) : null,
+          hrcMandalId: lvl === 'MANDAL' ? (hrcMandalId || null) : null,
+          seatSequence: nextSeat,
+          status: targetStatus,
+          paymentStatus: targetPaymentStatus,
+          lockedAt: new Date(),
+        }
+      });
+
+      // Create additional payment record if needed
+      if (willRequirePayment) {
+        await tx.membershipPayment.create({ data: { membershipId: m.id, amount: deltaDue, status: 'PENDING' } });
+      }
+
+      return { ...preview, data: updated };
+  }, { timeout: 15000 });
+
+    if (!outcome.accepted) return res.status(409).json({ success: false, ...outcome });
+    return res.json({ success: true, data: outcome });
+  } catch (e: any) {
+    const message = e?.message || String(e);
+    if (message === 'MEMBERSHIP_NOT_FOUND' || message === 'CELL_NOT_FOUND' || message === 'DESIGNATION_NOT_FOUND') {
+      return res.status(404).json({ success: false, error: message });
+    }
+    return res.status(500).json({ success: false, error: 'ASSIGN_FAILED', message });
+  }
+});
+
+/**
+ * @swagger
  * /memberships/admin/{id}:
  *   get:
  *     tags: [HRCI Membership - Admin APIs]
@@ -145,7 +352,7 @@ router.put('/:id/status', (req, res, next) => {
     const data: any = { status: String(status) };
     if (expiresAt) data.expiresAt = new Date(expiresAt);
     // If moving to ACTIVE without a card, issue a card
-    const updated = await prisma.$transaction(async (tx) => {
+  const updated = await prisma.$transaction(async (tx) => {
       const m = await tx.membership.update({ where: { id: req.params.id }, data });
       const hasCard = await tx.iDCard.findUnique({ where: { membershipId: m.id } }).catch(() => null);
       if (m.status === 'ACTIVE' && !hasCard) {
@@ -153,7 +360,7 @@ router.put('/:id/status', (req, res, next) => {
         await tx.iDCard.create({ data: { membershipId: m.id, cardNumber, expiresAt: new Date(Date.now() + 365*24*60*60*1000) } });
       }
       return m;
-    });
+  }, { timeout: 15000 });
     return res.json({ success: true, data: updated });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'STATUS_UPDATE_FAILED', message: e?.message });
