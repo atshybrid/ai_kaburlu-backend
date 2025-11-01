@@ -6,18 +6,19 @@ const prisma = new PrismaClient();
 const p: any = prisma;
 
 // Configuration: two member designations with flat fees across all cells/levels
+// Updated per request: Student fee 100 with 1,000,000 seats; Volunteer fee 500 with 100,000 seats
 const MEMBER_DESIGNATIONS = [
-  { name: 'Voluntary Member', code: 'VOLUNATRY', fee: 500, validityDays: 365 },
-  { name: 'Student Member',   code: 'STUDENT',   fee: 200, validityDays: 365 },
+  { name: 'Volunteer', code: 'VOLUNTEER', fee: 500, validityDays: 365, seats: 100_000 },
+  { name: 'Student',   code: 'STUDENT',   fee: 100, validityDays: 365, seats: 1_000_000 },
 ];
 
 const ORG_LEVELS = ['NATIONAL','ZONE','STATE','DISTRICT','MANDAL'];
 
-async function upsertDesignation(d: { name: string; code: string; fee: number; validityDays: number }) {
+async function upsertDesignation(d: { name: string; code: string; fee: number; validityDays: number; seats: number }) {
   const row = await p.designation.upsert({
     where: { code: d.code },
-    update: { name: d.name, idCardFee: d.fee, validityDays: d.validityDays, defaultCapacity: 10000, orderRank: 1000 },
-    create: { code: d.code, name: d.name, idCardFee: d.fee, validityDays: d.validityDays, defaultCapacity: 10000, orderRank: 1000 }
+    update: { name: d.name, idCardFee: d.fee, validityDays: d.validityDays, defaultCapacity: d.seats, orderRank: 1000 },
+    create: { code: d.code, name: d.name, idCardFee: d.fee, validityDays: d.validityDays, defaultCapacity: d.seats, orderRank: 1000 }
   });
   return row;
 }
