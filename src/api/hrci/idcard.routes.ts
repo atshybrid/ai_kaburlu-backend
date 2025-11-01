@@ -176,7 +176,9 @@ router.get('/:cardNumber', async (req, res) => {
  *           example: hrci-2510-00001
  */
 router.get('/:cardNumber/html', async (req, res) => {
-  const card = await prisma.iDCard.findUnique({ where: { cardNumber: req.params.cardNumber } });
+  const raw = String(req.params.cardNumber || '').trim();
+  // Case-insensitive lookup to match JSON endpoint behavior
+  const card = await prisma.iDCard.findFirst({ where: { cardNumber: { equals: raw, mode: 'insensitive' } as any } as any });
   if (!card) return res.status(404).send('Card not found');
   const s = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
   // Resolve display fields
@@ -409,18 +411,22 @@ export default router;
  */
 router.post('/appointments/regenerate', requireAuth, requireHrcAdmin, async (req, res) => {
   try {
-    const { userId, cardNumber } = (req.body || {}) as { userId?: string; cardNumber?: string; force?: boolean };
-    let uid = userId?.trim() || '';
+    // Accept params from body or query to reduce 400s from clients sending query strings
+    const body = (req.body || {}) as { userId?: string; cardNumber?: string; force?: boolean };
+    const q = (req.query || {}) as any;
+    const rawUserId = (body.userId || q.userId || '').toString();
+    const rawCard = (body.cardNumber || q.cardNumber || '').toString();
+    let uid = rawUserId.trim();
 
     // If userId not provided, resolve from cardNumber
-    if (!uid && cardNumber) {
-      const card = await prisma.iDCard.findUnique({ where: { cardNumber } });
-      if (!card) return res.status(404).json({ success: false, error: 'CARD_NOT_FOUND', message: `No IDCard found for cardNumber '${cardNumber}'.` });
+    if (!uid && rawCard) {
+      const card = await prisma.iDCard.findFirst({ where: { cardNumber: { equals: rawCard, mode: 'insensitive' } as any } as any });
+      if (!card) return res.status(404).json({ success: false, error: 'CARD_NOT_FOUND', message: `No IDCard found for cardNumber '${rawCard}'.` });
       const membership = await prisma.membership.findUnique({ where: { id: card.membershipId } });
       if (!membership?.userId) return res.status(404).json({ success: false, error: 'USER_NOT_FOUND_FOR_CARD', message: 'Could not resolve user from the provided cardNumber.' });
       uid = membership.userId;
     }
-    if (!uid) return res.status(400).json({ success: false, error: 'MISSING_PARAM', message: 'Provide either userId or cardNumber in the request body.' });
+    if (!uid) return res.status(400).json({ success: false, error: 'MISSING_PARAM', message: 'Provide userId or cardNumber (in body or query).' });
 
     // Force regeneration by default for this admin API.
     const url = await ensureAppointmentLetterForUser(uid, true);
