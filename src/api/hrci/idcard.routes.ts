@@ -224,7 +224,7 @@ router.get('/:cardNumber/html', async (req, res) => {
     qrSvg = `<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><rect width='160' height='160' fill='#fff'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='10'>QR</text></svg>`;
   }
   // Helper to read template either from dist or src
-  const readTemplate = (name: 'idcard_front.html' | 'idcard_back.html') => {
+  const readTemplate = (name: 'idcard_front.html' | 'idcard_back.html' | 'idcard_front_vertical.html') => {
     const distPath = path.resolve(__dirname, '../../templates', name);
     const srcPath = path.resolve(process.cwd(), 'src/templates', name);
     const tPath = fs.existsSync(distPath) ? distPath : (fs.existsSync(srcPath) ? srcPath : distPath);
@@ -251,7 +251,9 @@ router.get('/:cardNumber/html', async (req, res) => {
 
   // FRONT
   const buildFront = () => {
-    let html = readTemplate('idcard_front.html');
+    const orientation = String(req.query.orientation || '').toLowerCase();
+    const isVertical = orientation === 'vertical' || orientation === 'portrait';
+    let html = readTemplate(isVertical ? 'idcard_front_vertical.html' : 'idcard_front.html');
     html = html.replace('</head>', `${colorsStyle}</head>`);
     html = replaceIn(html, 'frontH1', String(s?.frontH1 || ''));
     html = replaceIn(html, 'frontH2', String(s?.frontH2 || ''));

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ID Card Front (Vertical)</title>
+  <style>
+    /* Portrait CR80 variant: 54mm width x 85mm height (user requested 85mm x 54mm) */
+    @page { size: 54mm 85mm; margin: 0; }
+    :root { --primary: #0d6efd; --secondary: #6c757d; }
+    html, body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .card { position: relative; width: 54mm; height: 85mm; background: #fff; overflow: hidden; font-family: Arial, Helvetica, sans-serif; color: #111; }
+
+    /* Top brand band */
+    .topband { position: absolute; left: 0; top: 0; right: 0; height: 16mm; background: var(--primary); color: #fff; box-sizing: border-box; padding: 2mm 2.5mm; display: grid; grid-template-columns: 10mm 1fr 10mm; align-items: center; }
+    .logo { height: 8mm; object-fit: contain; }
+    .titles { text-align: center; line-height: 1.15; }
+    #frontH1 { font-size: 3.4mm; font-weight: 800; letter-spacing: .2mm; }
+    #frontH2 { font-size: 2.7mm; opacity: .95; }
+    #frontH34 { font-size: 2.4mm; opacity: .9; }
+
+    /* Content */
+    .content { position: absolute; top: 16mm; bottom: 10mm; left: 0; right: 0; padding: 2mm 3mm; box-sizing: border-box; display: grid; grid-template-rows: 26mm auto; gap: 2mm; }
+    .photo { width: 22mm; height: 26mm; border: .6mm solid rgba(0,0,0,.08); border-radius: 1.5mm; overflow: hidden; background: #f8f8f8; margin: 0 auto; }
+    .photo img { width: 100%; height: 100%; object-fit: cover; }
+
+    .fields { display: grid; grid-template-columns: 1fr; gap: 1.4mm; }
+    .kv { display: grid; grid-template-columns: 16mm 1fr; gap: 1mm; align-items: center; font-size: 2.6mm; }
+    .k { color: #555; }
+    .v { font-weight: 700; color: #111; }
+    .meta { font-size: 2.5mm; color: #333; margin-top: .8mm; }
+
+    /* Bottom marks band */
+    .bottomband { position: absolute; left: 0; right: 0; bottom: 0; height: 10mm; background: linear-gradient(to right, var(--secondary) 0%, #e9ecef 100%); display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2mm; box-sizing: border-box; padding: 2mm 2.5mm; }
+    .footerText { font-size: 2.3mm; color: #111; opacity: .9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .marks { display: flex; align-items: center; gap: 2.5mm; }
+    .sign { height: 6mm; }
+    .stamp { height: 8mm; opacity: .95; }
+  </style>
+</head>
+<body>
+  <div class="card" id="card-front-vertical">
+    <div class="topband">
+      <img id="frontLogo" class="logo" src="" alt="Logo" />
+      <div class="titles">
+        <div id="frontH1">ORGANIZATION</div>
+        <div id="frontH2"></div>
+        <div id="frontH34"></div>
+      </div>
+      <img id="secondLogo" class="logo" src="" alt="Secondary" />
+    </div>
+
+    <div class="content">
+      <div class="photo"><img id="photoUrl" src="" alt="Photo" /></div>
+      <div class="fields">
+        <div class="kv"><div class="k">Name</div><div class="v" id="fullName">-</div></div>
+        <div class="kv"><div class="k">Mobile</div><div class="v" id="mobileNumber">-</div></div>
+        <div class="kv"><div class="k">Designation</div><div class="v" id="designationName">-</div></div>
+        <div class="kv"><div class="k">Cell</div><div class="v" id="cellName">-</div></div>
+        <div class="meta">Card No: <span id="cardNumber">-</span></div>
+        <div class="meta">Issued: <span id="issuedAt">-</span> &nbsp; | &nbsp; Valid Upto: <span id="expiresAt">-</span></div>
+      </div>
+    </div>
+
+    <div class="bottomband">
+      <div class="footerText" id="frontFooterText"></div>
+      <div class="marks">
+        <img id="authorSignUrl" class="sign" src="" alt="Sign" />
+        <img id="hrciStampUrl" class="stamp" src="" alt="Stamp" />
+      </div>
+    </div>
+  </div>
+</body>
+</html>
