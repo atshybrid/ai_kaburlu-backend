@@ -32,6 +32,10 @@ const router = Router();
  *         registerDetails: { type: string, nullable: true }
  *         frontFooterText: { type: string, nullable: true }
  *         headOfficeAddress: { type: string, nullable: true }
+ *         regionalOfficeAddress: { type: string, nullable: true }
+ *         administrationOfficeAddress: { type: string, nullable: true }
+ *         contactNumber1: { type: string, nullable: true }
+ *         contactNumber2: { type: string, nullable: true }
  *         terms:
  *           oneOf:
  *             - type: array
@@ -285,6 +289,9 @@ router.get('/:cardNumber/html', async (req, res) => {
         ${terms.length ? terms.map(t => `<li>${t}</li>`).join('') : '<li>Carry this card at all times during official duties.</li>'}
       </ol>
       ${s?.headOfficeAddress ? `<div class="addr"><b>Head Office:</b><br/>${s.headOfficeAddress}</div>` : ''}
+      ${s?.regionalOfficeAddress ? `<div class="addr"><b>Regional Office:</b><br/>${s.regionalOfficeAddress}</div>` : ''}
+      ${s?.administrationOfficeAddress ? `<div class="addr"><b>Administration Office:</b><br/>${s.administrationOfficeAddress}</div>` : ''}
+      ${(s?.contactNumber1 || s?.contactNumber2) ? `<div class="addr"><b>Contact:</b><br/>${[s?.contactNumber1, s?.contactNumber2].filter(Boolean).join(', ')}</div>` : ''}
     </div>
   </div>
   </body></html>`;

@@ -521,26 +521,30 @@ model MembershipKyc {
 
 /// Global (or scoped in future) HRCI ID Card visual/settings configuration
 model IdCardSetting {
-  id                String   @id @default(cuid())
-  name              String   @default("default")
-  isActive          Boolean  @default(false)
-  primaryColor      String?
-  secondaryColor    String?
-  frontH1           String?
-  frontH2           String?
-  frontH3           String?
-  frontH4           String?
-  frontLogoUrl      String?
-  secondLogoUrl     String?
-  hrciStampUrl      String?
-  authorSignUrl     String?
-  registerDetails   String? // plain text or small markdown
-  frontFooterText   String?
-  headOfficeAddress String?
-  terms             Json? // array of strings
-  qrLandingBaseUrl  String? // base to compose verify URL, else derived from request
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id                         String   @id @default(cuid())
+  name                       String   @default("default")
+  isActive                   Boolean  @default(false)
+  primaryColor               String?
+  secondaryColor             String?
+  frontH1                    String?
+  frontH2                    String?
+  frontH3                    String?
+  frontH4                    String?
+  frontLogoUrl               String?
+  secondLogoUrl              String?
+  hrciStampUrl               String?
+  authorSignUrl              String?
+  registerDetails            String? // plain text or small markdown
+  frontFooterText            String?
+  headOfficeAddress          String?
+  regionalOfficeAddress      String?
+  administrationOfficeAddress String?
+  contactNumber1             String?
+  contactNumber2             String?
+  terms                      Json? // array of strings
+  qrLandingBaseUrl           String? // base to compose verify URL, else derived from request
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
 
   @@index([isActive])
 }
