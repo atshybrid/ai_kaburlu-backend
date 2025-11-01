@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import fs from 'fs';
+import path from 'path';
 import prisma from '../../lib/prisma';
 import { requireAuth, requireAdmin, requireHrcAdmin } from '../middlewares/authz';
 import { ensureAppointmentLetterForUser } from '../auth/auth.service';
@@ -221,84 +223,91 @@ router.get('/:cardNumber/html', async (req, res) => {
   } catch {
     qrSvg = `<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><rect width='160' height='160' fill='#fff'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='10'>QR</text></svg>`;
   }
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>ID Card ${card.cardNumber}</title>
-  <style>
-  :root{--primary:${primary};--secondary:${secondary}}
-  *{box-sizing:border-box}
-  body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:16px;background:#f5f5f5;color:#212529}
-  .wrap{display:flex;gap:24px;flex-wrap:wrap;justify-content:center}
-  .card{width:360px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.12)}
-  .hdr{background:var(--primary);color:#fff;padding:10px 12px;text-align:center}
-  .hdr .logos{display:flex;gap:12px;justify-content:center;align-items:center;margin-bottom:6px}
-  .logo{height:44px;object-fit:contain}
-  .h1{font-size:18px;font-weight:700}
-  .h2{font-size:13px;opacity:.9}
-  .h34{font-size:12px;opacity:.9}
-  .blk{padding:12px}
-  .photo{display:flex;justify-content:center;margin:8px 0}
-  .photo img{width:96px;height:96px;border-radius:10px;object-fit:cover;border:3px solid rgba(0,0,0,.08)}
-  .row{display:flex;gap:8px;margin:6px 0}
-  .kv{flex:1 1 50%}
-  .kv .k{font-size:12px;color:#666}
-  .kv .v{font-weight:600}
-  .divider{height:1px;background:#eee;margin:10px 0}
-  .meta{font-size:12px;color:#555}
-  .qr{display:flex;justify-content:center;margin:10px 0}
-  .signs{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:8px 0}
-  .signs img{height:40px}
-  .footer{font-size:11px;color:#666;text-align:center;padding:8px 12px;background:#fafafa}
-  /* Back */
-  .back .title{background:var(--secondary);color:#fff;text-align:center;padding:8px 12px;font-weight:700}
-  .terms{padding:10px 16px;font-size:12px}
-  .terms li{margin:6px 0}
-  .addr{padding:0 16px 12px;color:#444;font-size:12px}
-  @media print {.wrap{gap:0}.card{box-shadow:none;margin:0}}
-  </style></head><body>
-  <div class="wrap">
-    <div class="card front">
-      <div class="hdr">
-        <div class="logos">
-          ${s?.frontLogoUrl ? `<img class="logo" src="${s.frontLogoUrl}" alt="Logo"/>` : ''}
-          ${s?.secondLogoUrl ? `<img class="logo" src="${s.secondLogoUrl}" alt="Second Logo"/>` : ''}
-        </div>
-        <div class="h1">${s?.frontH1 || 'HRCI'}</div>
-        ${s?.frontH2 ? `<div class="h2">${s.frontH2}</div>` : ''}
-        ${(s?.frontH3 || s?.frontH4) ? `<div class="h34">${[s?.frontH3, s?.frontH4].filter(Boolean).join(' • ')}</div>` : ''}
-      </div>
-      <div class="blk">
-        ${photoUrl ? `<div class="photo"><img src="${photoUrl}" alt="Photo"/></div>` : ''}
-        <div class="row">
-          <div class="kv"><div class="k">Name</div><div class="v">${fullName || '-'}</div></div>
-          <div class="kv"><div class="k">Mobile</div><div class="v">${mobileNumber || '-'}</div></div>
-        </div>
-        <div class="row">
-          <div class="kv"><div class="k">Designation</div><div class="v">${designationName || '-'}</div></div>
-          <div class="kv"><div class="k">Cell</div><div class="v">${cellName || '-'}</div></div>
-        </div>
-        <div class="divider"></div>
-        <div class="meta">Card No: <b>${card.cardNumber}</b></div>
-        <div class="meta">Issued: <b>${fmt(card.issuedAt)}</b> &nbsp; | &nbsp; Valid Upto: <b>${fmt(card.expiresAt)}</b></div>
-        <div class="qr">${qrSvg}</div>
-        ${s?.registerDetails ? `<div class="meta" style="white-space:pre-wrap">${s.registerDetails}</div>` : ''}
-        ${s?.authorSignUrl || s?.hrciStampUrl ? `<div class="signs">${s?.authorSignUrl ? `<img src="${s.authorSignUrl}" alt="Signature"/>` : ''}${s?.hrciStampUrl ? `<img src="${s.hrciStampUrl}" alt="Stamp"/>` : ''}</div>` : ''}
-      </div>
-      <div class="footer">${s?.frontFooterText || ''}</div>
-    </div>
-    <div class="card back">
-      <div class="title">Terms & Instructions</div>
-      <ol class="terms">
-        ${terms.length ? terms.map(t => `<li>${t}</li>`).join('') : '<li>Carry this card at all times during official duties.</li>'}
-      </ol>
-      ${s?.headOfficeAddress ? `<div class="addr"><b>Head Office:</b><br/>${s.headOfficeAddress}</div>` : ''}
-      ${s?.regionalOfficeAddress ? `<div class="addr"><b>Regional Office:</b><br/>${s.regionalOfficeAddress}</div>` : ''}
-      ${s?.administrationOfficeAddress ? `<div class="addr"><b>Administration Office:</b><br/>${s.administrationOfficeAddress}</div>` : ''}
-      ${(s?.contactNumber1 || s?.contactNumber2) ? `<div class="addr"><b>Contact:</b><br/>${[s?.contactNumber1, s?.contactNumber2].filter(Boolean).join(', ')}</div>` : ''}
-    </div>
-  </div>
-  </body></html>`;
+  // Helper to read template either from dist or src
+  const readTemplate = (name: 'idcard_front.html' | 'idcard_back.html') => {
+    const distPath = path.resolve(__dirname, '../../templates', name);
+    const srcPath = path.resolve(process.cwd(), 'src/templates', name);
+    const tPath = fs.existsSync(distPath) ? distPath : (fs.existsSync(srcPath) ? srcPath : distPath);
+    if (!fs.existsSync(tPath)) throw new Error(`Template not found: ${name}`);
+    return fs.readFileSync(tPath, 'utf8');
+  };
+
+  const replaceIn = (html: string, id: string, value: string) => {
+    const pattern = new RegExp(`(<[^>]*\\bid=\\"${id}\\"[^>]*>)(.*?)(<)`, 'g');
+    return html.replace(pattern, `$1${value}$3`);
+  };
+  const setAttr = (html: string, id: string, attr: string, value?: string | null) => {
+    const v = (value ?? '').toString().trim();
+    if (!v) return html; return html.replace(new RegExp(`id=\\"${id}\\"([^>]*?)${attr}=\\"[^\\"]*\\"`), `id="${id}"$1${attr}="${v}"`)
+      .replace(new RegExp(`id=\\"${id}\\"`), `id="${id}" ${attr}="${v}"`);
+  };
+
+  // Compose common values
+  const colorsStyle = `<style>:root{--primary:${primary};--secondary:${secondary}}</style>`;
+  const issuedAt = fmt(card.issuedAt);
+  const expiresAt = fmt(card.expiresAt);
+  const footer = s?.frontFooterText || '';
+  const side = String(req.query.side || '').toLowerCase();
+
+  // FRONT
+  const buildFront = () => {
+    let html = readTemplate('idcard_front.html');
+    html = html.replace('</head>', `${colorsStyle}</head>`);
+    html = replaceIn(html, 'frontH1', String(s?.frontH1 || ''));
+    html = replaceIn(html, 'frontH2', String(s?.frontH2 || ''));
+    html = replaceIn(html, 'frontH34', [s?.frontH3, s?.frontH4].filter(Boolean).join(' • '));
+    html = setAttr(html, 'frontLogo', 'src', s?.frontLogoUrl || '');
+    html = setAttr(html, 'secondLogo', 'src', s?.secondLogoUrl || '');
+    html = setAttr(html, 'photoUrl', 'src', photoUrl || '');
+    html = replaceIn(html, 'fullName', fullName || '-');
+    html = replaceIn(html, 'mobileNumber', mobileNumber || '-');
+    html = replaceIn(html, 'designationName', designationName || '-');
+    html = replaceIn(html, 'cellName', cellName || '-');
+    html = replaceIn(html, 'cardNumber', card.cardNumber);
+    html = replaceIn(html, 'issuedAt', issuedAt || '-');
+    html = replaceIn(html, 'expiresAt', expiresAt || '-');
+    html = replaceIn(html, 'frontFooterText', footer);
+    html = setAttr(html, 'authorSignUrl', 'src', s?.authorSignUrl || '');
+    html = setAttr(html, 'hrciStampUrl', 'src', s?.hrciStampUrl || '');
+    return html;
+  };
+
+  // BACK
+  const buildBack = () => {
+    let html = readTemplate('idcard_back.html');
+    html = html.replace('</head>', `${colorsStyle}</head>`);
+    // Terms list
+    const items = terms.length ? terms : ['Carry this card at all times during official duties.'];
+    html = html.replace('<ol class="terms" id="termsList">\n          <li>Carry this card at all times during official duties.</li>\n        </ol>', `<ol class="terms" id="termsList">${items.map(t => `<li>${t}</li>`).join('')}</ol>`);
+    // Addresses & contacts
+    html = replaceIn(html, 'headOfficeAddress', String(s?.headOfficeAddress || ''));
+    html = replaceIn(html, 'regionalOfficeAddress', String(s?.regionalOfficeAddress || ''));
+    html = replaceIn(html, 'administrationOfficeAddress', String(s?.administrationOfficeAddress || ''));
+    const contacts = [s?.contactNumber1, s?.contactNumber2].filter(Boolean).join(', ');
+    html = replaceIn(html, 'contactNumbers', contacts);
+    // QR SVG
+    html = html.replace('<div id="qrSvg"></div>', `<div id="qrSvg">${qrSvg}</div>`);
+    return html;
+  };
+
+  let out = '';
+  if (side === 'front') out = buildFront();
+  else if (side === 'back') out = buildBack();
+  else {
+    // Combined preview page with both sides; add simple wrapper for spacing
+    const front = buildFront();
+    const back = buildBack();
+    out = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+      <title>ID Card ${card.cardNumber}</title>
+      <style>body{margin:0;padding:8mm;background:#f5f5f5;display:flex;gap:6mm;flex-wrap:wrap;font-family:Arial,Helvetica,sans-serif} .sheet{box-shadow:0 6px 18px rgba(0,0,0,.15)} @media print{body{background:#fff;padding:0} .sheet{box-shadow:none}}</style>
+      </head><body>
+      <div class="sheet">${front}</div>
+      <div class="sheet">${back}</div>
+      </body></html>`;
+  }
+
   res.setHeader('Content-Type', 'text/html');
-  res.send(html);
+  res.send(out);
 });
 
 // Simple QR endpoint (PNG) using Google Chart API fallback or pure SVG
