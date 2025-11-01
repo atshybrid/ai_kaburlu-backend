@@ -275,6 +275,7 @@ apiV1.use('/payment', paymentWebhookRoutes); // exposes POST /api/v1/payment/web
 // Also mount under versioned base: POST /api/v1/admin/bootstrap-accounts
 apiV1.use('/admin', adminBootstrapRoutes);
 apiV1.use('/hrci/geo', geoHrcRoutes);
+apiV1.use('/hrci/geo/admin', geoHrcAdminRoutes); // add versioned admin mount for parity
 apiV1.use('/hrci/cells', hrciCellsRoutes);
 apiV1.use('/hrci/designations', hrciDesignationsRoutes);
 apiV1.use('/hrci', hrciDesignationPricesRoutes);
