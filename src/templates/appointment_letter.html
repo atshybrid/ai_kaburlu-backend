@@ -5,33 +5,45 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Member Appointment Letter</title>
   <style>
+    /* Reserve space for repeating header/footer in print */
     @page { size: A4; margin: 14mm 14mm 16mm 14mm; }
-  body { font-family: Arial, Helvetica, sans-serif; color: #222; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .container { width: 680px; box-sizing: border-box; margin: 0 auto; padding: 16px; border: none; box-shadow: none; page-break-inside: avoid; }
-  .header { display: grid; grid-template-columns: 110px 1fr; gap: 14px; align-items: center; border-bottom: none; padding-bottom: 8px; }
+    :root { --header-h: 42mm; --footer-h: 18mm; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #222; -webkit-print-color-adjust: exact; print-color-adjust: exact; margin: 0; }
+    /* Repeating header/footer */
+    .page-header { position: fixed; top: 0; left: 0; right: 0; height: var(--header-h); padding: 10mm 14mm 6mm 14mm; box-sizing: border-box; border-bottom: 2px solid #e5e5e5; background: #fff; }
+    .page-footer { position: fixed; bottom: 0; left: 0; right: 0; height: var(--footer-h); padding: 4mm 14mm; box-sizing: border-box; border-top: 2px solid #e5e5e5; background: #fff; color: #666; font-size: 11px; display: flex; align-items: center; justify-content: center; text-align: center; }
+    /* Content area leaves space for header/footer */
+    .page-content { margin: calc(var(--header-h) + 6mm) auto calc(var(--footer-h) + 6mm) auto; width: 680px; box-sizing: border-box; padding: 0 2px; }
+
+    /* Header layout */
+    .header-grid { display: grid; grid-template-columns: 110px 1fr; gap: 14px; align-items: center; }
     .logo { height: 80px; display: inline-block; object-fit: contain; }
     .org h1 { margin: 0; font-size: 18px; letter-spacing: .3px; text-transform: uppercase; }
     .org .regd { margin-top: 2px; font-size: 11px; color: #444; }
     .org .contacts { margin-top: 6px; font-size: 11px; color: #555; line-height: 1.35; }
-    .title { text-align: center; font-size: 16px; margin: 12px 0; text-transform: uppercase; letter-spacing: .8px; font-weight: bold; }
+
+    /* Document title and meta */
+    .title { text-align: center; font-size: 16px; margin: 6px 0 10px 0; text-transform: uppercase; letter-spacing: .8px; font-weight: bold; }
     .meta { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; }
     .content { line-height: 1.55; font-size: 13px; }
     .field { margin: 5px 0; }
     .highlight { font-weight: bold; }
     .list { margin: 8px 0 8px 18px; padding: 0; font-size: 12.5px; }
     .list li { margin: 5px 0; }
-  .footer { margin-top: 16px; display: flex; justify-content: flex-end; }
-  .sign-block { display: flex; flex-direction: column; align-items: flex-end; }
-  .stamp { height: 70px; opacity: 0.9; margin-top: 6px; }
-  .sign { text-align: right; }
+    /* Signature block inside content, not repeated */
+    .footer { margin-top: 16px; display: flex; justify-content: flex-end; }
+    .sign-block { display: flex; flex-direction: column; align-items: flex-end; }
+    .stamp { height: 70px; opacity: 0.9; margin-top: 6px; }
+    .sign { text-align: right; }
     .sign .name { font-weight: bold; }
     .muted { color: #666; }
     .subtle { color: #999; font-size: 11px; }
   </style>
   </head>
 <body>
-  <div class="container">
-    <div class="header">
+  <!-- Repeating letterhead header -->
+  <div class="page-header">
+    <div class="header-grid">
       <img id="orgLogo" class="logo" src="" alt="Logo" />
       <div class="org">
         <h1 id="orgName">HUMAN RIGHTS COUNCIL FOR INDIA (HRCI)</h1>
@@ -43,7 +55,15 @@
         </div>
       </div>
     </div>
+  </div>
 
+  <!-- Repeating footer line -->
+  <div class="page-footer">
+    For HUMAN RIGHTS COUNCIL FOR INDIA (HRCI), Regd. by NCT Delhi, Govt. of India under Trust Act 1882. This is a system-generated appointment letter.
+  </div>
+
+  <!-- Main content -->
+  <div class="page-content">
     <div class="title">MEMBER APPOINTMENT LETTER</div>
 
     <div class="meta">
@@ -91,7 +111,6 @@
         We congratulate you on your appointment and look forward to your active participation in our mission to build a just and equitable society.
       </p>
 
-      
     </div>
 
     <div class="footer">
@@ -102,10 +121,6 @@
           <div class="muted" id="signTitle">Chairman / National President</div>
         </div>
       </div>
-    </div>
-
-    <div class="subtle" style="margin-top: 12px;">
-      For HUMAN RIGHTS COUNCIL FOR INDIA (HRCI), Regd. by NCT Delhi, Govt. of India under Trust Act 1882. This is a system-generated appointment letter.
     </div>
   </div>
 </body>

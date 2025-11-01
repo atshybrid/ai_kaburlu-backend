@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Appointment Letter</title>
+  <style>
+    @page { size: A4; margin: 0; }
+    :root {
+      --header-band-mm: 45mm;
+      --footer-band-mm: 0mm;
+      --content-top-mm: 50mm;
+      --content-bottom-mm: 16mm;
+      --left-right-mm: 14mm;
+      --line-height: 1.55;
+      --text-color: #222;
+      --muted-color: #666;
+      --subtle-color: #999;
+      --brand-color: #111;
+      --font: Arial, Helvetica, sans-serif;
+    }
+    html, body { margin: 0; padding: 0; font-family: var(--font); color: var(--text-color); -webkit-print-color-adjust: exact; print-color-adjust: exact; background: #f5f5f5; }
+    .page { position: relative; width: 210mm; min-height: 297mm; margin: 0 auto; background: #fff; box-shadow: 0 6px 16px rgba(0,0,0,0.08); overflow: hidden; page-break-after: always; }
+    .page::before { content: ""; position: absolute; inset: 0; background-image: url('YOUR_LETTERHEAD_IMAGE_URL'); background-repeat: no-repeat; background-position: top center; background-size: cover; opacity: 1; z-index: 0; }
+    .content { position: relative; z-index: 1; padding: var(--content-top-mm) var(--left-right-mm) var(--content-bottom-mm); min-height: calc(297mm - var(--content-top-mm) - var(--content-bottom-mm)); box-sizing: border-box; }
+    .title { text-align: center; font-size: 16px; margin: 6mm 0 3mm; text-transform: uppercase; letter-spacing: .8px; font-weight: bold; color: var(--brand-color); }
+    .meta { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4mm; }
+    .highlight { font-weight: bold; }
+    .muted { color: var(--muted-color); }
+    .subtle { color: var(--subtle-color); font-size: 11px; }
+    .content p, .content .field, .content li { line-height: var(--line-height); font-size: 13px; margin: 2.5mm 0; }
+    .list { margin: 3mm 0 3mm 6mm; padding: 0; }
+    .list li { margin: 1.8mm 0; }
+    .footer { margin-top: 8mm; display: flex; justify-content: flex-end; }
+    .sign-block { display: flex; flex-direction: column; align-items: flex-end; }
+    .stamp { height: 22mm; opacity: .9; margin-top: 2mm; }
+    .sign .name { font-weight: bold; }
+    @media print { body { background: #fff; } .page { box-shadow: none; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="content">
+      <div class="title">MEMBER APPOINTMENT LETTER</div>
+      <div class="meta">
+        <div>Ref No: <span id="refNo" class="highlight">HRCI/APPT/2025/000001</span></div>
+        <div>Date: <span id="letterDate" class="highlight">25/10/2025</span> <span class="muted" id="placeLine"></span></div>
+      </div>
+      <div class="field">To,</div>
+      <div class="field"><span id="salutationPrefix">Mr./Ms.</span> <span id="recipientName" class="highlight">Full Name</span></div>
+      <div class="field">Address: <span id="recipientAddress1">Address Line 1</span></div>
+      <div class="field"><span id="recipientAddress2">City, State, Pin</span></div>
+      <div class="field" style="margin-top:4mm;"><strong>Subject:</strong> <span id="subjectLine">Appointment as [Level] Member of Human Rights Council for India (HRCI)</span></div>
+      <p>Dear <span id="salutation">Sir/Madam</span>,</p>
+      <p>We are pleased to inform you that the Governing Body of Human Rights Council for India (HRCI) has approved your appointment as a <span id="designationName" class="highlight">[Designation]</span>, effective from <span id="effectiveFrom" class="highlight">[DD/MM/YYYY]</span>.</p>
+      <p>This appointment is based on your dedication, integrity, and commitment to the protection and promotion of human rights and social justice. You are expected to uphold the values and principles of HRCI and work collaboratively to safeguard the rights of citizens as per the guidelines of the Indian Constitution and the United Nations Human Rights Charter.</p>
+      <div class="field"><strong>Terms & Responsibilities:</strong></div>
+      <ul class="list">
+        <li>To promote awareness about human rights and assist victims of human rights violations.</li>
+        <li>To coordinate with local and state authorities in addressing human rights issues.</li>
+        <li>To participate in HRCI meetings, workshops, and community outreach programs.</li>
+        <li>To maintain ethical conduct and discipline as per HRCI’s code of conduct.</li>
+      </ul>
+      <p>Your appointment is valid for a period of <span id="validityPeriod" class="highlight">One Year</span> and is subject to review or renewal based on performance and organizational policy.</p>
+      <p>We congratulate you on your appointment and look forward to your active participation in our mission to build a just and equitable society.</p>
+      <div class="footer">
+        <div class="sign-block">
+          <img id="stampRound" class="stamp" src="" alt="Stamp" />
+          <div class="sign">
+            <div class="name" id="signName">[Authorized Signatory]</div>
+            <div class="muted" id="signTitle">Chairman / National President</div>
+          </div>
+        </div>
+      </div>
+      <div class="subtle" style="margin-top: 4mm;">For HUMAN RIGHTS COUNCIL FOR INDIA (HRCI), Regd. by NCT Delhi, Govt. of India under Trust Act 1882. This is a system-generated appointment letter.</div>
+    </div>
+  </div>
+</body>
+</html>

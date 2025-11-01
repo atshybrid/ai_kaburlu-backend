@@ -17,7 +17,7 @@ import * as bcrypt from 'bcrypt';
 import prisma from '../../lib/prisma';
 import { r2Client, R2_BUCKET, getPublicUrl } from '../../lib/r2';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
-import { generateAppointmentLetterPdf, buildAppointmentLetterHtml } from '../../lib/pdf/generateAppointmentLetter';
+import { generateAppointmentLetterPdf, generateAppointmentLetterPdfHtmlBg, buildAppointmentLetterHtml } from '../../lib/pdf/generateAppointmentLetter';
 
 // A simple exception class for HTTP errors
 class HttpException extends Error {
@@ -403,13 +403,14 @@ export async function ensureAppointmentLetterForUser(userId: string, force = fal
   const idCard = (m as any).idCard || null;
   const kyc = (m as any).kyc || null;
   const kycApproved = (kyc?.status || '').toUpperCase() === 'APPROVED';
-  const idCardIssued = idCard && idCard.status === 'GENERATED';
   const active = m.status === 'ACTIVE' && !((m.expiresAt && m.expiresAt < new Date()));
-  if (!(active && idCardIssued && kycApproved)) return null;
+  // Relax eligibility: generate letter when membership is ACTIVE and KYC is approved,
+  // even if ID card is not yet generated. Persist URL on IDCard if present.
+  if (!(active && kycApproved)) return null;
 
   // If we already have a stored PDF URL and we're not forcing regeneration,
   // auto-fix legacy PDFs (old layout like left-side stamp) by regenerating once.
-  if (!force && idCard.appointmentLetterPdfUrl) {
+  if (idCard && !force && idCard.appointmentLetterPdfUrl) {
     const url: string = idCard.appointmentLetterPdfUrl as string;
     const generatedAt: Date | null = (idCard as any).appointmentLetterGeneratedAt || null;
     // Heuristics for legacy PDFs to regenerate automatically once:
@@ -429,6 +430,23 @@ export async function ensureAppointmentLetterForUser(userId: string, force = fal
 
   // Build organization info
   const org = await prisma.orgSetting.findFirst({ orderBy: { updatedAt: 'desc' } });
+  // Fetch active ID card setting for asset fallbacks (logo/stamp)
+  const idcardSetting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
+  // Try to resolve letterhead PDF and image URLs from org.documents
+  let letterheadPdfUrl: string | null = null;
+  let letterheadImageUrl: string | null = null;
+  try {
+    const docs = Array.isArray((org as any)?.documents) ? ((org as any).documents as any[]) : [];
+    for (const d of docs) {
+      const t = String(d?.type || '').toLowerCase();
+      const title = String(d?.title || '').toLowerCase();
+      const url = String(d?.url || '');
+      if ((t === 'letterhead' || title.includes('letterhead')) && url) {
+        if (/\.pdf($|\?)/i.test(url)) letterheadPdfUrl = url;
+        if (/\.(png|jpe?g|webp)($|\?)/i.test(url)) letterheadImageUrl = url;
+      }
+    }
+  } catch {}
   const orgPublic = {
     orgName: org?.orgName || 'HRCI',
     addressLine1: org?.addressLine1 || null,
@@ -445,8 +463,11 @@ export async function ensureAppointmentLetterForUser(userId: string, force = fal
              'Regd. No: 4396 / 2022 under Trust Act 1882, Govt. of India, NCT Delhi',
     authorizedSignatoryName: org?.authorizedSignatoryName || null,
     authorizedSignatoryTitle: org?.authorizedSignatoryTitle || null,
-    hrciLogoUrl: org?.hrciLogoUrl || null,
-    stampRoundUrl: org?.stampRoundUrl || null,
+    // Prefer OrgSetting assets; fallback to ID card setting assets when org is missing
+    hrciLogoUrl: (org?.hrciLogoUrl || (idcardSetting as any)?.frontLogoUrl || null),
+    stampRoundUrl: (org?.stampRoundUrl || (idcardSetting as any)?.hrciStampUrl || null),
+    letterheadPdfUrl,
+    letterheadImageUrl,
   } as any;
 
   // Build letter data
@@ -492,7 +513,7 @@ export async function ensureAppointmentLetterForUser(userId: string, force = fal
   const salutationPrefix = 'Mr./Ms.'; // we can enhance via profile.gender
   const levelText = String(m.level);
   const subjectLine = `Appointment as ${levelText} Member of Human Rights Council for India (HRCI)`;
-  const effectiveFromDate = idCard.issuedAt || m.activatedAt || new Date();
+  const effectiveFromDate = (idCard?.issuedAt || m.activatedAt || new Date());
   const fmt = (d: Date | null | undefined) => {
     if (!d) return null;
     const dd = String(d.getDate()).padStart(2, '0');
@@ -502,30 +523,30 @@ export async function ensureAppointmentLetterForUser(userId: string, force = fal
   };
   // validity period label
   let validityPeriod: string | null = null;
-  if (idCard.expiresAt && effectiveFromDate) {
+  if (idCard?.expiresAt && effectiveFromDate) {
     const days = Math.round((idCard.expiresAt.getTime() - effectiveFromDate.getTime()) / (1000 * 60 * 60 * 24));
     if (days >= 700) validityPeriod = 'Two Years';
     else if (days >= 360) validityPeriod = 'One Year';
   }
 
   const letterData = {
-    letterNo: `HRCI/APPT/${new Date().getFullYear()}/${(idCard.cardNumber || m.id).slice(-6).toUpperCase()}`,
+    letterNo: `HRCI/APPT/${new Date().getFullYear()}/${((idCard?.cardNumber || m.id) as string).slice(-6).toUpperCase()}`,
     letterDate: fmt(new Date()) || '',
     recipientSalutation: salutationPrefix,
-    memberName: idCard.fullName || profile?.fullName || 'Member',
+    memberName: (idCard?.fullName || profile?.fullName || 'Member'),
     recipientAddress1: address1,
     recipientAddress2: address2,
     subjectLine,
-    designationName: idCard.designationName || (m as any).designation?.name || 'Member',
-    cellName: idCard.cellName || (m as any).cell?.name || null,
+    designationName: (idCard?.designationName || (m as any).designation?.name || 'Member'),
+    cellName: (idCard?.cellName || (m as any).cell?.name || null),
     level: levelText,
     effectiveFrom: fmt(effectiveFromDate),
     validityPeriod,
-    cardNumber: idCard.cardNumber || null,
-    validityTo: fmt(idCard.expiresAt) || fmt(m.expiresAt) || null,
-    mobileNumber: idCard.mobileNumber || (await prisma.user.findUnique({ where: { id: userId }, select: { mobileNumber: true } }))?.mobileNumber || null,
+    cardNumber: (idCard?.cardNumber || null),
+    validityTo: (fmt(idCard?.expiresAt || null) || fmt(m.expiresAt) || null),
+    mobileNumber: (idCard?.mobileNumber || (await prisma.user.findUnique({ where: { id: userId }, select: { mobileNumber: true } }))?.mobileNumber || null),
     placeLine: districtName ? `| Place: ${districtName}` : '',
-    joiningDate: fmt(m.activatedAt || idCard.issuedAt) || null,
+    joiningDate: (fmt(m.activatedAt || idCard?.issuedAt || null) || null),
     memberCreatedDate: fmt(m.createdAt) || null,
     locationDisplay: await (async () => {
       try {
@@ -537,7 +558,12 @@ export async function ensureAppointmentLetterForUser(userId: string, force = fal
     })(),
   } as any;
 
-  const pdf = await generateAppointmentLetterPdf(orgPublic, letterData);
+  // Choose generation mode: default to PDF overlay; allow env override to 'html'
+  const mode = (process.env.APPT_LETTER_MODE || '').toLowerCase();
+  const useHtmlBg = (mode === 'html' && !!letterheadImageUrl);
+  const pdf = useHtmlBg && letterheadImageUrl
+    ? await generateAppointmentLetterPdfHtmlBg(orgPublic, letterData, letterheadImageUrl)
+    : await generateAppointmentLetterPdf(orgPublic, letterData);
   if (!R2_BUCKET) throw new Error('STORAGE_NOT_CONFIGURED');
   const now = new Date();
   const datePath = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
@@ -548,6 +574,9 @@ export async function ensureAppointmentLetterForUser(userId: string, force = fal
   const pdfUrl = getPublicUrl(key);
   // Cast data as any to avoid transient TS mismatch when Prisma Client types are stale in the editor.
   // Runtime is safe because the schema and generated client support these fields.
-  await prisma.iDCard.update({ where: { id: idCard.id }, data: { appointmentLetterPdfUrl: pdfUrl, appointmentLetterGeneratedAt: new Date() } as any });
+  // Persist on IDCard when available; otherwise, return URL without persistence
+  if (idCard) {
+    await prisma.iDCard.update({ where: { id: idCard.id }, data: { appointmentLetterPdfUrl: pdfUrl, appointmentLetterGeneratedAt: new Date() } as any });
+  }
   return pdfUrl;
 }
