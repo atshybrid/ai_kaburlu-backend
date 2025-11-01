@@ -145,7 +145,9 @@ router.put('/settings/:id', requireAuth, requireHrcAdmin, async (req, res) => {
  *           example: hrci-2510-00001
  */
 router.get('/:cardNumber', async (req, res) => {
-  const card = await prisma.iDCard.findUnique({ where: { cardNumber: req.params.cardNumber } });
+  // Be forgiving with case by using a case-insensitive lookup
+  const raw = String(req.params.cardNumber || '').trim();
+  const card = await prisma.iDCard.findFirst({ where: { cardNumber: { equals: raw, mode: 'insensitive' } as any } as any });
   if (!card) return res.status(404).json({ success: false, error: 'CARD_NOT_FOUND' });
   const setting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
   const baseUrl = setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`;
