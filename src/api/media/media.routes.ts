@@ -53,6 +53,24 @@ const VIDEO_MIMES = new Set<string>([
   'video/3gpp2',
 ]);
 
+// Common document and archive MIME types allowed for generic file uploads
+const DOC_MIMES = new Set<string>([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation', // .pptx
+  'text/plain',
+  'text/csv',
+  'application/json',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-rar-compressed',
+  'application/x-7z-compressed',
+]);
+
 function mimeToExt(mime: string, fallbackExt: string): string {
   switch ((mime || '').toLowerCase()) {
     case 'image/jpeg': return 'jpg';
@@ -65,6 +83,20 @@ function mimeToExt(mime: string, fallbackExt: string): string {
     case 'video/webm': return 'webm';
     case 'video/3gpp': return '3gp';
     case 'video/3gpp2': return '3g2';
+    case 'application/pdf': return 'pdf';
+    case 'application/msword': return 'doc';
+    case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': return 'docx';
+    case 'application/vnd.ms-excel': return 'xls';
+    case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': return 'xlsx';
+    case 'application/vnd.ms-powerpoint': return 'ppt';
+    case 'application/vnd.openxmlformats-officedocument.presentationml.presentation': return 'pptx';
+    case 'text/plain': return 'txt';
+    case 'text/csv': return 'csv';
+    case 'application/json': return 'json';
+    case 'application/zip':
+    case 'application/x-zip-compressed': return 'zip';
+    case 'application/x-rar-compressed': return 'rar';
+    case 'application/x-7z-compressed': return '7z';
     default: return fallbackExt || 'bin';
   }
 }
@@ -112,7 +144,7 @@ async function transcodeToWebm(inputBuffer: Buffer): Promise<Buffer> {
  * /media/upload:
  *   post:
  *     summary: Upload a file directly (multipart/form-data)
- *     description: Converts images to WebP (except PNG stays PNG) and videos to WebM before storing in R2.
+ *     description: Converts images to WebP (except PNG stays PNG) and videos to WebM before storing in R2. Generic document files are stored as-is.
  *     tags: [Media]
  *     security:
  *       - bearerAuth: []
@@ -137,8 +169,8 @@ async function transcodeToWebm(inputBuffer: Buffer): Promise<Buffer> {
  *                 description: Optional root folder (e.g., images, videos, shortnews/uploads). Defaults to images/videos/files based on MIME.
  *               kind:
  *                 type: string
- *                 enum: [image, video]
- *                 description: Optional file kind. If provided, server validates MIME accordingly.
+ *                 enum: [image, video, file]
+ *                 description: Optional file kind. If provided, server validates MIME accordingly. For kind=file, common document types like PDF/DOCX/XLSX/ZIP are allowed.
  *     responses:
  *       200:
  *         description: File uploaded
@@ -156,15 +188,17 @@ router.post('/upload', passport.authenticate('jwt', { session: false }), upload.
   try {
     if (!ensureR2Configured(res)) return;
     const file = req.file;
-    const { key, filename, kind, folder } = req.body as { key?: string; filename?: string; kind?: 'image' | 'video'; folder?: string };
+    const { key, filename, kind, folder } = req.body as { key?: string; filename?: string; kind?: 'image' | 'video' | 'file'; folder?: string };
     if (!file) return res.status(400).json({ error: 'file is required (multipart/form-data)' });
 
     // Validate kind if provided
     if (kind) {
       const isImage = IMAGE_MIMES.has(file.mimetype);
       const isVideo = VIDEO_MIMES.has(file.mimetype);
+      const isDoc = DOC_MIMES.has(file.mimetype) || (!isImage && !isVideo && file.mimetype.startsWith('application/'));
       if (kind === 'image' && !isImage) return res.status(400).json({ error: 'Expected an image file' });
       if (kind === 'video' && !isVideo) return res.status(400).json({ error: 'Expected a video file' });
+      if (kind === 'file' && !(isDoc || !file.mimetype)) return res.status(400).json({ error: 'Expected a document file (pdf, docx, xlsx, zip, etc.)' });
     }
 
     const original = file.originalname || 'upload.bin';
@@ -175,12 +209,13 @@ router.post('/upload', passport.authenticate('jwt', { session: false }), upload.
     const random = Math.random().toString(36).slice(2, 8);
     // Choose root folder (sanitized), default to kind-based root
     const sanitizedFolder = (folder ? String(folder).trim() : '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-    const rootByKind = file.mimetype.startsWith('image/') ? 'images' : (file.mimetype.startsWith('video/') ? 'videos' : 'files');
+  const rootByKind = file.mimetype.startsWith('image/') ? 'images' : (file.mimetype.startsWith('video/') ? 'videos' : 'files');
     const root = sanitizedFolder || rootByKind;
 
     // Decide target content type and extension based on conversion policy
-    const isImage = file.mimetype.startsWith('image/');
-    const isVideo = file.mimetype.startsWith('video/');
+  const isImage = file.mimetype.startsWith('image/');
+  const isVideo = file.mimetype.startsWith('video/');
+  const isDoc = DOC_MIMES.has(file.mimetype) || (!isImage && !isVideo && file.mimetype.startsWith('application/'));
     let targetExt = detectedExt;
     let targetContentType = file.mimetype || 'application/octet-stream';
     if (isImage) {
@@ -208,14 +243,15 @@ router.post('/upload', passport.authenticate('jwt', { session: false }), upload.
     }
 
     // Enforce size limits and perform light compression for images
-    const MAX_IMAGE_BYTES = Number(process.env.MEDIA_MAX_IMAGE_MB || 10) * 1024 * 1024; // default 10MB
-    const MAX_VIDEO_BYTES = Number(process.env.MEDIA_MAX_VIDEO_MB || 100) * 1024 * 1024; // default 100MB
+  const MAX_IMAGE_BYTES = Number(process.env.MEDIA_MAX_IMAGE_MB || 10) * 1024 * 1024; // default 10MB
+  const MAX_VIDEO_BYTES = Number(process.env.MEDIA_MAX_VIDEO_MB || 100) * 1024 * 1024; // default 100MB
+  const MAX_FILE_BYTES = Number(process.env.MEDIA_MAX_FILE_MB || 25) * 1024 * 1024; // default 25MB
 
     if (isVideo && file.size > MAX_VIDEO_BYTES) {
       return res.status(400).json({ error: `Video too large. Max ${Math.round(MAX_VIDEO_BYTES / (1024*1024))}MB` });
     }
 
-    let uploadBuffer = file.buffer;
+  let uploadBuffer = file.buffer;
     let uploadContentType = targetContentType;
 
     if (isImage) {
@@ -250,6 +286,13 @@ router.post('/upload', passport.authenticate('jwt', { session: false }), upload.
       }
     }
 
+    // For generic document files, enforce size limit (no conversion)
+    if (!isImage && !isVideo) {
+      if (uploadBuffer.length > MAX_FILE_BYTES) {
+        return res.status(400).json({ error: `File too large. Max ${Math.round(MAX_FILE_BYTES / (1024*1024))}MB` });
+      }
+    }
+
     await r2Client.send(new PutObjectCommand({
       Bucket: R2_BUCKET,
       Key: finalKey,
@@ -272,7 +315,7 @@ router.post('/upload', passport.authenticate('jwt', { session: false }), upload.
           name: original,
           contentType: uploadContentType,
           size: Number(uploadBuffer.length || 0),
-          kind: (file.mimetype?.startsWith('image/') ? 'image' : (file.mimetype?.startsWith('video/') ? 'video' : 'other')),
+          kind: (isImage ? 'image' : (isVideo ? 'video' : 'file')),
           folder: folderValue,
           ownerId,
         },
@@ -287,7 +330,7 @@ router.post('/upload', passport.authenticate('jwt', { session: false }), upload.
       name: original,
       contentType: uploadContentType,
       size: uploadBuffer.length,
-      kind: (file.mimetype?.startsWith('image/') ? 'image' : (file.mimetype?.startsWith('video/') ? 'video' : 'other')),
+      kind: (isImage ? 'image' : (isVideo ? 'video' : 'file')),
     });
   } catch (e) {
     console.error('direct upload error', e);
