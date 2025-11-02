@@ -2,6 +2,7 @@ import { Router } from 'express';
 import prisma from '../../lib/prisma';
 import { requireAuth } from '../middlewares/authz';
 import { generateNextIdCardNumber } from '../../lib/idCardNumber';
+import { ensureAppointmentLetterForUser } from '../auth/auth.service';
 
 const router = Router();
 
@@ -151,6 +152,95 @@ router.post('/me/idcard/issue', requireAuth, async (req: any, res) => {
 });
 
 export default router;
+
+/**
+ * @swagger
+ * /memberships/me/appointment-letter:
+ *   get:
+ *     tags: [HRCI Membership - Member APIs]
+ *     summary: Get your appointment letter status and URL
+ *     description: "Returns whether the appointment letter is generated and the public URL if available. If eligible (ACTIVE membership + KYC APPROVED) and no letter exists yet, the server may generate it on demand. You can force regeneration with ?generate=true."
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: query
+ *         name: generate
+ *         required: false
+ *         schema: { type: boolean }
+ *         description: "If true, force regeneration even if a URL already exists. Default: false"
+ *     responses:
+ *       200:
+ *         description: Appointment letter status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     hasMembership: { type: boolean }
+ *                     eligible: { type: boolean }
+ *                     generated: { type: boolean }
+ *                     appointmentLetterPdfUrl: { type: string, nullable: true }
+ *                     idCardPresent: { type: boolean }
+ *                     cardNumber: { type: string, nullable: true }
+ *                     kycStatus: { type: string, nullable: true }
+ *                     message: { type: string, nullable: true }
+ */
+router.get('/me/appointment-letter', requireAuth, async (req: any, res) => {
+  try {
+    const userId = req.user.id as string;
+    const m = await prisma.membership.findFirst({
+      where: { userId },
+      orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+      include: { idCard: true, kyc: true }
+    });
+    if (!m) return res.json({ success: true, data: { hasMembership: false, eligible: false, generated: false, appointmentLetterPdfUrl: null, message: 'No membership found' } });
+
+    const idCard = (m as any).idCard || null;
+    const kyc = (m as any).kyc || null;
+    const kycApproved = (kyc?.status || '').toUpperCase() === 'APPROVED';
+    const active = m.status === 'ACTIVE' && !(m.expiresAt && m.expiresAt < new Date());
+    const eligible = active && kycApproved;
+
+    let url: string | null = (idCard?.appointmentLetterPdfUrl as any) || null;
+    const force = String(req.query.generate || '').toLowerCase() === 'true';
+
+    // Generate on demand when eligible and not yet generated, or force = true
+    if ((eligible && !url) || (eligible && force)) {
+      try {
+        url = await ensureAppointmentLetterForUser(userId, force);
+      } catch (e) {
+        // keep url as-is; attach a message below
+      }
+    }
+
+    let message: string | null = null;
+    if (!eligible) {
+      if (!kycApproved) message = 'KYC not approved yet.';
+      if (!active) message = message ? `${message} Also, membership is not ACTIVE.` : 'Membership is not ACTIVE.';
+    } else if (!url) {
+      message = 'Eligible, but appointment letter is not generated yet.';
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        hasMembership: true,
+        eligible,
+        generated: Boolean(url),
+        appointmentLetterPdfUrl: url || null,
+        idCardPresent: Boolean(idCard),
+        cardNumber: idCard?.cardNumber || null,
+        kycStatus: kyc?.status || null,
+        message
+      }
+    });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'APPT_LETTER_STATUS_FAILED', message: e?.message });
+  }
+});
 
 // Consolidated member profile for front-end ease
 /**
