@@ -357,7 +357,23 @@ router.put('/:id/status', (req, res, next) => {
       const hasCard = await tx.iDCard.findUnique({ where: { membershipId: m.id } }).catch(() => null);
       if (m.status === 'ACTIVE' && !hasCard) {
         const cardNumber = `ID-${Date.now().toString(36)}-${m.id.slice(-6)}`;
-        await tx.iDCard.create({ data: { membershipId: m.id, cardNumber, expiresAt: new Date(Date.now() + 365*24*60*60*1000) } });
+        // Resolve validityDays from DesignationPrice override or designation default
+        let validityDays = 365;
+        try {
+          const avail = await (membershipService as any).getAvailability({
+            cellCodeOrName: m.cellId,
+            designationCode: m.designationId,
+            level: m.level,
+            zone: m.zone || undefined,
+            hrcCountryId: m.hrcCountryId || undefined,
+            hrcStateId: m.hrcStateId || undefined,
+            hrcDistrictId: m.hrcDistrictId || undefined,
+            hrcMandalId: m.hrcMandalId || undefined,
+          });
+          validityDays = (avail?.designation?.validityDays ?? 365);
+        } catch {}
+        const expiresAt = new Date(Date.now() + (validityDays * 24 * 60 * 60 * 1000));
+        await tx.iDCard.create({ data: { membershipId: m.id, cardNumber, expiresAt } });
       }
       return m;
   }, { timeout: 15000 });
@@ -394,7 +410,21 @@ router.post('/:id/idcard', requireAuth, requireHrcAdmin, async (req, res) => {
 
     // Compute new card details
     const cardNumber = await generateNextIdCardNumber(prisma as any);
-    const validityDays = (membership as any).designation?.validityDays || 365;
+    // Resolve validityDays using overrides when available
+    let validityDays = Number((membership as any).designation?.validityDays || 365);
+    try {
+      const avail = await (membershipService as any).getAvailability({
+        cellCodeOrName: (membership as any).cell?.id || membership.cellId,
+        designationCode: (membership as any).designation?.id || membership.designationId,
+        level: membership.level as any,
+        zone: membership.zone || undefined,
+        hrcCountryId: membership.hrcCountryId || undefined,
+        hrcStateId: membership.hrcStateId || undefined,
+        hrcDistrictId: membership.hrcDistrictId || undefined,
+        hrcMandalId: membership.hrcMandalId || undefined,
+      });
+      validityDays = Number(avail?.designation?.validityDays ?? validityDays);
+    } catch {}
     const expiresAt = new Date(Date.now() + (validityDays * 24 * 60 * 60 * 1000));
     const fullName = (user as any).profile?.fullName || undefined;
     const mobileNumber = (user as any).mobileNumber || undefined;
