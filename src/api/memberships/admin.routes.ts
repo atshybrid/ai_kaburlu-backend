@@ -357,8 +357,8 @@ router.put('/:id/status', (req, res, next) => {
       const hasCard = await tx.iDCard.findUnique({ where: { membershipId: m.id } }).catch(() => null);
       if (m.status === 'ACTIVE' && !hasCard) {
         const cardNumber = `ID-${Date.now().toString(36)}-${m.id.slice(-6)}`;
-        // Resolve validityDays from DesignationPrice override or designation default
-        let validityDays = 365;
+  // Resolve validityDays from DesignationPrice override or designation default
+  let validityDays = 730; // global fallback policy: 2 years
         try {
           const avail = await (membershipService as any).getAvailability({
             cellCodeOrName: m.cellId,
@@ -370,7 +370,7 @@ router.put('/:id/status', (req, res, next) => {
             hrcDistrictId: m.hrcDistrictId || undefined,
             hrcMandalId: m.hrcMandalId || undefined,
           });
-          validityDays = (avail?.designation?.validityDays ?? 365);
+          validityDays = (avail?.designation?.validityDays ?? 730);
         } catch {}
         const expiresAt = new Date(Date.now() + (validityDays * 24 * 60 * 60 * 1000));
         await tx.iDCard.create({ data: { membershipId: m.id, cardNumber, expiresAt } });
@@ -410,8 +410,8 @@ router.post('/:id/idcard', requireAuth, requireHrcAdmin, async (req, res) => {
 
     // Compute new card details
     const cardNumber = await generateNextIdCardNumber(prisma as any);
-    // Resolve validityDays using overrides when available
-    let validityDays = Number((membership as any).designation?.validityDays || 365);
+  // Resolve validityDays using overrides when available
+  let validityDays = Number((membership as any).designation?.validityDays || 730);
     try {
       const avail = await (membershipService as any).getAvailability({
         cellCodeOrName: (membership as any).cell?.id || membership.cellId,
