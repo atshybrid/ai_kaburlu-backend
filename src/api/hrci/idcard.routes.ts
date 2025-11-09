@@ -338,6 +338,16 @@ router.get('/:cardNumber/html', async (req, res) => {
       hrcMandalId = (m as any).hrcMandalId || null;
     }
   }
+  // Always attempt to resolve latest profile photo even if snapshot text fields are present
+  if (!photoUrl) {
+    try {
+      const mRef = await prisma.membership.findUnique({ where: { id: card.membershipId } });
+      if (mRef) {
+        const uRef: any = await prisma.user.findUnique({ where: { id: (mRef as any).userId }, include: { profile: { include: { profilePhotoMedia: true } } } as any });
+        photoUrl = (uRef?.profile?.profilePhotoUrl || uRef?.profile?.profilePhotoMedia?.url || photoUrl) as any;
+      }
+    } catch {}
+  }
   // If snapshot already had level/location, attempt to read membership anyway if not fetched
   if (!membershipLevel) {
     try {
@@ -591,12 +601,14 @@ ${termsHtml}
     const isVertical = orientation === 'vertical' || orientation === 'portrait';
     let html = readTemplate(isVertical ? 'idcard_front_vertical.html' : 'idcard_front.html');
     html = html.replace('</head>', `${colorsStyle}</head>`);
+    // Simple inline SVG placeholders for legacy templates
+    const svgPlaceholder = (text: string, w = 120, h = 80) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}'><rect width='100%' height='100%' fill='#fff'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='Verdana' font-size='14' fill='#555'>${text}</text></svg>`)}`;
     html = replaceIn(html, 'frontH1', String(s?.frontH1 || ''));
     html = replaceIn(html, 'frontH2', String(s?.frontH2 || ''));
     html = replaceIn(html, 'frontH34', [s?.frontH3, s?.frontH4].filter(Boolean).join(' • '));
-    html = setAttr(html, 'frontLogo', 'src', s?.frontLogoUrl || '');
-    html = setAttr(html, 'secondLogo', 'src', s?.secondLogoUrl || '');
-    html = setAttr(html, 'photoUrl', 'src', photoUrl || '');
+    html = setAttr(html, 'frontLogo', 'src', s?.frontLogoUrl || svgPlaceholder('Logo'));
+    html = setAttr(html, 'secondLogo', 'src', s?.secondLogoUrl || s?.frontLogoUrl || svgPlaceholder('Logo'));
+    html = setAttr(html, 'photoUrl', 'src', photoUrl || svgPlaceholder('Photo', 140, 180));
     html = replaceIn(html, 'fullName', fullName || '-');
     html = replaceIn(html, 'mobileNumber', mobileNumber || '-');
     html = replaceIn(html, 'designationName', designationName || '-');
@@ -605,8 +617,8 @@ ${termsHtml}
     html = replaceIn(html, 'issuedAt', issuedAt || '-');
     html = replaceIn(html, 'expiresAt', expiresAt || '-');
     html = replaceIn(html, 'frontFooterText', footer);
-    html = setAttr(html, 'authorSignUrl', 'src', s?.authorSignUrl || '');
-    html = setAttr(html, 'hrciStampUrl', 'src', s?.hrciStampUrl || '');
+    html = setAttr(html, 'authorSignUrl', 'src', s?.authorSignUrl || svgPlaceholder('Sign', 160, 60));
+    html = setAttr(html, 'hrciStampUrl', 'src', s?.hrciStampUrl || svgPlaceholder('Stamp', 120, 120));
     return html;
   };
 
