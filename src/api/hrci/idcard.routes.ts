@@ -154,14 +154,27 @@ router.get('/:cardNumber', async (req, res) => {
   // Enrich with membership level and computed display label (Level + Designation)
   let membershipLevel: string | null = null;
   let designationName: string | null = (card as any).designationName || null;
+  let zoneValue: string | null = null;
   try {
     const membership = await prisma.membership.findUnique({ where: { id: card.membershipId }, include: { designation: true } });
     if (membership) {
       membershipLevel = membership.level as unknown as string;
       if (!designationName) designationName = (membership as any).designation?.name || null;
+      zoneValue = membership.zone as any || null;
     }
   } catch {}
-  const designationDisplay = designationName ? `${membershipLevel ? `${membershipLevel} ` : ''}${designationName}` : null;
+  // Human-friendly prefix mapping
+  const zoneMap: Record<string, string> = { NORTH: 'North Zone', SOUTH: 'South Zone', EAST: 'East Zone', WEST: 'West Zone', CENTRAL: 'Central Zone' };
+  const levelMap: Record<string, string> = { NATIONAL: 'National', STATE: 'State', DISTRICT: 'District', MANDAL: 'Mandal' };
+  let prefix: string | null = null;
+  if (membershipLevel === 'ZONE') {
+    prefix = zoneValue ? zoneMap[String(zoneValue).toUpperCase()] || `${String(zoneValue).toLowerCase().replace(/\b\w/g, c => c.toUpperCase())} Zone` : 'Zone';
+  } else if (membershipLevel) {
+    prefix = levelMap[membershipLevel] || membershipLevel.charAt(0) + membershipLevel.slice(1).toLowerCase();
+  }
+  const designationNameFormatted = designationName && prefix ? `${prefix} ${designationName}` : designationName;
+  // Backward compatibility: designationDisplay retains previous UPPERCASE level style, but also expose new formatted name
+  const designationDisplay = designationNameFormatted || null;
   const setting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
   const baseUrl = setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`;
   const apiUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}`;
@@ -169,7 +182,7 @@ router.get('/:cardNumber', async (req, res) => {
   const qrUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/qr`;
   // Keep verifyUrl for backward compatibility (points to API JSON), also return htmlUrl and qrUrl for UX
   const verifyUrl = apiUrl;
-  return res.json({ success: true, data: { card, setting, verifyUrl, htmlUrl, qrUrl, membershipLevel, designationDisplay } });
+  return res.json({ success: true, data: { card, setting, verifyUrl, htmlUrl, qrUrl, membershipLevel, designationDisplay, designationNameFormatted } });
 });
 
 /**
