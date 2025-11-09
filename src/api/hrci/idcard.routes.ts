@@ -155,12 +155,20 @@ router.get('/:cardNumber', async (req, res) => {
   let membershipLevel: string | null = null;
   let designationName: string | null = (card as any).designationName || null;
   let zoneValue: string | null = null;
+  let hrcCountryId: string | null = null;
+  let hrcStateId: string | null = null;
+  let hrcDistrictId: string | null = null;
+  let hrcMandalId: string | null = null;
   try {
     const membership = await prisma.membership.findUnique({ where: { id: card.membershipId }, include: { designation: true } });
     if (membership) {
       membershipLevel = membership.level as unknown as string;
       if (!designationName) designationName = (membership as any).designation?.name || null;
       zoneValue = membership.zone as any || null;
+      hrcCountryId = (membership as any).hrcCountryId || null;
+      hrcStateId = (membership as any).hrcStateId || null;
+      hrcDistrictId = (membership as any).hrcDistrictId || null;
+      hrcMandalId = (membership as any).hrcMandalId || null;
     }
   } catch {}
   // Human-friendly prefix mapping
@@ -175,6 +183,67 @@ router.get('/:cardNumber', async (req, res) => {
   const designationNameFormatted = designationName && prefix ? `${prefix} ${designationName}` : designationName;
   // Backward compatibility: designationDisplay retains previous UPPERCASE level style, but also expose new formatted name
   const designationDisplay = designationNameFormatted || null;
+
+  // Level title + location details based on membership scope
+  let levelTitle: string | null = null;
+  let levelLocation: any = null;
+  let locationTitle: string | null = null;
+  try {
+    if (membershipLevel === 'NATIONAL') {
+      levelTitle = 'National';
+      let countryName: string | undefined;
+      if (hrcCountryId) {
+        const country = await (prisma as any).hrcCountry.findUnique({ where: { id: hrcCountryId } });
+        countryName = country?.name;
+      }
+      levelLocation = countryName ? { countryId: hrcCountryId, countryName } : (hrcCountryId ? { countryId: hrcCountryId } : null);
+      locationTitle = countryName || 'India';
+    } else if (membershipLevel === 'ZONE') {
+      const zoneTitle = zoneValue ? (zoneMap[String(zoneValue).toUpperCase()] || `${String(zoneValue).toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase())} Zone`) : 'Zone';
+      levelTitle = 'Zone';
+      levelLocation = { zone: zoneValue, zoneTitle };
+      locationTitle = zoneTitle;
+    } else if (membershipLevel === 'STATE') {
+      levelTitle = 'State';
+      let stateName: string | undefined, stateCode: string | undefined;
+      if (hrcStateId) {
+        const st = await (prisma as any).hrcState.findUnique({ where: { id: hrcStateId } });
+        stateName = st?.name; stateCode = st?.code;
+      }
+      levelLocation = { stateId: hrcStateId, stateName, stateCode };
+      locationTitle = stateName || undefined as any;
+    } else if (membershipLevel === 'DISTRICT') {
+      levelTitle = 'District';
+      let districtName: string | undefined, stateName: string | undefined;
+      if (hrcDistrictId) {
+        const dist = await (prisma as any).hrcDistrict.findUnique({ where: { id: hrcDistrictId } });
+        districtName = dist?.name;
+        if (dist?.stateId) {
+          const st = await (prisma as any).hrcState.findUnique({ where: { id: dist.stateId } });
+          stateName = st?.name;
+        }
+      }
+      levelLocation = { stateId: hrcStateId, districtId: hrcDistrictId, districtName, stateName };
+      locationTitle = [districtName, stateName].filter(Boolean).join(', ') || undefined as any;
+    } else if (membershipLevel === 'MANDAL') {
+      levelTitle = 'Mandal';
+      let mandalName: string | undefined, districtName: string | undefined, stateName: string | undefined;
+      if (hrcMandalId) {
+        const mandal = await (prisma as any).hrcMandal.findUnique({ where: { id: hrcMandalId } });
+        mandalName = mandal?.name;
+        if (mandal?.districtId) {
+          const dist = await (prisma as any).hrcDistrict.findUnique({ where: { id: mandal.districtId } });
+          districtName = dist?.name;
+          if (dist?.stateId) {
+            const st = await (prisma as any).hrcState.findUnique({ where: { id: dist.stateId } });
+            stateName = st?.name;
+          }
+        }
+      }
+      levelLocation = { stateId: hrcStateId, districtId: hrcDistrictId, mandalId: hrcMandalId, mandalName, districtName, stateName };
+      locationTitle = [mandalName, districtName, stateName].filter(Boolean).join(', ') || undefined as any;
+    }
+  } catch {}
   const setting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
   const baseUrl = setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`;
   const apiUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}`;
@@ -182,7 +251,7 @@ router.get('/:cardNumber', async (req, res) => {
   const qrUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/qr`;
   // Keep verifyUrl for backward compatibility (points to API JSON), also return htmlUrl and qrUrl for UX
   const verifyUrl = apiUrl;
-  return res.json({ success: true, data: { card, setting, verifyUrl, htmlUrl, qrUrl, membershipLevel, designationDisplay, designationNameFormatted } });
+  return res.json({ success: true, data: { card, setting, verifyUrl, htmlUrl, qrUrl, membershipLevel, levelTitle, levelLocation, locationTitle, designationDisplay, designationNameFormatted } });
 });
 
 /**
