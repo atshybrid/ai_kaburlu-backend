@@ -188,21 +188,24 @@ router.get('/:cardNumber', async (req, res) => {
   let levelTitle: string | null = null;
   let levelLocation: any = null;
   let locationTitle: string | null = null;
+  // Resolve country name once if countryId exists (used for NATIONAL/ZONE display)
+  let countryNameResolved: string | undefined;
+  try {
+    if (hrcCountryId) {
+      const c = await (prisma as any).hrcCountry.findUnique({ where: { id: hrcCountryId } });
+      countryNameResolved = c?.name;
+    }
+  } catch {}
   try {
     if (membershipLevel === 'NATIONAL') {
       levelTitle = 'National';
-      let countryName: string | undefined;
-      if (hrcCountryId) {
-        const country = await (prisma as any).hrcCountry.findUnique({ where: { id: hrcCountryId } });
-        countryName = country?.name;
-      }
-      levelLocation = countryName ? { countryId: hrcCountryId, countryName } : (hrcCountryId ? { countryId: hrcCountryId } : null);
-      locationTitle = countryName || 'India';
+      levelLocation = countryNameResolved ? { countryId: hrcCountryId, countryName: countryNameResolved } : (hrcCountryId ? { countryId: hrcCountryId } : null);
+      locationTitle = countryNameResolved || 'India';
     } else if (membershipLevel === 'ZONE') {
       const zoneTitle = zoneValue ? (zoneMap[String(zoneValue).toUpperCase()] || `${String(zoneValue).toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase())} Zone`) : 'Zone';
       levelTitle = 'Zone';
-      levelLocation = { zone: zoneValue, zoneTitle };
-      locationTitle = zoneTitle;
+      levelLocation = { countryId: hrcCountryId, countryName: countryNameResolved, zone: zoneValue, zoneTitle };
+      locationTitle = [countryNameResolved, zoneTitle].filter(Boolean).join(', ') || zoneTitle;
     } else if (membershipLevel === 'STATE') {
       levelTitle = 'State';
       let stateName: string | undefined, stateCode: string | undefined;
@@ -251,7 +254,25 @@ router.get('/:cardNumber', async (req, res) => {
   const qrUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/qr`;
   // Keep verifyUrl for backward compatibility (points to API JSON), also return htmlUrl and qrUrl for UX
   const verifyUrl = apiUrl;
-  return res.json({ success: true, data: { card, setting, verifyUrl, htmlUrl, qrUrl, membershipLevel, levelTitle, levelLocation, locationTitle, designationDisplay, designationNameFormatted } });
+  // memberLocationName computed for concise display under card
+  let memberLocationName: string | null = null;
+  try {
+    if (membershipLevel === 'NATIONAL') {
+      memberLocationName = levelLocation?.countryName || locationTitle || 'India';
+    } else if (membershipLevel === 'ZONE') {
+      memberLocationName = [levelLocation?.zoneTitle].filter(Boolean).join(' ') || locationTitle || null;
+    } else if (membershipLevel === 'STATE') {
+      memberLocationName = levelLocation?.stateName || locationTitle || null;
+    } else if (membershipLevel === 'DISTRICT') {
+      memberLocationName = levelLocation?.districtName || locationTitle || null;
+    } else if (membershipLevel === 'MANDAL') {
+      memberLocationName = levelLocation?.mandalName || locationTitle || null;
+    }
+  } catch {}
+
+  // Embed enriched fields inside card for cleaner grouping; also keep top-level for backwards compatibility if needed
+  const enrichedCard: any = { ...card, membershipLevel, levelTitle, levelLocation, locationTitle, memberLocationName, designationDisplay, designationNameFormatted };
+  return res.json({ success: true, data: { card: enrichedCard, setting, verifyUrl, htmlUrl, qrUrl } });
 });
 
 /**
