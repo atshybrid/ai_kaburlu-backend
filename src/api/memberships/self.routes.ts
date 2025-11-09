@@ -5,6 +5,7 @@ import { generateNextIdCardNumber } from '../../lib/idCardNumber';
 import { ensureAppointmentLetterForUser } from '../auth/auth.service';
 
 const router = Router();
+const PROFILE_PHOTO_PLACEHOLDER = process.env.PROFILE_PHOTO_PLACEHOLDER || 'https://via.placeholder.com/150x150/0d6efd/ffffff?text=HRCI';
 
 // Helper to build public paths for a card
 function buildCardPaths(cardNumber: string) {
@@ -83,7 +84,8 @@ router.get('/me/idcard', requireAuth, async (req: any, res) => {
           const user = await prisma.user.findUnique({ where: { id: m.userId }, include: { profile: { include: { profilePhotoMedia: true } } } as any });
           fullName = fullName || (user as any)?.profile?.fullName || '';
           mobileNumber = mobileNumber || (user as any)?.mobileNumber || '';
-          profilePhotoUrl = profilePhotoUrl || (user as any)?.profile?.profilePhotoUrl || (user as any)?.profile?.profilePhotoMedia?.url || null;
+          // Prefer media URL over potentially seeded placeholder profilePhotoUrl
+          profilePhotoUrl = profilePhotoUrl || (user as any)?.profile?.profilePhotoMedia?.url || (user as any)?.profile?.profilePhotoUrl || null;
         } catch {}
         designationName = designationName || (m as any).designation?.name || '';
         cellName = cellName || (m as any).cell?.name || '';
@@ -97,6 +99,15 @@ router.get('/me/idcard', requireAuth, async (req: any, res) => {
     }
     // Normalize relative profile photo path to absolute
     if (profilePhotoUrl && /^\//.test(profilePhotoUrl)) profilePhotoUrl = `${baseUrl}${profilePhotoUrl}`;
+    if (!profilePhotoUrl) profilePhotoUrl = PROFILE_PHOTO_PLACEHOLDER; // fallback placeholder
+    // Avoid returning development placeholder URLs if a real media URL exists
+    if (profilePhotoUrl && /placeholder\.com/i.test(profilePhotoUrl)) {
+      try {
+        const u = await prisma.user.findUnique({ where: { id: req.user.id }, include: { profile: { include: { profilePhotoMedia: true } } } as any });
+        profilePhotoUrl = ((u as any)?.profile?.profilePhotoMedia?.url) || profilePhotoUrl;
+      } catch {}
+    }
+    if (!profilePhotoUrl) profilePhotoUrl = PROFILE_PHOTO_PLACEHOLDER; // ensure still set after attempts
     // Build designation display with level prefix
     const zoneMap: Record<string,string> = { NORTH:'North Zone', SOUTH:'South Zone', EAST:'East Zone', WEST:'West Zone', CENTRAL:'Central Zone' };
     let prefix = '';
@@ -355,7 +366,7 @@ router.get('/me/profile', requireAuth, async (req: any, res) => {
     const preciseLocation = await prisma.userLocation.findUnique({ where: { userId } });
 
     // Profile photo resolution
-    const photoUrl = (user as any).profile?.profilePhotoUrl || (user as any).profile?.profilePhotoMedia?.url || null;
+  const photoUrl = (user as any).profile?.profilePhotoMedia?.url || (user as any).profile?.profilePhotoUrl || null;
 
     // Build clear structures
     const designation = membership?.designation ? {
@@ -471,7 +482,7 @@ router.get('/me', requireAuth, async (req: any, res, next) => {
       include: { designation: true, cell: true, idCard: true, kyc: true }
     });
 
-    const photoUrl = (user as any).profile?.profilePhotoUrl || (user as any).profile?.profilePhotoMedia?.url || null;
+  const photoUrl = (user as any).profile?.profilePhotoMedia?.url || (user as any).profile?.profilePhotoUrl || null;
     const designation = membership?.designation ? {
       id: membership.designation.id,
       code: membership.designation.code,

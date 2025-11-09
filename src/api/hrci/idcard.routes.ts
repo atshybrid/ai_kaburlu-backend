@@ -7,6 +7,8 @@ import { ensureAppointmentLetterForUser } from '../auth/auth.service';
 import QRCode from 'qrcode';
 
 const router = Router();
+// Global placeholder used when a member has no real profile photo (media or URL)
+const PROFILE_PHOTO_PLACEHOLDER = process.env.PROFILE_PHOTO_PLACEHOLDER || 'https://via.placeholder.com/150x150/0d6efd/ffffff?text=HRCI';
 
 /**
  * @swagger
@@ -160,6 +162,7 @@ router.get('/:cardNumber', async (req, res) => {
   let hrcDistrictId: string | null = null;
   let hrcMandalId: string | null = null;
   let profilePhotoUrl: string | null = (card as any).profilePhotoUrl || null;
+  const isPlaceholder = (u?: string | null) => !!u && (/placeholder\.com/i.test(u) || /^data:image\/svg\+xml/.test(u));
   try {
     const membership = await prisma.membership.findUnique({ where: { id: card.membershipId }, include: { designation: true } });
     if (membership) {
@@ -170,13 +173,15 @@ router.get('/:cardNumber', async (req, res) => {
       hrcStateId = (membership as any).hrcStateId || null;
       hrcDistrictId = (membership as any).hrcDistrictId || null;
       hrcMandalId = (membership as any).hrcMandalId || null;
-      // Resolve latest profile photo (prefer explicit profilePhotoUrl or media.url)
-      if (!profilePhotoUrl) {
-        try {
-          const user = await prisma.user.findUnique({ where: { id: (membership as any).userId }, include: { profile: { include: { profilePhotoMedia: true } } } as any });
-          profilePhotoUrl = (user as any)?.profile?.profilePhotoUrl || (user as any)?.profile?.profilePhotoMedia?.url || profilePhotoUrl;
-        } catch {}
-      }
+      // Resolve latest profile photo and avoid seeded placeholders
+      try {
+        const user = await prisma.user.findUnique({ where: { id: (membership as any).userId }, include: { profile: { include: { profilePhotoMedia: true } } } as any });
+        const mediaUrl = (user as any)?.profile?.profilePhotoMedia?.url || null;
+        const urlFromProfile = (user as any)?.profile?.profilePhotoUrl || null;
+        const current = profilePhotoUrl;
+        // Prefer real media URL if available; else use URL from profile if not a placeholder; else keep current
+        profilePhotoUrl = mediaUrl || (isPlaceholder(current) ? (isPlaceholder(urlFromProfile) ? current : urlFromProfile) : (current || urlFromProfile));
+      } catch {}
     }
   } catch {}
   // Human-friendly prefix mapping
@@ -281,6 +286,7 @@ router.get('/:cardNumber', async (req, res) => {
   // Embed enriched fields inside card for cleaner grouping; also keep top-level for backwards compatibility if needed
   // Normalize and alias photo url for clients expecting `photoUrl`
   let photoUrlFinal: string | null = profilePhotoUrl || (card as any).profilePhotoUrl || (card as any).photoUrl || null;
+  if (!photoUrlFinal) photoUrlFinal = PROFILE_PHOTO_PLACEHOLDER; // ensure placeholder instead of null
   if (photoUrlFinal && /^\//.test(photoUrlFinal)) photoUrlFinal = `${baseUrl}${photoUrlFinal}`;
   const enrichedCard: any = { ...card, membershipLevel, levelTitle, levelLocation, locationTitle, memberLocationName, designationDisplay, designationNameFormatted, profilePhotoUrl: photoUrlFinal, photoUrl: photoUrlFinal };
   return res.json({ success: true, data: { card: enrichedCard, setting, verifyUrl, htmlUrl, qrUrl } });
@@ -323,10 +329,12 @@ router.get('/:cardNumber/html', async (req, res) => {
     if (m) {
       try {
         // fetch from user and profile
-        const user = await prisma.user.findUnique({ where: { id: m.userId }, include: { profile: { include: { profilePhotoMedia: true } } } as any }) as any;
+  const user = await prisma.user.findUnique({ where: { id: m.userId }, include: { profile: { include: { profilePhotoMedia: true } } } as any }) as any;
         fullName = fullName || (user?.profile?.fullName || '');
         mobileNumber = mobileNumber || (user?.mobileNumber || '');
-        photoUrl = (user?.profile?.profilePhotoUrl || user?.profile?.profilePhotoMedia?.url || undefined) as any;
+  // Prefer media URL over potentially seeded placeholder profilePhotoUrl
+  const mediaFirst = (user?.profile?.profilePhotoMedia?.url || user?.profile?.profilePhotoUrl || undefined) as any;
+  photoUrl = mediaFirst;
       } catch {}
       designationName = designationName || (m as any).designation?.name || '';
       cellName = cellName || (m as any).cell?.name || '';
@@ -343,8 +351,8 @@ router.get('/:cardNumber/html', async (req, res) => {
     try {
       const mRef = await prisma.membership.findUnique({ where: { id: card.membershipId } });
       if (mRef) {
-        const uRef: any = await prisma.user.findUnique({ where: { id: (mRef as any).userId }, include: { profile: { include: { profilePhotoMedia: true } } } as any });
-        photoUrl = (uRef?.profile?.profilePhotoUrl || uRef?.profile?.profilePhotoMedia?.url || photoUrl) as any;
+  const uRef: any = await prisma.user.findUnique({ where: { id: (mRef as any).userId }, include: { profile: { include: { profilePhotoMedia: true } } } as any });
+  photoUrl = (uRef?.profile?.profilePhotoMedia?.url || uRef?.profile?.profilePhotoUrl || photoUrl) as any;
       }
     } catch {}
   }
@@ -413,6 +421,44 @@ router.get('/:cardNumber/html', async (req, res) => {
   const side = String(req.query.side || '').toLowerCase();
   const designVariant = String(req.query.design || '').toLowerCase();
 
+  // Allow overriding member photo in HTML using any of these query keys:
+  // photoUrl, profilePhotoUrl, photo, img, image, avatar, pp
+  try {
+    const pickFirst = (v: any) => Array.isArray(v) ? v[0] : v;
+    const keys = ['photoUrl','profilePhotoUrl','photo','img','image','avatar','pp'];
+    let override: string | undefined;
+    for (const k of keys) {
+      if (req.query[k] != null) {
+        const raw = pickFirst(req.query[k]);
+        if (raw != null) {
+          const val = String(raw).trim();
+          if (val) { override = val; break; }
+        }
+      }
+    }
+    if (override) {
+      if (/^\//.test(override)) override = `${baseHost}${override}`;
+      photoUrl = override;
+    }
+    // Also allow overriding author sign via query (sign, signUrl, signature, authorSign, authorSignUrl)
+    const signKeys = ['sign','signUrl','signature','authorSign','authorSignUrl'];
+    let signOverride: string | undefined;
+    for (const k of signKeys) {
+      if (req.query[k] != null) {
+        const raw = pickFirst(req.query[k]);
+        if (raw != null) {
+          const val = String(raw).trim();
+          if (val) { signOverride = val; break; }
+        }
+      }
+    }
+    if (signOverride) {
+      if (/^\//.test(signOverride)) signOverride = `${baseHost}${signOverride}`;
+      // set into a mutable holder so template below uses override
+      (global as any).__hrciSignOverride = signOverride;
+    }
+  } catch {}
+
   // Build CR80 exact design variant if requested via ?design=cr80
   const buildCr80 = async () => {
     // Map level/zone to formatted prefix
@@ -472,7 +518,7 @@ router.get('/:cardNumber/html', async (req, res) => {
   const logoUrl = trimOrNull(s?.frontLogoUrl) || svgPlaceholder('Logo');
   const secondLogoUrl = trimOrNull(s?.secondLogoUrl) || logoUrl;
   const stampUrl = trimOrNull(s?.hrciStampUrl) || svgPlaceholder('Stamp', 140, 140);
-  const authorSignUrl = trimOrNull(s?.authorSignUrl) || '';
+  let authorSignUrl = trimOrNull(s?.authorSignUrl) || svgPlaceholder('Sign', 160, 60);
     const contactNumber1 = s?.contactNumber1 || '';
     const contactNumber2 = s?.contactNumber2 || '';
     const headOfficeAddress = s?.headOfficeAddress || '';
@@ -536,6 +582,7 @@ router.get('/:cardNumber/html', async (req, res) => {
 
     <div class="main">
       <div>
+      <div>
         <img class="logo" src="${logoUrl}" alt="Logo" />
         <img class="qr" src="${qrEndpointUrl}" alt="QR" />
       </div>
@@ -552,17 +599,20 @@ router.get('/:cardNumber/html', async (req, res) => {
         <div class="row"><span class="lbl">Issue Date</span><span>:</span><span class="val">${(issuedAt || '-').toUpperCase()}</span></div>
       </div>
       <div>
+      <div>
         <div class="photo-wrap">
           <img class="photo" src="${photoUrl || svgPlaceholder('Photo')}" alt="Photo" />
           ${stampUrl ? `<img class="stamp" src="${stampUrl}" alt="Stamp" />` : ''}
         </div>
         <div class="sign-wrap">
-          ${authorSignUrl ? `<img class="sign" src="${authorSignUrl}" alt="Author Sign" />` : ''}
+          <img class="sign" src="${(global as any).__hrciSignOverride || authorSignUrl}" alt="Author Sign" />
           <div class="sign-label">Signature Issue Auth.</div>
         </div>
       </div>
     </div>
   </div>
+  .band-red h1 { margin:0; font:900 5.2mm/1 Verdana,Arial,sans-serif; letter-spacing:0.15mm; text-align:center; text-transform:uppercase; white-space:nowrap; overflow:hidden;}
+  .front .stamp { position:absolute; left:1mm; bottom:1mm; width:14mm; height:14mm; border-radius:50%; object-fit:cover; background:transparent; box-shadow:0 0 0.4mm rgba(0,0,0,.15);}  
   <div class="footer-red">
     <p>We take help 24x7 From (Police, CBI, Vigilance, NIA) &amp; other Govt. Dept. against crime &amp; corruption.</p>
   </div>
@@ -591,6 +641,33 @@ ${termsHtml}
   <div class="footer-blue"><p>${contactFooter}</p></div>
  </section>
 
+${(() => {
+  const dbg = String(req.query.debug || '').toLowerCase();
+  if (dbg === '1' || dbg === 'true') {
+    const info: Record<string, any> = {
+      cardNumber: card.cardNumber,
+      membershipLevel,
+      zoneValue,
+      hrcCountryId,
+      hrcStateId,
+      hrcDistrictId,
+      hrcMandalId,
+      fullName,
+      designationName,
+      cellName,
+      photoUrl: photoUrl || null,
+      settingAssets: {
+        frontLogoUrl: s?.frontLogoUrl || null,
+        secondLogoUrl: s?.secondLogoUrl || null,
+        hrciStampUrl: s?.hrciStampUrl || null,
+        authorSignUrl: s?.authorSignUrl || null
+      }
+    };
+    const safeJson = JSON.stringify(info, null, 2).replace(/</g,'&lt;');
+    return `<pre style="position:fixed;top:4px;left:4px;z-index:9999;background:rgba(0,0,0,.75);color:#0f0;padding:8px;max-width:340px;font-size:11px;line-height:1.2;white-space:pre-wrap;border:1px solid #0f0">${safeJson}</pre>`;
+  }
+  return '';
+})()}
 </div>
 
 </body>

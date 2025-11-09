@@ -89,8 +89,8 @@ async function ensureTestUser() {
   });
   await prisma.userProfile.upsert({
     where: { userId: user.id },
-    update: { fullName: 'Test Member', profilePhotoUrl: 'https://via.placeholder.com/200x200.png?text=HRCI' },
-    create: { userId: user.id, fullName: 'Test Member', profilePhotoUrl: 'https://via.placeholder.com/200x200.png?text=HRCI' }
+    update: { fullName: 'Test Member', profilePhotoUrl: null },
+    create: { userId: user.id, fullName: 'Test Member', profilePhotoUrl: null }
   });
   return user;
 }

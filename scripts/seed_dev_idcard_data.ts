@@ -83,7 +83,9 @@ async function seedDevIdCardData() {
           data: {
             userId: user.id,
             fullName: userData.fullName,
-            profilePhotoUrl: 'https://via.placeholder.com/150x150/0d6efd/ffffff?text=HRCI'
+            // Intentionally leaving profilePhotoUrl null in dev seed to surface real fetch/fallback logic.
+            // Replace with an uploaded media URL if you want a visible photo in local tests.
+            profilePhotoUrl: null
           }
         });
         
