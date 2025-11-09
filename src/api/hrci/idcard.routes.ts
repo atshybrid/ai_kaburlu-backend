@@ -151,6 +151,17 @@ router.get('/:cardNumber', async (req, res) => {
   const raw = String(req.params.cardNumber || '').trim();
   const card = await prisma.iDCard.findFirst({ where: { cardNumber: { equals: raw, mode: 'insensitive' } as any } as any });
   if (!card) return res.status(404).json({ success: false, error: 'CARD_NOT_FOUND' });
+  // Enrich with membership level and computed display label (Level + Designation)
+  let membershipLevel: string | null = null;
+  let designationName: string | null = (card as any).designationName || null;
+  try {
+    const membership = await prisma.membership.findUnique({ where: { id: card.membershipId }, include: { designation: true } });
+    if (membership) {
+      membershipLevel = membership.level as unknown as string;
+      if (!designationName) designationName = (membership as any).designation?.name || null;
+    }
+  } catch {}
+  const designationDisplay = designationName ? `${membershipLevel ? `${membershipLevel} ` : ''}${designationName}` : null;
   const setting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
   const baseUrl = setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`;
   const apiUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}`;
@@ -158,7 +169,7 @@ router.get('/:cardNumber', async (req, res) => {
   const qrUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/qr`;
   // Keep verifyUrl for backward compatibility (points to API JSON), also return htmlUrl and qrUrl for UX
   const verifyUrl = apiUrl;
-  return res.json({ success: true, data: { card, setting, verifyUrl, htmlUrl, qrUrl } });
+  return res.json({ success: true, data: { card, setting, verifyUrl, htmlUrl, qrUrl, membershipLevel, designationDisplay } });
 });
 
 /**
