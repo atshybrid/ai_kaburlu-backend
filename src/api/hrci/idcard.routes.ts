@@ -466,12 +466,13 @@ router.get('/:cardNumber/html', async (req, res) => {
       } catch {}
     }
     const qrEndpointUrl = `${baseHost}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/qr`;
-    // Simple inline SVG fallbacks (data URI) to avoid broken image icons
-    const svgPlaceholder = (text: string, w = 120, h = 120) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}'><rect width='100%' height='100%' fill='#fff'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='Verdana' font-size='14' fill='#555'>${text}</text></svg>`)}`;
-    const logoUrl = s?.frontLogoUrl || svgPlaceholder('Logo');
-    const secondLogoUrl = s?.secondLogoUrl || logoUrl;
-    const stampUrl = s?.hrciStampUrl || svgPlaceholder('Stamp', 140, 140);
-    const authorSignUrl = s?.authorSignUrl || '';
+  // Simple inline SVG fallbacks (data URI) to avoid broken image icons
+  const svgPlaceholder = (text: string, w = 120, h = 120) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}'><rect width='100%' height='100%' fill='#fff'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='Verdana' font-size='14' fill='#555'>${text}</text></svg>`)}`;
+  const trimOrNull = (v?: string | null) => { if (typeof v !== 'string') return v || null; const t = v.trim(); return t ? t : null; };
+  const logoUrl = trimOrNull(s?.frontLogoUrl) || svgPlaceholder('Logo');
+  const secondLogoUrl = trimOrNull(s?.secondLogoUrl) || logoUrl;
+  const stampUrl = trimOrNull(s?.hrciStampUrl) || svgPlaceholder('Stamp', 140, 140);
+  const authorSignUrl = trimOrNull(s?.authorSignUrl) || '';
     const contactNumber1 = s?.contactNumber1 || '';
     const contactNumber2 = s?.contactNumber2 || '';
     const headOfficeAddress = s?.headOfficeAddress || '';
@@ -499,10 +500,11 @@ router.get('/:cardNumber/html', async (req, res) => {
       'Report misuse immediately to headquarters.'
     ];
     // Build lines markup
-  const regHtmlFront = registrationLinesFront.map(l => `${l}<br />`).join('');
+  const regHtmlFront = registrationLinesFront.map(l => `<span style="display:block">${l}</span>`).join('');
     const termsHtml = termsLines.map(l => `          <p class="term">${l}</p>`).join('\n');
     const contactFooter = `HELP LINE NUMBER ${[contactNumber1, contactNumber2].filter(Boolean).join('  |  ')}`;
     // Inject into provided design
+  const scale = Math.max(0.5, Math.min(2, Number(req.query.scale || 1))) || 1;
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -511,6 +513,8 @@ router.get('/:cardNumber/html', async (req, res) => {
 <style>${cr80Css}</style>
 </head>
 <body>
+
+<div style="${'transform:scale(' + scale + '); transform-origin: top left;'}">
 
 <!-- FRONT PAGE -->
 <section class="page front">
@@ -562,7 +566,7 @@ router.get('/:cardNumber/html', async (req, res) => {
   <div class="footer-red">
     <p>We take help 24x7 From (Police, CBI, Vigilance, NIA) &amp; other Govt. Dept. against crime &amp; corruption.</p>
   </div>
-</section>
+ </section>
 
 <!-- BACK PAGE -->
 <section class="page back">
@@ -585,7 +589,9 @@ ${termsHtml}
     </div>
   </div>
   <div class="footer-blue"><p>${contactFooter}</p></div>
-</section>
+ </section>
+
+</div>
 
 </body>
 </html>`;
