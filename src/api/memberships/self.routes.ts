@@ -62,23 +62,95 @@ router.get('/me/idcard', requireAuth, async (req: any, res) => {
 
     // Include current active IdCardSetting in response for the client to style/render
     const setting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
+    const baseUrl = (setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
     // Resolve holder fields (from snapshot or live)
     let fullName = (card as any).fullName || '';
     let designationName = (card as any).designationName || '';
     let cellName = (card as any).cellName || '';
     let mobileNumber = (card as any).mobileNumber || '';
-    if (!fullName || !designationName || !cellName || !mobileNumber) {
+    let profilePhotoUrl: string | null = (card as any).profilePhotoUrl || null;
+    // Membership/location enrichment scaffolding
+    let membershipLevel: string | null = null;
+    let zoneValue: string | null = null;
+    let hrcCountryId: string | null = null;
+    let hrcStateId: string | null = null;
+    let hrcDistrictId: string | null = null;
+    let hrcMandalId: string | null = null;
+    if (!fullName || !designationName || !cellName || !mobileNumber || !profilePhotoUrl) {
       const m = await prisma.membership.findUnique({ where: { id: picked.id }, include: { designation: true, cell: true } });
       if (m) {
         try {
-          const user = await prisma.user.findUnique({ where: { id: m.userId }, include: { profile: true } });
+          const user = await prisma.user.findUnique({ where: { id: m.userId }, include: { profile: { include: { profilePhotoMedia: true } } } as any });
           fullName = fullName || (user as any)?.profile?.fullName || '';
           mobileNumber = mobileNumber || (user as any)?.mobileNumber || '';
+          profilePhotoUrl = profilePhotoUrl || (user as any)?.profile?.profilePhotoUrl || (user as any)?.profile?.profilePhotoMedia?.url || null;
         } catch {}
         designationName = designationName || (m as any).designation?.name || '';
         cellName = cellName || (m as any).cell?.name || '';
+        membershipLevel = (m as any).level || null;
+        zoneValue = (m as any).zone || null;
+        hrcCountryId = (m as any).hrcCountryId || null;
+        hrcStateId = (m as any).hrcStateId || null;
+        hrcDistrictId = (m as any).hrcDistrictId || null;
+        hrcMandalId = (m as any).hrcMandalId || null;
       }
     }
+    // Normalize relative profile photo path to absolute
+    if (profilePhotoUrl && /^\//.test(profilePhotoUrl)) profilePhotoUrl = `${baseUrl}${profilePhotoUrl}`;
+    // Build designation display with level prefix
+    const zoneMap: Record<string,string> = { NORTH:'North Zone', SOUTH:'South Zone', EAST:'East Zone', WEST:'West Zone', CENTRAL:'Central Zone' };
+    let prefix = '';
+    if (membershipLevel === 'ZONE') prefix = zoneValue ? (zoneMap[String(zoneValue).toUpperCase()] || `${String(zoneValue).toLowerCase().replace(/\b\w/g,c=>c.toUpperCase())} Zone`) : 'Zone';
+    else if (membershipLevel === 'NATIONAL') prefix = 'National';
+    else if (membershipLevel === 'STATE') prefix = 'State';
+    else if (membershipLevel === 'DISTRICT') prefix = 'District';
+    else if (membershipLevel === 'MANDAL') prefix = 'Mandal';
+    const designationNameFormatted = designationName && prefix ? `${prefix} ${designationName}` : designationName || '';
+    const designationDisplay = designationNameFormatted || null;
+    // Resolve level location/title
+    let levelTitle: string | null = null;
+    let levelLocation: any = null;
+    let locationTitle: string | null = null;
+    let memberLocationName: string | null = null;
+    try {
+      if (membershipLevel === 'NATIONAL') {
+        levelTitle = 'National';
+        if (hrcCountryId) {
+          const c = await (prisma as any).hrcCountry.findUnique({ where: { id: hrcCountryId } });
+          levelLocation = { countryId: hrcCountryId, countryName: c?.name };
+          locationTitle = c?.name || 'India';
+          memberLocationName = c?.name || 'India';
+        } else { locationTitle = memberLocationName = 'India'; }
+      } else if (membershipLevel === 'ZONE') {
+        levelTitle = 'Zone';
+        const c = hrcCountryId ? await (prisma as any).hrcCountry.findUnique({ where: { id: hrcCountryId } }) : null;
+        const zoneTitle = prefix || '';
+        levelLocation = { countryId: hrcCountryId, countryName: c?.name, zone: zoneValue, zoneTitle };
+        locationTitle = [c?.name, zoneTitle].filter(Boolean).join(', ') || zoneTitle;
+        memberLocationName = zoneTitle || null;
+      } else if (membershipLevel === 'STATE' && hrcStateId) {
+        levelTitle = 'State';
+        const st = await (prisma as any).hrcState.findUnique({ where: { id: hrcStateId } });
+        levelLocation = { stateId: hrcStateId, stateName: st?.name, stateCode: st?.code };
+        locationTitle = st?.name || null;
+        memberLocationName = st?.name || null;
+      } else if (membershipLevel === 'DISTRICT' && hrcDistrictId) {
+        levelTitle = 'District';
+        const dist = await (prisma as any).hrcDistrict.findUnique({ where: { id: hrcDistrictId } });
+        const st = dist?.stateId ? await (prisma as any).hrcState.findUnique({ where: { id: dist.stateId } }) : null;
+        levelLocation = { stateId: hrcStateId, districtId: hrcDistrictId, districtName: dist?.name, stateName: st?.name };
+        locationTitle = [dist?.name, st?.name].filter(Boolean).join(', ') || null;
+        memberLocationName = dist?.name || null;
+      } else if (membershipLevel === 'MANDAL' && hrcMandalId) {
+        levelTitle = 'Mandal';
+        const mandal = await (prisma as any).hrcMandal.findUnique({ where: { id: hrcMandalId } });
+        const dist = mandal?.districtId ? await (prisma as any).hrcDistrict.findUnique({ where: { id: mandal.districtId } }) : null;
+        const st = dist?.stateId ? await (prisma as any).hrcState.findUnique({ where: { id: dist.stateId } }) : null;
+        levelLocation = { stateId: hrcStateId, districtId: hrcDistrictId, mandalId: hrcMandalId, mandalName: mandal?.name, districtName: dist?.name, stateName: st?.name };
+        locationTitle = [mandal?.name, dist?.name, st?.name].filter(Boolean).join(', ') || null;
+        memberLocationName = mandal?.name || null;
+      }
+    } catch {}
 
     return res.json({
       success: true,
@@ -94,7 +166,17 @@ router.get('/me/idcard', requireAuth, async (req: any, res) => {
           issuedAt: card.issuedAt,
           expiresAt: card.expiresAt,
           holder: { fullName, mobileNumber, designationName, cellName },
-          paths: buildCardPaths(card.cardNumber)
+          paths: buildCardPaths(card.cardNumber),
+          // Enriched fields similar to public card JSON
+          membershipLevel,
+          levelTitle,
+          levelLocation,
+          locationTitle,
+          memberLocationName,
+          designationDisplay,
+          designationNameFormatted,
+          profilePhotoUrl,
+          photoUrl: profilePhotoUrl,
         },
         setting
       }
