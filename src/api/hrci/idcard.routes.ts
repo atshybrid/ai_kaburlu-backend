@@ -446,17 +446,27 @@ router.get('/:cardNumber/html', async (req, res) => {
     const administrationOfficeAddress = s?.administrationOfficeAddress || '';
     const website = (s as any)?.registerDetails || '';
     // Registration lines (keeping same static text if not provided in setting)
-    const registrationLines = [
+    // Front band registration lines (exact screenshot spec)
+    const registrationLinesFront = [
       'REGISTERED BY NCT, NEW DELHI, GOVT OF INDIA',
       'REGISTERED NO: 4396/2022 (UNDER TRUST ACT 1882)',
       'TO PROTECT & PROMOTE THE HUMAN RIGHTS'
+    ];
+    // Back body registration lines (corporate / CSR / ISO / UDYAN / social justice / AP reg)
+    const registrationLinesBack = [
+      'REGISTERED BY MINISTRY OF CORPORATE AFFAIRS, INDIA',
+      "REGD NO: CSR00036396 OF 'HRCI', CSR 00038592 OF 'HRCI'",
+      "REGD NO: HVR. 46/2022 'HRCI' ISO CERTIFICATE NO: HRCI/AP121209/2022",
+      "REGD UNDER 'UDYAN' NO: AP-21-0001051, AP-21-0001502 'HRCI'",
+      'REGD BY: MINISTRY OF SOCIAL JUSTICE AND EMPOWERMENT',
+      'GOVT OF INDIA REGD BY AP/00003680'
     ];
     const termsLines = terms.length ? terms : [
       'Carry this card at all times during official duties.',
       'Report misuse immediately to headquarters.'
     ];
     // Build lines markup
-    const regHtml = registrationLines.map(l => `${l}<br />`).join('');
+  const regHtmlFront = registrationLinesFront.map(l => `${l}<br />`).join('');
     const termsHtml = termsLines.map(l => `          <p class="term">${l}</p>`).join('\n');
     const contactFooter = `HELP LINE NUMBER ${[contactNumber1, contactNumber2].filter(Boolean).join('  |  ')}`;
     // Inject into provided design
@@ -475,7 +485,7 @@ router.get('/:cardNumber/html', async (req, res) => {
     <h1>HUMAN RIGHTS COUNCIL FOR INDIA (HRCI)</h1>
   </div>
   <div class="band-blue">
-    <p>${regHtml}</p>
+    <p>${regHtmlFront}</p>
   </div>
 
   <div class="body">
@@ -496,15 +506,13 @@ router.get('/:cardNumber/html', async (req, res) => {
         <p class="cell">${cellName || '-'}</p>
         <p class="name">${fullName || '-'}</p>
         <p class="desig">${designationFormatted || '-'}</p>
-        <div class="row"><span class="lbl">Name</span><span>:</span><span class="val">${fullName || '-'}</span></div>
-        <div class="row"><span class="lbl">Designation</span><span>:</span><span class="val">${designationFormatted || '-'}</span></div>
-        ${zoneValue ? `<div class="row"><span class="lbl">Zone</span><span>:</span><span class="val">${prefix}</span></div>` : ''}
-        ${cellName ? `<div class="row"><span class="lbl">Cell</span><span>:</span><span class="val">${cellName}</span></div>` : ''}
-        ${memberLocationName ? `<div class="row"><span class="lbl">Location</span><span>:</span><span class="val">${memberLocationName}</span></div>` : ''}
-        <div class="row"><span class="lbl">ID No</span><span>:</span><span class="val">${card.cardNumber}</span></div>
-        <div class="row"><span class="lbl">Contact No</span><span>:</span><span class="val">${mobileNumber || '-'}</span></div>
-        <div class="row"><span class="lbl">Valid Upto</span><span>:</span><span class="val">${expiresAt || '-'}</span></div>
-        <div class="row"><span class="lbl">Issue Date</span><span>:</span><span class="val">${issuedAt || '-'}</span></div>
+        <div class="row"><span class="lbl">Name</span><span>:</span><span class="val">${(fullName || '-').toUpperCase()}</span></div>
+        <div class="row"><span class="lbl">Designation</span><span>:</span><span class="val">${(designationFormatted || '-').toUpperCase()}</span></div>
+        ${cellName ? `<div class="row"><span class="lbl">Cell</span><span>:</span><span class="val">${cellName.toUpperCase()}</span></div>` : ''}
+        <div class="row"><span class="lbl">ID</span><span>:</span><span class="val">${card.cardNumber.toUpperCase()}</span></div>
+        <div class="row"><span class="lbl">Mob</span><span>:</span><span class="val">${(mobileNumber || '-').toUpperCase()}</span></div>
+        <div class="row"><span class="lbl">Valid</span><span>:</span><span class="val">${(expiresAt || '-').toUpperCase()}</span></div>
+        <div class="row"><span class="lbl">Issue Date</span><span>:</span><span class="val">${(issuedAt || '-').toUpperCase()}</span></div>
       </div>
       <div>
         <div class="photo-wrap">
@@ -532,7 +540,7 @@ router.get('/:cardNumber/html', async (req, res) => {
     <div class="row-main">
       <div><img class="qr" src="${qrEndpointUrl}" alt="QR" /></div>
       <div class="reg">
-        ${registrationLines.map(l=>`<p class=\"line\">${l}</p>`).join('')}
+        ${registrationLinesBack.map(l=>`<p class=\"line\">${l}</p>`).join('')}
         <p class="terms-title">Terms &amp; Conditions</p>
 ${termsHtml}
         ${headOfficeAddress ? `<p class="addr-label">HEAD OFFICE</p><p class="addr">${headOfficeAddress}</p>`: ''}
