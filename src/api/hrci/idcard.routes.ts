@@ -256,7 +256,7 @@ router.get('/:cardNumber', async (req, res) => {
     }
   } catch {}
   const setting = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
-  const baseUrl = setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`;
+  const baseUrl = (setting?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
   const apiUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}`;
   const htmlUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/html`;
   const qrUrl = `${baseUrl}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/qr`;
@@ -279,7 +279,10 @@ router.get('/:cardNumber', async (req, res) => {
   } catch {}
 
   // Embed enriched fields inside card for cleaner grouping; also keep top-level for backwards compatibility if needed
-  const enrichedCard: any = { ...card, membershipLevel, levelTitle, levelLocation, locationTitle, memberLocationName, designationDisplay, designationNameFormatted, profilePhotoUrl };
+  // Normalize and alias photo url for clients expecting `photoUrl`
+  let photoUrlFinal: string | null = profilePhotoUrl || (card as any).profilePhotoUrl || (card as any).photoUrl || null;
+  if (photoUrlFinal && /^\//.test(photoUrlFinal)) photoUrlFinal = `${baseUrl}${photoUrlFinal}`;
+  const enrichedCard: any = { ...card, membershipLevel, levelTitle, levelLocation, locationTitle, memberLocationName, designationDisplay, designationNameFormatted, profilePhotoUrl: photoUrlFinal, photoUrl: photoUrlFinal };
   return res.json({ success: true, data: { card: enrichedCard, setting, verifyUrl, htmlUrl, qrUrl } });
 });
 
