@@ -301,6 +301,12 @@ router.get('/:cardNumber/html', async (req, res) => {
   let cellName = (card as any).cellName || '';
   let mobileNumber = (card as any).mobileNumber || '';
   let photoUrl: string | undefined;
+  let membershipLevel: string | null = null;
+  let zoneValue: string | null = null;
+  let hrcCountryId: string | null = null;
+  let hrcStateId: string | null = null;
+  let hrcDistrictId: string | null = null;
+  let hrcMandalId: string | null = null;
   if (!fullName || !designationName || !cellName || !mobileNumber) {
     const m = await prisma.membership.findUnique({ where: { id: card.membershipId }, include: { designation: true, cell: true } });
     if (m) {
@@ -313,7 +319,27 @@ router.get('/:cardNumber/html', async (req, res) => {
       } catch {}
       designationName = designationName || (m as any).designation?.name || '';
       cellName = cellName || (m as any).cell?.name || '';
+      membershipLevel = (m as any).level || null;
+      zoneValue = (m as any).zone || null;
+      hrcCountryId = (m as any).hrcCountryId || null;
+      hrcStateId = (m as any).hrcStateId || null;
+      hrcDistrictId = (m as any).hrcDistrictId || null;
+      hrcMandalId = (m as any).hrcMandalId || null;
     }
+  }
+  // If snapshot already had level/location, attempt to read membership anyway if not fetched
+  if (!membershipLevel) {
+    try {
+      const m2 = await prisma.membership.findUnique({ where: { id: card.membershipId } });
+      if (m2) {
+        membershipLevel = (m2 as any).level || null;
+        zoneValue = (m2 as any).zone || null;
+        hrcCountryId = (m2 as any).hrcCountryId || null;
+        hrcStateId = (m2 as any).hrcStateId || null;
+        hrcDistrictId = (m2 as any).hrcDistrictId || null;
+        hrcMandalId = (m2 as any).hrcMandalId || null;
+      }
+    } catch {}
   }
   // Dates
   function fmt(d?: Date | string | null) {
@@ -364,6 +390,169 @@ router.get('/:cardNumber/html', async (req, res) => {
   const expiresAt = fmt(card.expiresAt);
   const footer = s?.frontFooterText || '';
   const side = String(req.query.side || '').toLowerCase();
+  const designVariant = String(req.query.design || '').toLowerCase();
+
+  // Build CR80 exact design variant if requested via ?design=cr80
+  const buildCr80 = async () => {
+    // Map level/zone to formatted prefix
+    const zoneMap: Record<string,string> = { NORTH:'North Zone', SOUTH:'South Zone', EAST:'East Zone', WEST:'West Zone', CENTRAL:'Central Zone' };
+    let prefix = '';
+    if (membershipLevel === 'ZONE') {
+      prefix = zoneValue ? (zoneMap[String(zoneValue).toUpperCase()] || `${String(zoneValue).toLowerCase().replace(/\b\w/g,c=>c.toUpperCase())} Zone`) : 'Zone';
+    } else if (membershipLevel === 'NATIONAL') prefix = 'National';
+    else if (membershipLevel === 'STATE') prefix = 'State';
+    else if (membershipLevel === 'DISTRICT') prefix = 'District';
+    else if (membershipLevel === 'MANDAL') prefix = 'Mandal';
+    const designationFormatted = designationName ? [prefix, designationName].filter(Boolean).join(' ') : '';
+    // Location display
+    let memberLocationName: string | undefined;
+    try {
+      if (membershipLevel === 'NATIONAL') {
+        if (hrcCountryId) {
+          const c = await (prisma as any).hrcCountry.findUnique({ where: { id: hrcCountryId } });
+          memberLocationName = c?.name || 'India';
+        } else memberLocationName = 'India';
+      } else if (membershipLevel === 'ZONE') {
+        const c = hrcCountryId ? await (prisma as any).hrcCountry.findUnique({ where: { id: hrcCountryId } }) : null;
+        const zoneTitle = prefix || '';
+        memberLocationName = [c?.name, zoneTitle].filter(Boolean).join(', ');
+      } else if (membershipLevel === 'STATE' && hrcStateId) {
+        const st = await (prisma as any).hrcState.findUnique({ where: { id: hrcStateId } });
+        memberLocationName = st?.name;
+      } else if (membershipLevel === 'DISTRICT' && hrcDistrictId) {
+        const dist = await (prisma as any).hrcDistrict.findUnique({ where: { id: hrcDistrictId } });
+        if (dist) {
+          const st = await (prisma as any).hrcState.findUnique({ where: { id: dist.stateId } });
+          memberLocationName = [dist?.name, st?.name].filter(Boolean).join(', ');
+        }
+      } else if (membershipLevel === 'MANDAL' && hrcMandalId) {
+        const mandal = await (prisma as any).hrcMandal.findUnique({ where: { id: hrcMandalId } });
+        if (mandal) {
+          const dist = await (prisma as any).hrcDistrict.findUnique({ where: { id: mandal.districtId } });
+          const st = dist ? await (prisma as any).hrcState.findUnique({ where: { id: dist.stateId } }) : null;
+          memberLocationName = [mandal?.name, dist?.name, st?.name].filter(Boolean).join(', ');
+        }
+      }
+    } catch {}
+    const qrEndpointUrl = `${baseHost}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/qr`;
+    const logoUrl = s?.frontLogoUrl || '';
+    const secondLogoUrl = s?.secondLogoUrl || logoUrl;
+    const stampUrl = s?.hrciStampUrl || '';
+    const authorSignUrl = s?.authorSignUrl || '';
+    const contactNumber1 = s?.contactNumber1 || '';
+    const contactNumber2 = s?.contactNumber2 || '';
+    const headOfficeAddress = s?.headOfficeAddress || '';
+    const regionalOfficeAddress = s?.regionalOfficeAddress || '';
+    const administrationOfficeAddress = s?.administrationOfficeAddress || '';
+    const website = (s as any)?.registerDetails || '';
+    // Registration lines (keeping same static text if not provided in setting)
+    const registrationLines = [
+      'REGISTERED BY NCT, NEW DELHI, GOVT OF INDIA',
+      'REGISTERED NO: 4396/2022 (UNDER TRUST ACT 1882)',
+      'TO PROTECT & PROMOTE THE HUMAN RIGHTS'
+    ];
+    const termsLines = terms.length ? terms : [
+      'Carry this card at all times during official duties.',
+      'Report misuse immediately to headquarters.'
+    ];
+    // Build lines markup
+    const regHtml = registrationLines.map(l => `${l}<br />`).join('');
+    const termsHtml = termsLines.map(l => `          <p class="term">${l}</p>`).join('\n');
+    const contactFooter = `HELP LINE NUMBER ${[contactNumber1, contactNumber2].filter(Boolean).join('  |  ')}`;
+    // Inject into provided design
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>HRCI ID Card</title>
+<style>${cr80Css}</style>
+</head>
+<body>
+
+<!-- FRONT PAGE -->
+<section class="page front">
+  <div class="band-red">
+    <h1>HUMAN RIGHTS COUNCIL FOR INDIA (HRCI)</h1>
+  </div>
+  <div class="band-blue">
+    <p>${regHtml}</p>
+  </div>
+
+  <div class="body">
+    <div class="juris-wrap">
+      <p class="juris">ALL INDIA JURISDICTION</p>
+      <p class="niti1">REGD BY GOVT OF \"NITI AAYOG\"</p>
+      <p class="niti2">UNIQUE ID: AP/2022/0324217, AP/2022/0326782</p>
+      <p class="works">WORKS AGAINST CRIME, VIOLENCE AND CORRUPTION</p>
+      <p class="identity">IDENTITY CARD</p>
+    </div>
+
+    <div class="main">
+      <div>
+        <img class="logo" src="${logoUrl}" alt="Logo" />
+        <img class="qr" src="${qrEndpointUrl}" alt="QR" />
+      </div>
+      <div class="details">
+        <p class="cell">${cellName || '-'}</p>
+        <p class="name">${fullName || '-'}</p>
+        <p class="desig">${designationFormatted || '-'}</p>
+        <div class="row"><span class="lbl">Name</span><span>:</span><span class="val">${fullName || '-'}</span></div>
+        <div class="row"><span class="lbl">Designation</span><span>:</span><span class="val">${designationFormatted || '-'}</span></div>
+        ${zoneValue ? `<div class="row"><span class="lbl">Zone</span><span>:</span><span class="val">${prefix}</span></div>` : ''}
+        ${cellName ? `<div class="row"><span class="lbl">Cell</span><span>:</span><span class="val">${cellName}</span></div>` : ''}
+        ${memberLocationName ? `<div class="row"><span class="lbl">Location</span><span>:</span><span class="val">${memberLocationName}</span></div>` : ''}
+        <div class="row"><span class="lbl">ID No</span><span>:</span><span class="val">${card.cardNumber}</span></div>
+        <div class="row"><span class="lbl">Contact No</span><span>:</span><span class="val">${mobileNumber || '-'}</span></div>
+        <div class="row"><span class="lbl">Valid Upto</span><span>:</span><span class="val">${expiresAt || '-'}</span></div>
+        <div class="row"><span class="lbl">Issue Date</span><span>:</span><span class="val">${issuedAt || '-'}</span></div>
+      </div>
+      <div>
+        <div class="photo-wrap">
+          <img class="photo" src="${photoUrl || ''}" alt="Photo" />
+          ${stampUrl ? `<img class="stamp" src="${stampUrl}" alt="Stamp" />` : ''}
+        </div>
+        <div class="sign-wrap">
+          ${authorSignUrl ? `<img class="sign" src="${authorSignUrl}" alt="Author Sign" />` : ''}
+          <div class="sign-label">Signature Issue Auth.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer-red">
+    <p>We take help 24x7 From (Police, CBI, Vigilance, NIA) &amp; other Govt. Dept. against crime &amp; corruption.</p>
+  </div>
+</section>
+
+<!-- BACK PAGE -->
+<section class="page back">
+  <div class="band-red">
+    <h1>HUMAN RIGHTS COUNCIL FOR INDIA (HRCI)</h1>
+  </div>
+  <div class="body">
+    <div class="row-main">
+      <div><img class="qr" src="${qrEndpointUrl}" alt="QR" /></div>
+      <div class="reg">
+        ${registrationLines.map(l=>`<p class=\"line\">${l}</p>`).join('')}
+        <p class="terms-title">Terms &amp; Conditions</p>
+${termsHtml}
+        ${headOfficeAddress ? `<p class="addr-label">HEAD OFFICE</p><p class="addr">${headOfficeAddress}</p>`: ''}
+        ${regionalOfficeAddress ? `<p class="addr-label">REGIONAL OFFICE</p><p class="addr">${regionalOfficeAddress}</p>`: ''}
+        ${administrationOfficeAddress ? `<p class="addr-label">ADMINISTRATION OFFICE</p><p class="addr">${administrationOfficeAddress}</p>`: ''}
+        ${website ? `<p class="web">${website}</p>`: ''}
+      </div>
+      <div><img class="logo" src="${secondLogoUrl}" alt="Logo" /></div>
+    </div>
+  </div>
+  <div class="footer-blue"><p>${contactFooter}</p></div>
+</section>
+
+</body>
+</html>`;
+    return html;
+  };
+
+  // External CSS for CR80 design (inlined for single document)
+  const cr80Css = `  @page {\n    size: 85.6mm 54mm;\n    margin: 0;\n  }\n  html, body {\n    margin: 0;\n    padding: 0;\n    background: #f3f4f6;\n  }\n  :root {\n    --card-w: 85.6mm;\n    --card-h: 54mm;\n    --red: #FE0002;\n    --blue: #17007A;\n    --text: #111827;\n    --muted-bg: #F3F4F6;\n    --top-band: 6.1mm;\n    --blue-band: 6.1mm;\n    --bottom-band: 4.6mm;\n    --body-h: calc(var(--card-h) - var(--top-band) - var(--blue-band) - var(--bottom-band));\n  }\n  .page {\n    width: var(--card-w);\n    height: var(--card-h);\n    overflow: hidden;\n    page-break-after: always;\n    background: var(--muted-bg);\n    border: 0.2mm solid #e5e7eb;\n    box-sizing: border-box;\n    position: relative;\n  }\n  .page:last-child { page-break-after: auto; }\n  .band-red {\n    height: var(--top-band);\n    background: var(--red);\n    color: #fff; display:flex;align-items:center;justify-content:center;\n    padding:0 2mm; box-sizing:border-box;\n  }\n  .band-red h1 { margin:0; font:900 5.4mm/1 Verdana,Arial,sans-serif; letter-spacing:0.2mm; text-align:center; text-transform:uppercase; white-space:nowrap; overflow:hidden;}\n  .band-blue { height: var(--blue-band); background: var(--blue); color:#fff; display:flex;align-items:center;justify-content:center; padding:0 2mm; box-sizing:border-box;}\n  .band-blue p { margin:0; font:700 2.2mm/3.0mm Verdana,Arial,sans-serif; letter-spacing:0.1mm; text-align:center;}\n  .footer-red { position:absolute; left:0; right:0; bottom:0; height:var(--bottom-band); background:var(--red); color:#fff; display:flex;align-items:center;justify-content:center; padding:0 2mm; box-sizing:border-box;}\n  .footer-red p { margin:0; font:800 2mm/1 Verdana,Arial,sans-serif; text-align:center; letter-spacing:0.05mm;}\n  .front .body { position:absolute; top:calc(var(--top-band) + var(--blue-band)); left:0; right:0; height:var(--body-h); padding:1.2mm 2mm 0 2mm; box-sizing:border-box;}\n  .front .juris-wrap { display:flex; flex-direction:column; align-items:center; justify-content:flex-start; margin-top:0.8mm;}\n  .front .juris { margin:0.3mm 0 0 0; font:900 3.2mm/3.8mm Verdana,Arial,sans-serif; color:#000; letter-spacing:0.1mm;}\n  .front .niti1 { margin:0.2mm 0 0 0; font:800 2.2mm/2.8mm Verdana,Arial,sans-serif; color:#000;}\n  .front .niti2 { margin:0.1mm 0 0 0; font:700 2mm/2.5mm Verdana,Arial,sans-serif; color:#000;}\n  .front .works { margin:0.2mm 0 0 0; font:800 1.9mm/2.6mm Verdana,Arial,sans-serif; color:var(--red);}\n  .front .identity { margin:0.2mm 0 0 0; font:900 2.4mm/3.0mm Verdana,Arial,sans-serif; color:var(--red);}\n  .front .main { display:grid; grid-template-columns:18mm auto 26mm; grid-gap:1.2mm; align-items:start; margin-top:1.4mm;}\n  .front .logo { width:13.5mm; height:13.5mm; object-fit:cover; border:0.4mm solid #fff; background:#fff; display:block; margin-bottom:1.2mm;}\n  .front .qr { width:14mm; height:14mm; object-fit:contain; display:block;}\n  .front .details { background:#F3F4F6; border:0.2mm solid #e5e7eb; border-radius:1.8mm; padding:2mm 2.2mm;}\n  .front .cell { margin:0 0 0.8mm 0; font:800 2.4mm/3.0mm Verdana,Arial,sans-serif; color:var(--blue);}\n  .front .name { margin:0 0 0.8mm 0; font:800 3.0mm/3.6mm Verdana,Arial,sans-serif; color:var(--text);}\n  .front .desig { margin:0 0 1.2mm 0; font:700 2.4mm/3.0mm Verdana,Arial,sans-serif; color:var(--red);}\n  .front .row { display:grid; grid-template-columns:15mm 2mm auto; align-items:center; column-gap:1mm; margin:0.6mm 0;}\n  .front .lbl { font:900 2.2mm/3.0mm Verdana,Arial,sans-serif; color:var(--text);}\n  .front .val { font:800 2.2mm/3.0mm Verdana,Arial,sans-serif; color:var(--text); overflow:hidden; white-space:nowrap; text-overflow:ellipsis;}\n  .front .photo-wrap { position:relative; width:24mm; height:28mm; border:0.2mm solid #e5e7eb; background:#fff; display:flex; align-items:center; justify-content:center;}\n  .front .photo { width:calc(100% - 1mm); height:calc(100% - 1mm); object-fit:cover;}\n  .front .stamp { position:absolute; right:-3mm; bottom:-3mm; width:14mm; height:14mm; border-radius:50%; object-fit:cover; background:transparent;}\n  .front .sign-wrap { margin-top:1mm; display:flex; flex-direction:column; align-items:center;}\n  .front .sign { width:22mm; height:10mm; object-fit:contain; background:transparent;}\n  .front .sign-label { margin-top:-1.2mm; font:900 2mm/1 Verdana,Arial,sans-serif; color:var(--blue);}\n  .back .body { position:absolute; top:var(--top-band); left:0; right:0; height:calc(var(--card-h) - var(--top-band)); box-sizing:border-box; padding:1.2mm 2mm var(--bottom-band) 2mm;}\n  .back .row-main { display:grid; grid-template-columns:16mm auto 16mm; grid-gap:1.2mm; align-items:start; margin-top:2mm;}\n  .back .qr { width:13mm; height:13mm; object-fit:contain;}\n  .back .logo { width:13mm; height:13mm; object-fit:cover; display:block; margin-left:auto;}\n  .back .reg { text-align:center; color:var(--text);}\n  .back .reg .line { margin:0.4mm 0; font:800 2.2mm/2.8mm Verdana,Arial,sans-serif;}\n  .back .terms-title { margin:1mm 0 0.6mm 0; font:900 2.2mm/2.8mm Verdana,Arial,sans-serif; text-align:center;}\n  .back .term { margin:0.3mm 0; font:700 1.8mm/2.4mm Verdana,Arial,sans-serif; text-align:center;}\n  .back .addr-label { margin:0.6mm 0 0.2mm 0; font:900 2mm/2.6mm Verdana,Arial,sans-serif; text-align:center;}\n  .back .addr { margin:0 0 0.4mm 0; font:700 1.8mm/2.4mm Verdana,Arial,sans-serif; text-align:center;}\n  .back .web { margin:0.6mm 0 0 0; font:800 2mm/2.6mm Verdana,Arial,sans-serif; text-align:center;}\n  .back .footer-blue { position:absolute; left:0; right:0; bottom:0; height:var(--bottom-band); background:var(--blue); color:#fff; display:flex; align-items:center; justify-content:center; padding:0 2mm; box-sizing:border-box;}\n  .back .footer-blue p { margin:0; font:800 2mm/1 Verdana,Arial,sans-serif; text-align:center;}\n`;
 
   // FRONT
   const buildFront = () => {
@@ -409,7 +598,9 @@ router.get('/:cardNumber/html', async (req, res) => {
   };
 
   let out = '';
-  if (side === 'front') out = buildFront();
+  if (designVariant === 'cr80') {
+    out = await buildCr80();
+  } else if (side === 'front') out = buildFront();
   else if (side === 'back') out = buildBack();
   else {
     // Combined preview page with both sides; add simple wrapper for spacing
