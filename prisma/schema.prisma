@@ -533,6 +533,8 @@ model IdCardSetting {
   frontLogoUrl               String?
   secondLogoUrl              String?
   hrciStampUrl               String?
+  // Optional watermark logo shown faintly on ID cards. Prefer PNG or WEBP formats.
+  watermarkLogoUrl           String?
   authorSignUrl              String?
   registerDetails            String? // plain text or small markdown
   frontFooterText            String?

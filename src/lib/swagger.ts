@@ -45,6 +45,7 @@ const swaggerDefinition = {
     { name: 'Media' },
     { name: 'Prompts' },
     { name: 'Engagement - Comments' },
+    { name: 'HRCI ID Cards', description: 'Public ID card JSON, HTML previews, QR and PDF generation' },
     { name: 'HRCI' },
     { name: 'HRCI Admin' },
     { name: 'HRCI_admin_reportes', description: 'HRCI admin analytics and finance reports (daily/weekly/monthly metrics)'} ,
@@ -67,7 +68,178 @@ const swaggerDefinition = {
       }
     },
     schemas: {
-      // ...existing code for schemas...
+      User: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          mobileNumber: { type: 'string' },
+          email: { type: 'string', nullable: true },
+          roleId: { type: 'string' },
+          languageId: { type: 'string' },
+          status: { type: 'string', enum: ['ACTIVE','BLOCKED','PENDING','DELETED'] },
+          createdAt: { type: 'string', format: 'date-time' }
+        }
+      },
+      UserProfile: {
+        type: 'object',
+        properties: {
+          userId: { type: 'string' },
+          fullName: { type: 'string' },
+          profilePhotoUrl: { type: 'string', nullable: true }
+        }
+      },
+      Membership: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          userId: { type: 'string' },
+          cellId: { type: 'string' },
+          designationId: { type: 'string' },
+          level: { type: 'string', enum: ['NATIONAL','ZONE','STATE','DISTRICT','MANDAL'] },
+          zone: { type: 'string', nullable: true },
+          hrcCountryId: { type: 'string', nullable: true },
+          hrcStateId: { type: 'string', nullable: true },
+          hrcDistrictId: { type: 'string', nullable: true },
+          hrcMandalId: { type: 'string', nullable: true },
+          status: { type: 'string', enum: ['PENDING_PAYMENT','PENDING_APPROVAL','ACTIVE','EXPIRED','REVOKED'] },
+          paymentStatus: { type: 'string', enum: ['PENDING','NOT_REQUIRED','SUCCESS','FAILED'] },
+          seatSequence: { type: 'integer' },
+          idCardStatus: { type: 'string', enum: ['NONE','GENERATED','REVOKED'], nullable: true },
+          expiresAt: { type: 'string', format: 'date-time', nullable: true },
+          createdAt: { type: 'string', format: 'date-time' }
+        }
+      },
+      IDCard: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          membershipId: { type: 'string' },
+          cardNumber: { type: 'string' },
+          fullName: { type: 'string' },
+          mobileNumber: { type: 'string' },
+          designationName: { type: 'string' },
+          cellName: { type: 'string' },
+          issuedAt: { type: 'string', format: 'date-time', nullable: true },
+          expiresAt: { type: 'string', format: 'date-time' },
+          status: { type: 'string', enum: ['GENERATED','REVOKED'] }
+        }
+      },
+      Discount: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          mobileNumber: { type: 'string' },
+          percentOff: { type: 'integer', minimum: 1, maximum: 100 },
+          currency: { type: 'string' },
+          maxRedemptions: { type: 'integer' },
+          status: { type: 'string', enum: ['ACTIVE','RESERVED','REDEEMED','CANCELLED'] },
+          activeFrom: { type: 'string', format: 'date-time', nullable: true },
+          activeTo: { type: 'string', format: 'date-time', nullable: true },
+          reason: { type: 'string', nullable: true },
+          createdByUserId: { type: 'string', nullable: true }
+        }
+      },
+      AvailabilityPricing: {
+        type: 'object',
+        properties: {
+          fee: { type: 'integer' },
+          paid: { type: 'integer' },
+          deltaDue: { type: 'integer' }
+        }
+      },
+      ReassignPreview: {
+        type: 'object',
+        properties: {
+          accepted: { type: 'boolean' },
+          membershipId: { type: 'string' },
+          to: {
+            type: 'object',
+            properties: {
+              cellId: { type: 'string' },
+              designationId: { type: 'string' },
+              level: { type: 'string' },
+              hrcStateId: { type: 'string', nullable: true },
+              hrcDistrictId: { type: 'string', nullable: true },
+              hrcMandalId: { type: 'string', nullable: true },
+              seatSequence: { type: 'integer' }
+            }
+          },
+          pricing: { $ref: '#/components/schemas/AvailabilityPricing' },
+          status: {
+            type: 'object',
+            properties: {
+              from: {
+                type: 'object',
+                properties: {
+                  status: { type: 'string' },
+                  paymentStatus: { type: 'string' }
+                }
+              },
+              to: {
+                type: 'object',
+                properties: {
+                  status: { type: 'string' },
+                  paymentStatus: { type: 'string' }
+                }
+              }
+            }
+          }
+        }
+      },
+      SuccessResponseMembership: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          data: { $ref: '#/components/schemas/Membership' }
+        }
+      },
+      SuccessResponseIDCard: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          data: { $ref: '#/components/schemas/IDCard' }
+        }
+      },
+      SuccessResponseDiscount: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          data: { $ref: '#/components/schemas/Discount' }
+        }
+      },
+      SuccessResponseDiscountList: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          count: { type: 'integer' },
+          nextCursor: { type: 'string', nullable: true },
+          data: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/Discount' }
+          }
+        }
+      },
+      SuccessResponseReassignPreview: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          data: { $ref: '#/components/schemas/ReassignPreview' }
+        }
+      },
+      SuccessResponseCreateMember: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          data: {
+            type: 'object',
+            properties: {
+              user: { $ref: '#/components/schemas/User' },
+              membership: { $ref: '#/components/schemas/Membership' },
+              card: { $ref: '#/components/schemas/IDCard' }
+            }
+          }
+        }
+      }
     }
   },
 

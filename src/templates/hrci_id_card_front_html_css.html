@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>HRCI ID Card Preview</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background: #f4f4f4;
+  }
+  .card {
+    width: 85.6mm;
+    height: 54mm;
+    background: #fff;
+    border-radius: 0mm; /* removed corner rounding */
+    box-shadow: 0 0 5px rgba(0,0,0,0.2);
+    overflow: hidden;
+    font-family: 'Poppins', sans-serif;
+    position: relative;
+  }
+  .strip-top {
+    background: #FE0002;
+    height: 6.35mm;
+    color: #fff;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 9pt;
+  }
+  .strip-blue {
+    background: #1D0DA1;
+    height: 6.35mm;
+    color: #fff;
+    display:flex;               /* center all three lines vertically */
+    align-items:center;         /* vertical centering */
+    justify-content:center;     /* horizontal centering */
+    text-align: center;
+    font-size: 4.5pt;
+    line-height: 1.05;          /* slight loosen for readability */
+    font-weight: 600;
+    text-transform: uppercase;
+    padding-top: 0.2mm;         /* tiny nudge downward */
+  }
+  .center {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    height: 36.7mm;
+    padding: 2mm;
+    position: relative;
+  }
+  .left {
+    width: 19mm;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+  }
+  .left img {
+    width: 13mm;
+    margin-bottom: 2mm;
+    display: block;
+  }
+  .middle {
+    flex: 1;
+    padding: 0 1mm;
+    font-size: 4.8pt;
+    line-height: 1.3;
+    box-sizing: border-box;
+  }
+  .jurisdiction {
+    font-weight: 700;
+    font-size: 8pt;
+    color: #000;
+    text-align: center;
+    margin-bottom: 0.4mm;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  .regd, .unique, .work-against, .identity {
+    display: block;
+    text-transform: uppercase;
+    white-space: nowrap;
+    text-align: center;
+    margin-bottom: 0.25mm;
+  }
+  .unique {
+    font-size: 5pt;
+    color: #000;
+    font-weight: 600;
+  }
+  .work-against {
+    color: #FE0002;
+    font-size: 4pt;
+    font-weight: 700;
+  }
+  .identity {
+    color: #FE0002;
+    font-size: 6pt;
+    font-weight: 700;
+  }
+  .member-info {
+    margin-top: 1mm;
+    font-size: 4.7pt; /* slightly bolder look */
+    text-align: left;
+    line-height: 1.5;
+    width: calc(100% - 20mm);
+  }
+  .member-info div {
+    display: grid;
+    grid-template-columns: 14mm 1.5mm auto;
+    align-items: center;
+  }
+  .member-info .label {
+    font-weight: 700; /* little bold */
+    text-align: left;
+  }
+  .member-info .colon {
+    text-align: center;
+  }
+  .member-info .value { text-align:left; white-space:nowrap; overflow:visible; text-overflow:unset; font-weight:600; text-transform:uppercase; }
+  /* make Valid Upto value red */
+  #validUpto.value { color:#FE0002; font-weight:700; }
+  .right {
+    width: 18mm;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    margin-right: 2mm;
+    margin-top: 4mm;
+    position: relative;
+  }
+  .member-photo {
+    width: 16.5mm;
+    height: 21mm;
+    border-radius: 3mm;
+    border: 1px solid #ccc;
+    object-fit: cover;
+  }
+  .sign-img {
+    position: absolute;
+    width: 11mm;
+    bottom: -10mm;
+    opacity: 0.9;
+  }
+  .signature-text {
+    font-weight: 700;
+    font-size: 5pt;
+    color: #000;
+    text-align: center;
+    position: absolute;
+    bottom: -9mm;
+    width: 100%;
+  }
+  .stamp {
+    position: absolute;
+    width: 9mm;
+    bottom: -3mm;
+    left: -3mm;
+    opacity: 0.9;
+  }
+  .strip-bottom {
+    background: #FE0002;
+    height: 4.6mm;
+    color: #fff;
+    font-size: 4.5pt;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+    position: absolute;
+    bottom: 0;
+    width: 100%;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="strip-top">Human Rights Council for India (HRCI)</div>
+  <div class="strip-blue">
+    REGISTERED BY NCT, NEW DELHI, GOVT OF INDIA<br>
+    REGISTERED NO: 4396/2022 (UNDER TRUST ACT 1882)<br>
+    TO PROTECT & PROMOTE THE HUMAN RIGHTS
+  </div>
+  <div class="center">
+    <div class="left">
+      <img id="frontLogo" src="about:blank" alt="Logo">
+      <img id="qrFront" src="about:blank" alt="QR Code">
+    </div>
+    <div class="middle">
+      <span class="jurisdiction">ALL INDIA JURISDICTION</span>
+      <span class="regd">REGD BY GOVT OF NITI AAYOG</span>
+      <span class="unique">UNIQUE ID: AP/2022/0324217, AP/2022/0326782</span>
+      <span class="work-against">WORKS AGAINST CRIME, VIOLENCE AND CORRUPTION</span>
+      <span class="identity">IDENTITY CARD</span>
+      <div class="member-info">
+        <div><span class="label">Name</span><span class="colon">:</span><span id="fullName" class="value">-</span></div>
+        <div><span class="label">Designation</span><span class="colon">:</span><span id="designationName" class="value">-</span></div>
+        <div><span class="label">Cell</span><span class="colon">:</span><span id="cellName" class="value">-</span></div>
+        <div><span class="label">Work Place</span><span class="colon">:</span><span id="workPlace" class="value">-</span></div>
+        <div><span class="label">ID No</span><span class="colon">:</span><span id="cardNumber" class="value">-</span></div>
+        <div><span class="label">Contact No</span><span class="colon">:</span><span id="mobileNumber" class="value">-</span></div>
+        <div><span class="label">Valid Upto</span><span class="colon">:</span><span id="validUpto" class="value">-</span></div>
+      </div>
+    </div>
+    <div class="right">
+      <img id="photoUrl" class="member-photo" src="about:blank" alt="Member Photo">
+      <img id="authorSignUrl" class="sign-img" src="about:blank" alt="Authorized Signature">
+      <div class="signature-text">Signature Auth.</div>
+      <img id="hrciStampUrl" class="stamp" src="about:blank" alt="HRCI Stamp">
+    </div>
+  </div>
+  <div class="strip-bottom">We take help 24x7 From (Police, CBI, Vigilance, NIA) & other Govt. Dept. Against Crime & Corruption.</div>
+</div>
+</body>
+</html>

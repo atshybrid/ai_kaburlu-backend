@@ -75,6 +75,277 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
 
 /**
  * @swagger
+ * /memberships/admin/create-member:
+ *   post:
+ *     tags: [HRCI Membership - Admin APIs]
+ *     summary: Create a member directly (admin)
+ *     description: |
+ *       Creates a User (+Profile if needed) and a Membership seat directly by HRCI Admin.
+ *       - Validates seat capacity (designation and optional level aggregate)
+ *       - Defaults to skipping payment (paymentStatus NOT_REQUIRED)
+ *       - Optionally activates membership and issues ID card immediately when a profile photo exists
+ *       - Admin override: if designation has a fee, activation still marks paymentStatus NOT_REQUIRED.
+ *
+ *       Typical flows:
+ *       1. Quick activation (free or admin-waived fee): send activate=true, issueCard=true with profilePhotoUrl
+ *       2. Prepare pending payment: send activate=false to leave status PENDING_PAYMENT (when fee>0)
+ *
+ *       Capacity logic: designation remaining seats and (if configured) level aggregate capacity are both enforced.
+ *
+ *       Auth tip: Use Authorization header as: Bearer <JWT> (no quotes around the token).
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [fullName, mobileNumber, cell, level]
+ *             properties:
+ *               fullName: { type: string }
+ *               mobileNumber: { type: string }
+*               email: { type: string, nullable: true, description: "Optional. Empty string treated as null." }
+*               profilePhotoUrl: { type: string, nullable: true, description: "Optional. Empty string treated as null." }
+ *               cell: { type: string, description: "Cell id or code or name" }
+ *               designationCode: { type: string, nullable: true }
+ *               designationId: { type: string, nullable: true }
+ *               level: { type: string, enum: [NATIONAL, ZONE, STATE, DISTRICT, MANDAL] }
+ *               zone: { type: string, nullable: true }
+ *               hrcCountryId: { type: string, nullable: true }
+ *               hrcStateId: { type: string, nullable: true }
+ *               hrcDistrictId: { type: string, nullable: true }
+ *               hrcMandalId: { type: string, nullable: true }
+ *               activate: { type: boolean, default: true, description: "If true, set status ACTIVE (when fee=0)." }
+*               issueCard: { type: boolean, default: false, description: "If true AND status ACTIVE AND has photo, issue ID card. Default false." }
+ *               expiresAt: { type: string, format: date-time, nullable: true }
+ *           examples:
+ *             NATIONAL:
+ *               summary: National level seat
+ *               value:
+ *                 fullName: "RAJ KUMAR"
+ *                 mobileNumber: "9990001112"
+ *                 cell: "CELL-HRCI-CORE"
+ *                 designationCode: "NAT_HEAD"
+ *                 level: "NATIONAL"
+ *                 hrcCountryId: "hrc_country_in"
+ *                 activate: true
+ *             ZONE:
+ *               summary: Zone level seat
+ *               value:
+ *                 fullName: "MEENA PATEL"
+ *                 mobileNumber: "9990001113"
+ *                 cell: "CELL-HRCI-01"
+ *                 designationCode: "ZONE_COORD"
+ *                 level: "ZONE"
+ *                 hrcCountryId: "hrc_country_in"
+ *                 zone: "SOUTH"
+ *                 activate: true
+ *             STATE:
+ *               summary: State level seat
+ *               value:
+ *                 fullName: "JANE DOE"
+ *                 mobileNumber: "9876543210"
+ *                 cell: "CELL-HRCI-01"
+ *                 designationCode: "STATE_HEAD"
+ *                 level: "STATE"
+ *                 hrcStateId: "hrc_state_ap"
+ *                 activate: true
+ *             DISTRICT:
+ *               summary: District level seat
+ *               value:
+ *                 fullName: "ARUN GUPTA"
+ *                 mobileNumber: "9990001114"
+ *                 cell: "CELL-HRCI-01"
+ *                 designationCode: "DISTRICT_HEAD"
+ *                 level: "DISTRICT"
+ *                 hrcDistrictId: "hrc_dist_guntur"
+ *                 activate: true
+ *             MANDAL:
+ *               summary: Mandal level seat
+ *               value:
+ *                 fullName: "SITA RAM"
+ *                 mobileNumber: "9990001115"
+ *                 cell: "CELL-HRCI-01"
+ *                 designationCode: "MANDAL_LEAD"
+ *                 level: "MANDAL"
+ *                 hrcMandalId: "hrc_mandal_guntur_01"
+ *                 activate: true
+ *     responses:
+ *       200:
+ *         description: Created member and membership (and card if issued)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponseCreateMember'
+ *       400:
+ *         description: Missing or invalid parameters
+ *       404:
+ *         description: Cell or designation not found
+ *       409:
+ *         description: Capacity exhausted
+ *       500:
+ *         description: Internal error
+ */
+router.post('/create-member', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const {
+      fullName,
+      mobileNumber,
+      email,
+      profilePhotoUrl,
+      cell,
+      designationCode,
+      designationId,
+      level,
+      zone,
+      hrcCountryId,
+      hrcStateId,
+      hrcDistrictId,
+      hrcMandalId,
+      activate = true,
+      issueCard = false,
+      expiresAt
+    } = req.body || {};
+
+    if (!fullName || !mobileNumber || !cell || !level) {
+      return res.status(400).json({ success: false, error: 'MISSING_PARAMS', message: 'fullName, mobileNumber, cell, level are required' });
+    }
+    if (!designationCode && !designationId) {
+      return res.status(400).json({ success: false, error: 'DESIGNATION_REQUIRED' });
+    }
+    const lvl = String(level).toUpperCase();
+    if (!['NATIONAL','ZONE','STATE','DISTRICT','MANDAL'].includes(lvl)) {
+      return res.status(400).json({ success: false, error: 'INVALID_LEVEL' });
+    }
+  if (lvl === 'NATIONAL' && !hrcCountryId) return res.status(400).json({ success: false, error: 'HRC_COUNTRY_ID_REQUIRED' });
+  if (lvl === 'ZONE' && !zone) return res.status(400).json({ success: false, error: 'ZONE_REQUIRED' });
+  if (lvl === 'ZONE' && !hrcCountryId) return res.status(400).json({ success: false, error: 'HRC_COUNTRY_ID_REQUIRED' });
+    if (lvl === 'STATE' && !hrcStateId) return res.status(400).json({ success: false, error: 'HRC_STATE_ID_REQUIRED' });
+    if (lvl === 'DISTRICT' && !hrcDistrictId) return res.status(400).json({ success: false, error: 'HRC_DISTRICT_ID_REQUIRED' });
+    if (lvl === 'MANDAL' && !hrcMandalId) return res.status(400).json({ success: false, error: 'HRC_MANDAL_ID_REQUIRED' });
+
+    // Resolve references
+    const cellRow = await prisma.cell.findFirst({ where: { OR: [ { id: String(cell) }, { code: String(cell) }, { name: String(cell) } ] } });
+    if (!cellRow) return res.status(404).json({ success: false, error: 'CELL_NOT_FOUND' });
+    const desigRow = designationId
+      ? await prisma.designation.findUnique({ where: { id: String(designationId) } })
+      : await prisma.designation.findFirst({ where: { OR: [ { code: String(designationCode) }, { id: String(designationCode) } ] } });
+    if (!desigRow) return res.status(404).json({ success: false, error: 'DESIGNATION_NOT_FOUND' });
+
+    // Capacity + pricing via service
+    const availability = await (membershipService as any).getAvailability({
+      cellCodeOrName: cellRow.id,
+      designationCode: desigRow.id,
+      level: lvl,
+      zone: lvl === 'ZONE' ? (zone || undefined) : undefined,
+      hrcCountryId: (lvl === 'NATIONAL' || lvl === 'ZONE') ? (hrcCountryId || undefined) : undefined,
+      hrcStateId: lvl === 'STATE' ? (hrcStateId || undefined) : undefined,
+      hrcDistrictId: lvl === 'DISTRICT' ? (hrcDistrictId || undefined) : undefined,
+      hrcMandalId: lvl === 'MANDAL' ? (hrcMandalId || undefined) : undefined,
+    });
+    if (!availability?.designation || availability.designation.remaining <= 0) {
+      return res.status(409).json({ success: false, error: 'NO_SEATS_DESIGNATION' });
+    }
+    if (availability.levelAggregate && availability.levelAggregate.remaining <= 0) {
+      return res.status(409).json({ success: false, error: 'NO_SEATS_LEVEL_AGGREGATE' });
+    }
+
+    // Find or create user (default MEMBER role, English language)
+    const memberRole = await prisma.role.findUnique({ where: { name: 'MEMBER' } });
+    const langEn = await prisma.language.findUnique({ where: { code: 'en' } });
+    if (!memberRole || !langEn) return res.status(500).json({ success: false, error: 'MISSING_CORE_REFERENCES' });
+    // Normalize optional strings: treat empty strings as null
+    const normEmail = (typeof email === 'string' && email.trim() !== '') ? String(email) : null;
+    const normProfilePhotoUrl = (typeof profilePhotoUrl === 'string' && profilePhotoUrl.trim() !== '') ? String(profilePhotoUrl) : null;
+    let user = await prisma.user.findUnique({ where: { mobileNumber: String(mobileNumber) } });
+    if (!user) {
+      user = await prisma.user.create({ data: { mobileNumber: String(mobileNumber), email: normEmail, roleId: memberRole.id, languageId: langEn.id, status: 'ACTIVE' } });
+    } else {
+      // Ensure role is at least MEMBER (do not downgrade HRCI_ADMIN etc.)
+      // No-op if user exists with any role
+    }
+    // Ensure profile exists / updated
+    try {
+      const existingProfile = await prisma.userProfile.findUnique({ where: { userId: user.id } });
+      if (existingProfile) {
+        await prisma.userProfile.update({ where: { userId: user.id }, data: { fullName: String(fullName), profilePhotoUrl: (normProfilePhotoUrl !== null ? normProfilePhotoUrl : existingProfile.profilePhotoUrl) } });
+      } else {
+        await prisma.userProfile.create({ data: { userId: user.id, fullName: String(fullName), profilePhotoUrl: normProfilePhotoUrl } });
+      }
+    } catch {}
+
+    // Create membership (skip payment by default)
+    const requiresPayment = (availability.designation.fee || 0) > 0;
+    // For admin direct create, default to NOT_REQUIRED and PENDING_APPROVAL unless activate=true
+    let status: any = (activate ? 'ACTIVE' : (requiresPayment ? 'PENDING_PAYMENT' : 'PENDING_APPROVAL'));
+    let paymentStatus: any = (requiresPayment ? 'PENDING' : 'NOT_REQUIRED');
+    // If activating but fee > 0, we still mark payment NOT_REQUIRED (admin override)
+    if (activate) paymentStatus = 'NOT_REQUIRED';
+
+    const membership = await prisma.membership.create({
+      data: {
+        userId: user.id,
+        cellId: cellRow.id,
+        designationId: desigRow.id,
+  level: lvl as any,
+  zone: lvl === 'ZONE' ? (zone || null) : null,
+  hrcCountryId: (lvl === 'NATIONAL' || lvl === 'ZONE') ? (hrcCountryId || null) : null,
+        hrcStateId: lvl === 'STATE' ? (hrcStateId || null) : null,
+        hrcDistrictId: lvl === 'DISTRICT' ? (hrcDistrictId || null) : null,
+        hrcMandalId: lvl === 'MANDAL' ? (hrcMandalId || null) : null,
+        status,
+        paymentStatus,
+        seatSequence: ((availability.designation.capacity - availability.designation.remaining) + 1),
+        lockedAt: new Date(),
+        activatedAt: status === 'ACTIVE' ? new Date() : null
+      }
+    });
+
+    // Compute expiry: from input or from validityDays
+    let cardExpiresAt: Date | null = null;
+    try {
+      if (expiresAt) {
+        cardExpiresAt = new Date(expiresAt);
+      } else if (availability?.designation?.validityDays) {
+        cardExpiresAt = new Date(Date.now() + Number(availability.designation.validityDays) * 24 * 60 * 60 * 1000);
+      }
+    } catch {}
+
+    // Issue card when requested and ACTIVE and has photo
+    let card: any = null;
+    if (issueCard && status === 'ACTIVE') {
+      const prof = await prisma.userProfile.findUnique({ where: { userId: user.id } });
+      const hasPhoto = !!(prof?.profilePhotoUrl || prof?.profilePhotoMediaId);
+      if (!hasPhoto) {
+        // Create membership but warn about photo
+      } else {
+        const cardNumber = await generateNextIdCardNumber(prisma as any);
+        const expires = cardExpiresAt || new Date(Date.now() + 730 * 24 * 60 * 60 * 1000);
+        card = await prisma.iDCard.create({
+          data: {
+            membershipId: membership.id,
+            cardNumber,
+            expiresAt: expires,
+            status: 'GENERATED' as any,
+            fullName: String(fullName),
+            mobileNumber: String(mobileNumber),
+            designationName: desigRow.name,
+            cellName: cellRow.name,
+          } as any
+        });
+        try { await prisma.membership.update({ where: { id: membership.id }, data: { idCardStatus: 'GENERATED' as any } }); } catch {}
+      }
+    }
+
+    return res.json({ success: true, data: { user, membership, card } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'CREATE_MEMBER_FAILED', message: e?.message || 'Unknown error' });
+  }
+});
+
+/**
+ * @swagger
  * /memberships/admin/{id}/assign:
  *   put:
  *     tags: [HRCI Membership - Admin APIs]
@@ -84,6 +355,14 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
  *       - Validates designation capacity and optional cell-level aggregate capacity.
  *       - Computes new fee using DesignationPrice overrides and adjusts payment status accordingly.
  *       - If dryRun=true, returns the computed outcome without persisting changes.
+ *
+ *       Payment impact rules:
+ *       - If new fee > amount already paid, membership becomes PENDING_PAYMENT and a payment record is created (deltaDue).
+ *       - If new fee <= paid, paymentStatus becomes SUCCESS or NOT_REQUIRED (depending on whether any amount was paid).
+ *
+ *       Example (dry run):
+ *       Request: { "cell": "CELL-NAT-01", "designationCode": "STATE_HEAD", "level": "STATE", "hrcStateId": "hrc_state_tg", "dryRun": true }
+ *       Response preview.pricing.deltaDue shows additional amount required.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -109,23 +388,40 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
  *               hrcDistrictId: { type: string, nullable: true }
  *               hrcMandalId: { type: string, nullable: true }
  *               dryRun: { type: boolean, default: false }
- *     responses:
- *       200: { description: Reassignment result }
+ *           example:
+ *             cell: "CELL-HRCI-01"
+ *             designationCode: "DISTRICT_HEAD"
+ *             level: "DISTRICT"
+ *             hrcDistrictId: "hrc_dist_guntur"
+ *             dryRun: true
+  *     responses:
+    *       200:
+    *         description: Reassignment result
+    *         content:
+    *           application/json:
+    *             schema:
+    *               $ref: '#/components/schemas/SuccessResponseReassignPreview'
+ *       400: { description: Validation error }
+ *       404: { description: Membership / cell / designation not found }
+ *       409: { description: Capacity exhausted }
+ *       500: { description: Internal error }
  */
 router.put('/:id/assign', requireAuth, requireHrcAdmin, async (req, res) => {
   try {
     const membershipId = String(req.params.id);
     const { cell, designationCode, designationId, level, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId, dryRun } = req.body || {};
-    if (!cell) return res.status(400).json({ success: false, error: 'CELL_REQUIRED' });
-    if (!level) return res.status(400).json({ success: false, error: 'LEVEL_REQUIRED' });
+  if (!cell) return res.status(400).json({ success: false, error: 'CELL_REQUIRED' });
+  if (!level) return res.status(400).json({ success: false, error: 'LEVEL_REQUIRED' });
     if (!designationCode && !designationId) return res.status(400).json({ success: false, error: 'DESIGNATION_REQUIRED' });
 
     // Level-specific mandatory fields
     const lvl = String(level);
-    if (lvl === 'ZONE' && !zone) return res.status(400).json({ success: false, error: 'ZONE_REQUIRED' });
-    if (lvl === 'STATE' && !hrcStateId) return res.status(400).json({ success: false, error: 'HRC_STATE_ID_REQUIRED' });
-    if (lvl === 'DISTRICT' && !hrcDistrictId) return res.status(400).json({ success: false, error: 'HRC_DISTRICT_ID_REQUIRED' });
-    if (lvl === 'MANDAL' && !hrcMandalId) return res.status(400).json({ success: false, error: 'HRC_MANDAL_ID_REQUIRED' });
+  if (lvl === 'NATIONAL' && !hrcCountryId) return res.status(400).json({ success: false, error: 'HRC_COUNTRY_ID_REQUIRED' });
+  if (lvl === 'ZONE' && !zone) return res.status(400).json({ success: false, error: 'ZONE_REQUIRED' });
+  if (lvl === 'ZONE' && !hrcCountryId) return res.status(400).json({ success: false, error: 'HRC_COUNTRY_ID_REQUIRED' });
+  if (lvl === 'STATE' && !hrcStateId) return res.status(400).json({ success: false, error: 'HRC_STATE_ID_REQUIRED' });
+  if (lvl === 'DISTRICT' && !hrcDistrictId) return res.status(400).json({ success: false, error: 'HRC_DISTRICT_ID_REQUIRED' });
+  if (lvl === 'MANDAL' && !hrcMandalId) return res.status(400).json({ success: false, error: 'HRC_MANDAL_ID_REQUIRED' });
 
   const outcome = await prisma.$transaction(async (tx) => {
       const m = await tx.membership.findUnique({ where: { id: membershipId }, include: { payments: true } });
@@ -146,8 +442,8 @@ router.put('/:id/assign', requireAuth, requireHrcAdmin, async (req, res) => {
         status: { in: ['PENDING_PAYMENT','PENDING_APPROVAL','ACTIVE'] },
         NOT: { id: m.id },
       };
-      if (lvl === 'ZONE') whereBase.zone = zone || null;
-      if (lvl === 'NATIONAL') whereBase.hrcCountryId = hrcCountryId || null;
+  if (lvl === 'ZONE') { whereBase.zone = zone || null; whereBase.hrcCountryId = hrcCountryId || null; }
+  if (lvl === 'NATIONAL') whereBase.hrcCountryId = hrcCountryId || null;
       if (lvl === 'STATE') whereBase.hrcStateId = hrcStateId || null;
       if (lvl === 'DISTRICT') whereBase.hrcDistrictId = hrcDistrictId || null;
       if (lvl === 'MANDAL') whereBase.hrcMandalId = hrcMandalId || null;
@@ -175,8 +471,8 @@ router.put('/:id/assign', requireAuth, requireHrcAdmin, async (req, res) => {
           status: { in: ['PENDING_PAYMENT','PENDING_APPROVAL','ACTIVE'] },
           NOT: { id: m.id },
         };
-        if (lvl === 'ZONE') aggWhere.zone = zone || null;
-        if (lvl === 'NATIONAL') aggWhere.hrcCountryId = hrcCountryId || null;
+  if (lvl === 'ZONE') { aggWhere.zone = zone || null; aggWhere.hrcCountryId = hrcCountryId || null; }
+  if (lvl === 'NATIONAL') aggWhere.hrcCountryId = hrcCountryId || null;
         if (lvl === 'STATE') aggWhere.hrcStateId = hrcStateId || null;
         if (lvl === 'DISTRICT') aggWhere.hrcDistrictId = hrcDistrictId || null;
         if (lvl === 'MANDAL') aggWhere.hrcMandalId = hrcMandalId || null;
@@ -195,8 +491,8 @@ router.put('/:id/assign', requireAuth, requireHrcAdmin, async (req, res) => {
         cellCodeOrName: cellRow.id,
         designationCode: desigRow.id,
         level: lvl,
-        zone,
-        hrcCountryId,
+          zone,
+          hrcCountryId,
         hrcStateId,
         hrcDistrictId,
         hrcMandalId,
@@ -230,7 +526,7 @@ router.put('/:id/assign', requireAuth, requireHrcAdmin, async (req, res) => {
           designationId: desigRow.id,
           level: lvl,
           zone: lvl === 'ZONE' ? (zone || null) : null,
-          hrcCountryId: lvl === 'NATIONAL' ? (hrcCountryId || null) : null,
+          hrcCountryId: (lvl === 'NATIONAL' || lvl === 'ZONE') ? (hrcCountryId || null) : null,
           hrcStateId: lvl === 'STATE' ? (hrcStateId || null) : null,
           hrcDistrictId: lvl === 'DISTRICT' ? (hrcDistrictId || null) : null,
           hrcMandalId: lvl === 'MANDAL' ? (hrcMandalId || null) : null,
@@ -294,8 +590,14 @@ router.put('/:id/assign', requireAuth, requireHrcAdmin, async (req, res) => {
  *         required: true
  *         schema: { type: string }
  *     responses:
- *       200: { description: Membership details }
+ *       200:
+ *         description: Membership details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponseMembership'
  *       404: { description: Not found }
+ *       500: { description: Internal error }
  */
 // Important: avoid matching '/discounts' as ':id' to ensure HRCI discount routes work
 router.get('/:id', (req, res, next) => {
@@ -339,8 +641,20 @@ router.get('/:id', (req, res, next) => {
  *                 format: date-time
  *               note:
  *                 type: string
+ *           example:
+ *             status: "ACTIVE"
+ *             expiresAt: "2027-11-10T18:30:00.000Z"
+ *             note: "Activated by HRCI admin"
  *     responses:
- *       200: { description: Status updated }
+ *       200:
+ *         description: Status updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponseMembership'
+ *       400: { description: Validation error }
+ *       404: { description: Membership not found }
+ *       500: { description: Internal error }
  */
 router.put('/:id/status', (req, res, next) => {
   if (req.params.id === 'discounts') return next('route');
@@ -388,7 +702,7 @@ router.put('/:id/status', (req, res, next) => {
  * /memberships/admin/{id}/idcard:
  *   post:
  *     tags: [HRCI Membership - Admin APIs]
- *     summary: Reissue ID card (admin)
+ *     summary: Issue/Reissue ID card (admin or member-owner)
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -397,20 +711,41 @@ router.put('/:id/status', (req, res, next) => {
  *         required: true
  *         schema: { type: string }
  *     responses:
- *       200: { description: Card issued }
+ *       200:
+ *         description: Card issued
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponseIDCard'
+ *       400: { description: Profile photo missing }
+ *       403: { description: Forbidden – only HRCI admin or membership owner can reissue }
+ *       404: { description: Membership not found }
+ *       500: { description: Internal error }
+ *     description: |
+ *       - Allowed roles: HRCI_ADMIN, SUPERADMIN/SUPER_ADMIN, or the membership owner (MEMBER).
+ *       - Reissue behavior: If a card already exists, the cardNumber is NOT changed; only details (fullName, mobileNumber, designationName, cellName), issuedAt and expiresAt are updated.
+ *       - First issue: If no card exists yet, a new cardNumber is generated.
  */
-router.post('/:id/idcard', requireAuth, requireHrcAdmin, async (req, res) => {
+router.post('/:id/idcard', requireAuth, async (req, res) => {
   try {
+    const requester: any = (req as any).user;
     const membership = await prisma.membership.findUnique({ where: { id: req.params.id }, include: { designation: true, cell: true } });
     if (!membership) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+
+    // Authorization: allow HRCI_ADMIN/SUPERADMIN or the membership owner (MEMBER)
+    const roleName = requester?.role?.name?.toString()?.toLowerCase();
+    const isHrcAdmin = roleName === 'hrci_admin' || roleName === 'superadmin' || roleName === 'super_admin';
+    const isOwner = requester?.id && requester.id === membership.userId;
+    if (!isHrcAdmin && !isOwner) {
+      return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Only HRCI admin or the membership owner can (re)issue the card.' });
+    }
     // Enforce profile photo requirement
     const user = await prisma.user.findUnique({ where: { id: membership.userId }, include: { profile: true } });
     const hasPhoto = !!(user?.profile?.profilePhotoUrl || user?.profile?.profilePhotoMediaId);
     if (!user?.profile || !hasPhoto) return res.status(400).json({ success: false, error: 'PROFILE_PHOTO_REQUIRED' });
 
     // Compute new card details
-    const cardNumber = await generateNextIdCardNumber(prisma as any);
-  // Resolve validityDays using overrides when available
+    // Resolve validityDays using overrides when available
   let validityDays = Number((membership as any).designation?.validityDays || 730);
     try {
       const avail = await (membershipService as any).getAvailability({
@@ -425,7 +760,7 @@ router.post('/:id/idcard', requireAuth, requireHrcAdmin, async (req, res) => {
       });
       validityDays = Number(avail?.designation?.validityDays ?? validityDays);
     } catch {}
-    const expiresAt = new Date(Date.now() + (validityDays * 24 * 60 * 60 * 1000));
+  const expiresAt = new Date(Date.now() + (validityDays * 24 * 60 * 60 * 1000));
     const fullName = (user as any).profile?.fullName || undefined;
     const mobileNumber = (user as any).mobileNumber || undefined;
     const designationName = (membership as any).designation?.name || undefined;
@@ -435,10 +770,10 @@ router.post('/:id/idcard', requireAuth, requireHrcAdmin, async (req, res) => {
     const existing = await prisma.iDCard.findUnique({ where: { membershipId: membership.id } }).catch(() => null);
     let card;
     if (existing) {
+      // Reissue should NOT change the card number; only update details and timestamps
       card = await prisma.iDCard.update({
         where: { id: existing.id },
         data: {
-          cardNumber,
           issuedAt: new Date(),
           expiresAt,
           status: 'GENERATED' as any,
@@ -449,6 +784,7 @@ router.post('/:id/idcard', requireAuth, requireHrcAdmin, async (req, res) => {
         } as any
       });
     } else {
+      const cardNumber = await generateNextIdCardNumber(prisma as any);
       card = await prisma.iDCard.create({
         data: {
           membershipId: membership.id,
@@ -513,7 +849,13 @@ function withinWindow(d: any): boolean {
  *         name: cursor
  *         schema: { type: string }
  *     responses:
- *       200: { description: Discounts list }
+ *       200:
+ *         description: Discounts list
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponseDiscountList'
+ *       500: { description: Internal error }
  */
 // Keep all /discounts routes defined before generic /:id routes
 router.get('/discounts', requireAuth, requireHrcAdmin, async (req, res) => {
@@ -564,8 +906,23 @@ router.get('/discounts', requireAuth, requireHrcAdmin, async (req, res) => {
  *               activeTo: { type: string, format: date-time, nullable: true }
  *               status: { type: string, default: 'ACTIVE' }
  *               reason: { type: string, nullable: true }
+ *           example:
+ *             mobileNumber: "9876543210"
+ *             percentOff: 50
+ *             currency: "INR"
+ *             maxRedemptions: 1
+ *             status: "ACTIVE"
+ *             reason: "Manual concession by HRCI admin"
  *     responses:
- *       200: { description: Created }
+ *       200:
+ *         description: Created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponseDiscount'
+ *       400: { description: Validation error }
+ *       409: { description: Mobile already has active discount }
+ *       500: { description: Internal error }
  */
 router.post('/discounts', requireAuth, requireHrcAdmin, async (req, res) => {
   try {
@@ -624,8 +981,14 @@ router.post('/discounts', requireAuth, requireHrcAdmin, async (req, res) => {
  *         required: true
  *         schema: { type: string }
  *     responses:
- *       200: { description: Discount }
+ *       200:
+ *         description: Discount
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponseDiscount'
  *       404: { description: Not found }
+ *       500: { description: Internal error }
  */
 router.get('/discounts/:id', requireAuth, requireHrcAdmin, async (req, res) => {
   try {
@@ -666,7 +1029,16 @@ router.get('/discounts/:id', requireAuth, requireHrcAdmin, async (req, res) => {
  *               status: { type: string }
  *               reason: { type: string, nullable: true }
  *     responses:
- *       200: { description: Updated }
+ *       200:
+ *         description: Updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponseDiscount'
+ *       400: { description: Validation error }
+ *       404: { description: Not found }
+ *       409: { description: Mobile already has active discount }
+ *       500: { description: Internal error }
  */
 router.put('/discounts/:id', requireAuth, requireHrcAdmin, async (req, res) => {
   try {
@@ -714,7 +1086,15 @@ router.put('/discounts/:id', requireAuth, requireHrcAdmin, async (req, res) => {
  *         required: true
  *         schema: { type: string }
  *     responses:
- *       200: { description: Cancelled }
+ *       200:
+ *         description: Cancelled
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponseDiscount'
+ *       404: { description: Not found }
+ *       400: { description: Already redeemed }
+ *       500: { description: Internal error }
  */
 router.post('/discounts/:id/cancel', requireAuth, requireHrcAdmin, async (req, res) => {
   try {
@@ -754,8 +1134,32 @@ router.post('/discounts/:id/cancel', requireAuth, requireHrcAdmin, async (req, r
  *               hrcStateId: { type: string, nullable: true }
  *               hrcDistrictId: { type: string, nullable: true }
  *               hrcMandalId: { type: string, nullable: true }
+  *           example:
+  *             cell: "CELL-HRCI-01"
+  *             designationCode: "STATE_HEAD"
+  *             level: "STATE"
+  *             mobileNumber: "9876543210"
+  *             hrcStateId: "hrc_state_ap"
  *     responses:
- *       200: { description: Breakdown }
+ *       200:
+ *         description: Breakdown
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     baseAmount: { type: integer }
+ *                     discountAmount: { type: integer }
+ *                     discountPercent: { type: integer, nullable: true }
+ *                     appliedType: { type: string, nullable: true }
+ *                     finalAmount: { type: integer }
+ *                     note: { type: string, nullable: true }
+ *       400: { description: Validation error }
+ *       500: { description: Internal error }
  */
 router.post('/discounts/preview', requireAuth, requireHrcAdmin, async (req, res) => {
   try {

@@ -42,6 +42,7 @@ const IMAGE_MIMES = new Set<string>([
   'image/png',
   'image/webp',
   'image/gif',
+  'image/svg+xml',
 ]);
 
 const VIDEO_MIMES = new Set<string>([
@@ -77,6 +78,7 @@ function mimeToExt(mime: string, fallbackExt: string): string {
     case 'image/png': return 'png';
     case 'image/webp': return 'webp';
     case 'image/gif': return 'gif';
+    case 'image/svg+xml': return 'svg';
     case 'video/mp4': return 'mp4';
     case 'video/quicktime': return 'mov';
     case 'video/x-matroska': return 'mkv';
@@ -219,8 +221,11 @@ router.post('/upload', passport.authenticate('jwt', { session: false }), upload.
     let targetExt = detectedExt;
     let targetContentType = file.mimetype || 'application/octet-stream';
     if (isImage) {
-      // Convert all images to WebP except PNG stays PNG
-      if (file.mimetype === 'image/png') {
+      // For raster images, convert to WebP except PNG stays PNG. For SVG, keep as-is.
+      if (file.mimetype === 'image/svg+xml') {
+        targetExt = 'svg';
+        targetContentType = 'image/svg+xml';
+      } else if (file.mimetype === 'image/png') {
         targetExt = 'png';
         targetContentType = 'image/png';
       } else {
@@ -256,13 +261,18 @@ router.post('/upload', passport.authenticate('jwt', { session: false }), upload.
 
     if (isImage) {
       try {
-        // Convert to WebP by default (except PNG stays PNG); rotate to respect EXIF
-        const img = sharp(file.buffer).rotate();
-        if (targetContentType === 'image/png') {
-          uploadBuffer = await img.png({ compressionLevel: 9 }).toBuffer();
+        if (file.mimetype === 'image/svg+xml') {
+          // No conversion for SVG; keep original buffer
+          uploadBuffer = file.buffer;
         } else {
-          // target is webp
-          uploadBuffer = await img.webp({ quality: 85 }).toBuffer();
+          // Convert raster images to WebP (or keep PNG); rotate to respect EXIF
+          const img = sharp(file.buffer).rotate();
+          if (targetContentType === 'image/png') {
+            uploadBuffer = await img.png({ compressionLevel: 9 }).toBuffer();
+          } else {
+            // target is webp
+            uploadBuffer = await img.webp({ quality: 85 }).toBuffer();
+          }
         }
         // Enforce final size limit for images
         if (uploadBuffer.length > MAX_IMAGE_BYTES) {
