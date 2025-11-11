@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: ai-kaburlu-backend
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    env:
+      - key: NODE_ENV
+        value: production
+      - key: PUPPETEER_CACHE_DIR
+        value: /opt/render/.cache/puppeteer
+      - key: GOOGLE_CHROME_BIN
+        value: /usr/bin/google-chrome-stable
+    autoDeploy: false

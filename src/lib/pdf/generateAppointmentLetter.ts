@@ -150,8 +150,40 @@ export async function generateAppointmentLetterPdf(org: OrgPublic, data: Appoint
   const execPath =
     (process.env.PUPPETEER_EXECUTABLE_PATH && String(process.env.PUPPETEER_EXECUTABLE_PATH)) ||
     (process.env.GOOGLE_CHROME_BIN && String(process.env.GOOGLE_CHROME_BIN)) ||
-    undefined;
-  const browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'], executablePath: execPath });
+    (() => {
+      // Try common Chrome paths in Linux containers
+      if (process.platform === 'linux') {
+        const paths = [
+          '/usr/bin/google-chrome-stable',
+          '/usr/bin/google-chrome',
+          '/usr/bin/chromium-browser',
+          '/usr/bin/chromium'
+        ];
+        
+        for (const path of paths) {
+          try {
+            require('fs').accessSync(path, require('fs').constants.F_OK);
+            return path;
+          } catch (e) {
+            // Continue to next path
+          }
+        }
+      }
+      return undefined;
+    })();
+    
+  const browser = await puppeteer.launch({
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--disable-extensions',
+      '--no-first-run',
+      '--disable-default-apps'
+    ],
+    ...(execPath && { executablePath: execPath })
+  });
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: ['networkidle0'] });
   await page.emulateMediaType('print');
@@ -253,8 +285,40 @@ export async function generateAppointmentLetterPdfHtmlBg(org: OrgPublic, data: A
   const execPath =
     (process.env.PUPPETEER_EXECUTABLE_PATH && String(process.env.PUPPETEER_EXECUTABLE_PATH)) ||
     (process.env.GOOGLE_CHROME_BIN && String(process.env.GOOGLE_CHROME_BIN)) ||
-    undefined;
-  const browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'], executablePath: execPath });
+    (() => {
+      // Try common Chrome paths in Linux containers
+      if (process.platform === 'linux') {
+        const paths = [
+          '/usr/bin/google-chrome-stable',
+          '/usr/bin/google-chrome',
+          '/usr/bin/chromium-browser',
+          '/usr/bin/chromium'
+        ];
+        
+        for (const path of paths) {
+          try {
+            require('fs').accessSync(path, require('fs').constants.F_OK);
+            return path;
+          } catch (e) {
+            // Continue to next path
+          }
+        }
+      }
+      return undefined;
+    })();
+    
+  const browser = await puppeteer.launch({
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--disable-extensions',
+      '--no-first-run',
+      '--disable-default-apps'
+    ],
+    ...(execPath && { executablePath: execPath })
+  });
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: ['networkidle0'] });
   await page.emulateMediaType('print');
