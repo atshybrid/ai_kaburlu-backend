@@ -769,6 +769,9 @@ ${(() => {
 
   // New: Attached design (Poppins-based) front+back builder
   const buildAttached = async () => {
+    // Simple inline SVG placeholders 
+    const svgPlaceholder = (text: string, w = 120, h = 80) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}'><rect width='100%' height='100%' fill='#fff'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='Verdana' font-size='14' fill='#555'>${text}</text></svg>`)}`;
+    
     // Compute location display similar to CR80
     let memberLocationName: string | undefined;
     try {
@@ -807,24 +810,27 @@ ${(() => {
 
   const qrEndpointUrl = `${baseHost}/hrci/idcard/${encodeURIComponent(card.cardNumber)}/qr`;
   const inlineQr = `data:image/svg+xml;utf8,${encodeURIComponent(qrSvg)}`;
-  const logoUrl = (s?.frontLogoUrl || '').trim() || 'about:blank';
-  const secondLogoUrl = (s?.secondLogoUrl || logoUrl || '').trim() || 'about:blank';
+  const logoUrl = normalizeUrl(s?.frontLogoUrl || '') || svgPlaceholder('Logo', 120, 80);
+  const secondLogoUrl = normalizeUrl(s?.secondLogoUrl || s?.frontLogoUrl || '') || svgPlaceholder('Logo', 120, 80);
   // Back logo should match frontLogoUrl per request (fallback secondLogo)
   const backLogoUrl = logoUrl || secondLogoUrl;
-    const stampUrl = (s?.hrciStampUrl || '').trim() || '';
-    const authorSign = ((global as any).__hrciSignOverride || s?.authorSignUrl || '').trim() || '';
+    const stampUrl = normalizeUrl(s?.hrciStampUrl || '') || svgPlaceholder('Stamp', 120, 120);
+    const authorSign = normalizeUrl((global as any).__hrciSignOverride || s?.authorSignUrl || '') || svgPlaceholder('Sign', 160, 60);
   // Unified effective Work Place rule for Attached
   const workPlace = (() => {
     const lvl = String(membershipLevel || '').toUpperCase();
     if (lvl === 'NATIONAL' || lvl === 'ZONE') return (memberLocationName || 'India');
     return memberLocationName || '';
   })();
-    const helpNumbers = [s?.contactNumber1, s?.contactNumber2].filter(Boolean).join(', ');
-    const headAddr = s?.headOfficeAddress || '';
-    const regAddr = s?.regionalOfficeAddress || '';
-    const adminAddr = s?.administrationOfficeAddress || '';
-  let watermarkSrc = (s?.watermarkLogoUrl || secondLogoUrl || '').trim();
-  if (watermarkSrc && /^\//.test(watermarkSrc)) watermarkSrc = `${baseHost}${watermarkSrc}`;
+    const helpNumbers = [s?.contactNumber1, s?.contactNumber2].filter(Boolean).join(', ') || '+91-XXXX-XXXX-XX';
+    const headAddr = s?.headOfficeAddress || 'Head Office Address Not Available';
+    const regAddr = s?.regionalOfficeAddress || 'Regional Office Address Not Available';
+    const adminAddr = s?.administrationOfficeAddress || 'Administration Office Address Not Available';
+  let watermarkSrc = normalizeUrl(s?.watermarkLogoUrl || s?.secondLogoUrl || '') || '';
+  if (!watermarkSrc) {
+    // Use a default watermark if none configured
+    watermarkSrc = 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><circle cx='50' cy='50' r='45' fill='none' stroke='#ddd' stroke-width='3'/><text x='50' y='55' text-anchor='middle' font-family='serif' font-size='12' fill='#999'>HRCI</text></svg>`);
+  }
 
   const attachedCss = `body{margin:0;padding:8mm;background:#f4f4f4;display:flex;gap:8mm;flex-wrap:wrap;justify-content:flex-start} .card{width:85.6mm;height:54mm;background:#fff;border-radius:0mm;box-shadow:0 0 5px rgba(0,0,0,0.2);overflow:hidden;font-family:'Poppins',sans-serif;position:relative} .strip-top{background:#FE0002;height:6.35mm;color:#fff;display:flex;justify-content:center;align-items:center;font-weight:700;text-transform:uppercase;font-size:9pt} .strip-blue{background:#1D0DA1;height:6.35mm;color:#fff;display:flex;align-items:center;justify-content:center;text-align:center;font-size:4.5pt;line-height:1.05;font-weight:600;text-transform:uppercase;padding-top:0.2mm} .center{display:flex;justify-content:space-between;align-items:flex-start;height:36.7mm;padding:2mm;position:relative} .left{width:19mm;display:flex;flex-direction:column;align-items:center;justify-content:flex-start} .left img{width:13mm;margin-bottom:2mm;display:block} .middle{flex:1;padding:0 1mm;font-size:4.8pt;line-height:1.3;box-sizing:border-box} .jurisdiction{font-weight:700;font-size:8pt;color:#000;text-align:center;margin-bottom:0.4mm;width:100%;display:flex;justify-content:center;align-items:center} .regd,.unique,.work-against,.identity{display:block;text-transform:uppercase;white-space:nowrap;text-align:center;margin-bottom:0.25mm} .unique{font-size:5pt;color:#000;font-weight:600} .work-against{color:#FE0002;font-size:4pt;font-weight:700} .identity{color:#FE0002;font-size:6pt;font-weight:700} .member-info{margin-top:1mm;font-size:4.5pt;text-align:left;line-height:1.5;width:calc(100% - 20mm)} .member-info div{display:grid;grid-template-columns:14mm 1.5mm auto;align-items:center} .member-info .label{font-weight:600;text-align:left} .member-info .colon{text-align:center} .member-info .value{text-align:left;white-space:nowrap;overflow:visible;text-overflow:unset} .right{width:18mm;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;margin-right:2mm;margin-top:4mm;position:relative} .member-photo{width:16.5mm;height:21mm;border-radius:3mm;border:1px solid #ccc;object-fit:cover} .sign-img{position:absolute;width:11mm;bottom:-10mm;opacity:0.9} .signature-text{font-weight:700;font-size:5pt;color:#000;text-align:center;position:absolute;bottom:-9mm;width:100%} .stamp{position:absolute;width:9mm;bottom:-3mm;left:-3mm;opacity:0.9} .strip-bottom{background:#FE0002;height:4.6mm;color:#fff;font-size:4.5pt;text-align:center;display:flex;align-items:center;justify-content:center;white-space:nowrap;position:absolute;bottom:0;width:100%} /* back */ html,body{height:auto} .back-center{position:absolute;top:6.35mm;left:0;right:0;bottom:4.6mm;display:flex;flex-direction:column;justify-content:flex-start;align-items:flex-start;padding:2.5mm;box-sizing:border-box;background:#fff;z-index:4} .back-strip-top{height:6.35mm;background:linear-gradient(to bottom,#FE0002 0%,#FE0002 49.999%,#1D0DA1 50%,#1D0DA1 100%);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;text-transform:uppercase;font-size:9pt;padding:0 4mm;position:absolute;top:0;left:0;right:0;z-index:5} .watermark{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:30mm;height:30mm;opacity:0.30;pointer-events:none;z-index:3;object-fit:contain} .qr-large{position:absolute;top:2mm;left:2mm;width:12mm;height:12mm;border:1px solid #e0e0e0;display:block;margin:0;z-index:6} .registration-text,.terms,.office-address{position:relative;z-index:5} .registration-text{font-size:4.2pt;line-height:1.5;color:#000;font-weight:600;text-transform:uppercase;margin-left:16mm;margin-top:0} .terms{margin-left:2mm;margin-top:1mm;font-size:4pt;color:#000} .terms strong{color:#FE0002;font-weight:700} .terms ol{margin:0;padding-left:2mm} .terms li{margin:0} .office-address{margin-top:1mm;font-size:4pt;line-height:1;text-align:center} .office-address strong{display:block;color:#000;font-weight:700;margin-bottom:0.2mm;text-align:center} .hrci-logo-right{position:absolute;top:2mm;right:4mm;width:12mm;height:12mm;opacity:1;z-index:6;object-fit:contain} .back-strip-bottom{position:absolute;bottom:0;left:0;right:0;background:#FE0002;height:4.6mm;color:#fff;display:flex;align-items:center;justify-content:center;font-size:4.5pt;text-align:center;padding:0 3mm;z-index:6} .watermark img, img.watermark{max-width:100%;max-height:100%;object-fit:contain;filter:sepia(1) saturate(5) hue-rotate(10deg) brightness(1.05) contrast(1.1)}`;
 
@@ -840,7 +846,7 @@ ${(() => {
       </div>
       <div class="center">
         <div class="left">
-          <img id="frontLogo" src="${logoUrl}" alt="Logo">
+          <img id="frontLogo" src="${logoUrl}" alt="Logo" onerror="this.src='${svgPlaceholder('Logo')}';this.onerror=null;">
           <img src="${inlineQr}" alt="QR Code" onerror="this.onerror=null;this.src='${qrEndpointUrl}'">
         </div>
         <div class="middle">
@@ -860,10 +866,10 @@ ${(() => {
           </div>
         </div>
         <div class="right">
-          <img class="member-photo" src="${photoUrl || ''}" alt="Member Photo">
-          ${authorSign ? `<img class="sign-img" src="${authorSign}" alt="Authorized Signature">` : ''}
+          <img class="member-photo" src="${photoUrl || svgPlaceholder('Photo', 140, 180)}" alt="Member Photo" onerror="this.src='${svgPlaceholder('Photo', 140, 180)}';this.onerror=null;">
+          <img class="sign-img" src="${authorSign}" alt="Authorized Signature" onerror="this.src='${svgPlaceholder('Sign', 160, 60)}';this.onerror=null;">
           <div class="signature-text">Signature Auth.</div>
-          ${stampUrl ? `<img class="stamp" src="${stampUrl}" alt="HRCI Stamp">` : ''}
+          <img class="stamp" src="${stampUrl}" alt="HRCI Stamp" onerror="this.src='${svgPlaceholder('Stamp', 120, 120)}';this.onerror=null;">
         </div>
       </div>
       <div class="strip-bottom">We take help 24x7 From (Police, CBI, Vigilance, NIA) & other Govt. Dept. Against Crime & Corruption.</div>
@@ -895,12 +901,12 @@ ${(() => {
           </ol>
           <hr style='border:0;border-top:0.3mm solid #000;margin:1mm 0;'>
           <div class="office-address">
-            ${headAddr ? `<p><strong>Head Office:</strong> ${headAddr}</p>` : ''}
-            ${regAddr ? `<p><strong>Regional Office:</strong> ${regAddr}</p>` : ''}
-            ${adminAddr ? `<p><strong>Administration Office:</strong> ${adminAddr}</p>` : ''}
+            <p><strong>Head Office:</strong> ${headAddr}</p>
+            <p><strong>Regional Office:</strong> ${regAddr}</p>
+            <p><strong>Administration Office:</strong> ${adminAddr}</p>
           </div>
         </div>
-  <img id="backLogo" src="${backLogoUrl}" alt="Logo" class="hrci-logo-right"/>
+  <img id="backLogo" src="${backLogoUrl}" alt="Logo" class="hrci-logo-right" onerror="this.src='${svgPlaceholder('Logo')}';this.onerror=null;"/>
       </div>
       <div class="back-strip-bottom"><span class="help-label">Help Line Number:</span> ${helpNumbers}</div>
     </div>`;
