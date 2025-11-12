@@ -645,6 +645,40 @@ router.get('/:cardNumber/html', async (req, res) => {
   const watermarkUrlRaw = wmOverride || trimOrNull(s?.watermarkLogoUrl) || trimOrNull(s?.secondLogoUrl) || trimOrNull(s?.frontLogoUrl) || null;
   let watermarkUrl = watermarkUrlRaw;
   if (watermarkUrl && /^\//.test(watermarkUrl)) watermarkUrl = `${baseHost}${watermarkUrl}`;
+  // Normalize all asset URLs to absolute (except data: URIs) so they can be fetched/inlined server-side
+  const toAbs = (u?: string | null) => normalizeUrl(u || '');
+  let logoSrc = toAbs(logoUrl);
+  let secondLogoSrc = toAbs(secondLogoUrl);
+  let stampSrc = toAbs(stampUrl);
+  let signSrcEff = toAbs((global as any).__hrciSignOverride || authorSignUrl || '');
+  let photoSrc = toAbs(photoUrl || '');
+  let wmSrc = toAbs(watermarkUrl || '');
+  // Optional server-side pre-inlining for CR80 when PDF_INLINE_IMAGES is set
+  if (process.env.PDF_INLINE_IMAGES) {
+    try {
+      const [l, sl, st, sg, ph, wm] = await Promise.all([
+        toDataUrl(logoSrc),
+        toDataUrl(secondLogoSrc),
+        toDataUrl(stampSrc),
+        toDataUrl(signSrcEff),
+        toDataUrl(photoSrc),
+        toDataUrl(wmSrc)
+      ]);
+      if (l) logoSrc = l;
+      if (sl) secondLogoSrc = sl;
+      if (st) stampSrc = st;
+      if (sg) signSrcEff = sg;
+      if (ph) photoSrc = ph;
+      if (wm) wmSrc = wm;
+      if (process.env.PDF_DEBUG) {
+        try { console.log('[IDCARD][CR80][inline]', { logo: !!l, secondLogo: !!sl, stamp: !!st, sign: !!sg, photo: !!ph, watermark: !!wm }); } catch {}
+      }
+    } catch (e) {
+      if (process.env.PDF_DEBUG) {
+        try { console.warn('[IDCARD][CR80][inline-failed]', (e as any)?.message || e); } catch {}
+      }
+    }
+  }
   // Original CR80 watermark size was 70mm x 40mm; reduced to 20% (14mm x 8mm)
   // Updated CR80 watermark target size: 30mm x 30mm, higher opacity for visibility
   const watermarkCss = `.watermark{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:0;opacity:0.30;display:flex;align-items:center;justify-content:center;width:30mm;height:30mm;} .watermark img, img.watermark{max-width:100%;max-height:100%;object-fit:contain;filter:sepia(1) saturate(5) hue-rotate(10deg) brightness(1.05) contrast(1.1);}`;
@@ -715,7 +749,7 @@ router.get('/:cardNumber/html', async (req, res) => {
     <div class="main">
       <div>
       <div>
-        <img class="logo" src="${logoUrl}" alt="Logo" />
+  <img class="logo" src="${logoSrc}" alt="Logo" />
         <img class="qr" src="${inlineQr}" alt="QR" onerror="this.onerror=null;this.src='${qrEndpointUrl}'" />
       </div>
       <div class="details">
@@ -733,11 +767,11 @@ router.get('/:cardNumber/html', async (req, res) => {
       <div>
       <div>
         <div class="photo-wrap">
-          <img class="photo" src="${photoUrl || svgPlaceholder('Photo')}" alt="Photo" />
-          ${stampUrl ? `<img class="stamp" src="${stampUrl}" alt="Stamp" />` : ''}
+          <img class="photo" src="${photoSrc || svgPlaceholder('Photo')}" alt="Photo" />
+          ${stampSrc ? `<img class="stamp" src="${stampSrc}" alt="Stamp" />` : ''}
         </div>
         <div class="sign-wrap">
-          <img class="sign" src="${(global as any).__hrciSignOverride || authorSignUrl}" alt="Author Sign" />
+          <img class="sign" src="${signSrcEff}" alt="Author Sign" />
           <div class="sign-label">Signature Issue Auth.</div>
         </div>
       </div>
@@ -768,7 +802,7 @@ ${termsHtml}
         ${administrationOfficeAddress ? `<p class="addr-label">ADMINISTRATION OFFICE</p><p class="addr">${administrationOfficeAddress}</p>`: ''}
         ${website ? `<p class="web">${website}</p>`: ''}
       </div>
-      <div><img class="logo" src="${secondLogoUrl}" alt="Logo" /></div>
+  <div><img class="logo" src="${secondLogoSrc}" alt="Logo" /></div>
     </div>
   </div>
   <div class="footer-blue"><p>${contactFooter}</p></div>
