@@ -360,7 +360,11 @@ router.get('/:cardNumber/html', async (req, res) => {
   // Case-insensitive lookup to match JSON endpoint behavior
   const card = await prisma.iDCard.findFirst({ where: { cardNumber: { equals: raw, mode: 'insensitive' } as any } as any });
   if (!card) return res.status(404).send('Card not found');
-  const s = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
+  // Prefer active IdCardSetting; if none, fall back to any available row to avoid undefined settings in renders
+  let s: any = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
+  if (!s) {
+    s = await (prisma as any).idCardSetting.findFirst().catch(() => null);
+  }
   if (process.env.PDF_DEBUG) {
     try {
       console.log('[IDCARD][setting]', {
@@ -1104,9 +1108,10 @@ ${(() => {
     html = setAttr(html, 'watermark', 'src', (normalizeUrl(s?.watermarkLogoUrl) || normalizeUrl(s?.frontLogoUrl) || normalizeUrl(s?.secondLogoUrl) || ''));
   }
     // QR SVG (scale to container: 12mm)
+    // Scale QR to container: force width/height="100%" safely regardless of original quoting
     let qrScaled = qrSvg
-      .replace(/width=(["'])\d+\1/i, 'width="$1${100}%$1'.replace(/\$1/g,'"'))
-      .replace(/height=(["'])\d+\1/i, 'height="$1${100}%$1'.replace(/\$1/g,'"'))
+      .replace(/width\s*=\s*(['"]).*?\1/i, 'width="100%"')
+      .replace(/height\s*=\s*(['"]).*?\1/i, 'height="100%"')
       .replace(/width='?\d+'?/i, 'width="100%"')
       .replace(/height='?\d+'?/i, 'height="100%"');
     // If viewBox missing, add a reasonable default to fit

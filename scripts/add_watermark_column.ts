@@ -44,11 +44,26 @@ async function ensureWatermarkColumn(defaultUrl?: string) {
   // 3. Populate if empty & default supplied
   if (defaultUrl && !active.watermarkLogoUrl) {
     console.log('[watermark] Updating active setting with default watermark URL');
-    await (prisma as any).idCardSetting.update({
-      where: { id: active.id },
-      data: { watermarkLogoUrl: defaultUrl }
-    });
-    console.log('[watermark] Updated.');
+    try {
+      // New Prisma client (after schema push) will allow field update; old client will throw Unknown argument
+      await (prisma as any).idCardSetting.update({
+        where: { id: active.id },
+        data: { watermarkLogoUrl: defaultUrl }
+      });
+      console.log('[watermark] Updated via Prisma update');
+    } catch (e: any) {
+      if (/Unknown argument `watermarkLogoUrl`/i.test(e?.message || '')) {
+        console.log('[watermark] Prisma client missing field – falling back to raw SQL update');
+        await prisma.$executeRawUnsafe(
+          'UPDATE "IdCardSetting" SET "watermarkLogoUrl" = $1 WHERE "id" = $2',
+          defaultUrl,
+          active.id
+        );
+        console.log('[watermark] Updated via raw SQL');
+      } else {
+        throw e;
+      }
+    }
   } else if (!active.watermarkLogoUrl) {
     console.log('[watermark] Active setting has empty watermarkLogoUrl and no --default provided. Skipping update.');
   } else {
