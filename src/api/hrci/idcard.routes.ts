@@ -361,6 +361,24 @@ router.get('/:cardNumber/html', async (req, res) => {
   const card = await prisma.iDCard.findFirst({ where: { cardNumber: { equals: raw, mode: 'insensitive' } as any } as any });
   if (!card) return res.status(404).send('Card not found');
   const s = await (prisma as any).idCardSetting.findFirst({ where: { isActive: true } }).catch(() => null);
+  if (process.env.PDF_DEBUG) {
+    try {
+      console.log('[IDCARD][setting]', {
+        id: s?.id,
+        isActive: s?.isActive,
+        frontLogoUrl: s?.frontLogoUrl,
+        secondLogoUrl: s?.secondLogoUrl,
+        watermarkLogoUrl: (s as any)?.watermarkLogoUrl,
+        authorSignUrl: s?.authorSignUrl,
+        hrciStampUrl: s?.hrciStampUrl,
+        headOfficeAddress: s?.headOfficeAddress,
+        regionalOfficeAddress: s?.regionalOfficeAddress,
+        administrationOfficeAddress: s?.administrationOfficeAddress,
+        contactNumber1: s?.contactNumber1,
+        contactNumber2: s?.contactNumber2,
+      });
+    } catch {}
+  }
   // Resolve display fields
   let fullName = (card as any).fullName || '';
   let designationName = (card as any).designationName || '';
@@ -471,6 +489,25 @@ router.get('/:cardNumber/html', async (req, res) => {
     if (/^https?:\/\//i.test(t)) return t;
     if (/^\//.test(t)) return `${baseHost}${t}`;
     return t;
+  };
+
+  // Server-side helper: fetch an image URL and return a data URL (base64). Returns null on failure.
+  const toDataUrl = async (u?: string | null): Promise<string | null> => {
+    try {
+      const url = (u || '').toString().trim();
+      if (!url || url.startsWith('data:')) return url || null;
+      const resp = await fetch(url as any);
+      if (!resp.ok) return null;
+      const buf = new Uint8Array(await resp.arrayBuffer());
+      const mime = resp.headers.get('content-type') || 'image/png';
+      // base64 encode
+      let binary = '';
+      for (let i = 0; i < buf.length; i++) binary += String.fromCharCode(buf[i]);
+      const b64 = Buffer.from(binary, 'binary').toString('base64');
+      return `data:${mime};base64,${b64}`;
+    } catch {
+      return null;
+    }
   };
 
   // Compose common values
@@ -919,7 +956,7 @@ ${(() => {
   const cr80Css = `  @page {\n    size: 85.6mm 54mm;\n    margin: 0;\n  }\n  html, body {\n    margin: 0;\n    padding: 0;\n    background: #f3f4f6;\n  }\n  :root {\n    --card-w: 85.6mm;\n    --card-h: 54mm;\n    --red: #FE0002;\n    --blue: #17007A;\n    --text: #111827;\n    --muted-bg: #F3F4F6;\n    --top-band: 6.1mm;\n    --blue-band: 6.1mm;\n    --bottom-band: 4.6mm;\n    --body-h: calc(var(--card-h) - var(--top-band) - var(--blue-band) - var(--bottom-band));\n  }\n  .page {\n    width: var(--card-w);\n    height: var(--card-h);\n    overflow: hidden;\n    page-break-after: always;\n    background: var(--muted-bg);\n    border: 0.2mm solid #e5e7eb;\n    box-sizing: border-box;\n    position: relative;\n  }\n  .page:last-child { page-break-after: auto; }\n  .band-red {\n    height: var(--top-band);\n    background: var(--red);\n    color: #fff; display:flex;align-items:center;justify-content:center;\n    padding:0 2mm; box-sizing:border-box;\n  }\n  .band-red h1 { margin:0; font:900 5.4mm/1 Verdana,Arial,sans-serif; letter-spacing:0.2mm; text-align:center; text-transform:uppercase; white-space:nowrap; overflow:hidden;}\n  .band-blue { height: var(--blue-band); background: var(--blue); color:#fff; display:flex;align-items:center;justify-content:center; padding:0 2mm; box-sizing:border-box;}\n  .band-blue p { margin:0; font:700 2.2mm/3.0mm Verdana,Arial,sans-serif; letter-spacing:0.1mm; text-align:center;}\n  .footer-red { position:absolute; left:0; right:0; bottom:0; height:var(--bottom-band); background:var(--red); color:#fff; display:flex;align-items:center;justify-content:center; padding:0 2mm; box-sizing:border-box;}\n  .footer-red p { margin:0; font:800 2mm/1 Verdana,Arial,sans-serif; text-align:center; letter-spacing:0.05mm;}\n  .front .body { position:absolute; top:calc(var(--top-band) + var(--blue-band)); left:0; right:0; height:var(--body-h); padding:1.2mm 2mm 0 2mm; box-sizing:border-box;}\n  .front .juris-wrap { display:flex; flex-direction:column; align-items:center; justify-content:flex-start; margin-top:0.8mm;}\n  .front .juris { margin:0.3mm 0 0 0; font:900 3.2mm/3.8mm Verdana,Arial,sans-serif; color:#000; letter-spacing:0.1mm;}\n  .front .niti1 { margin:0.2mm 0 0 0; font:800 2.2mm/2.8mm Verdana,Arial,sans-serif; color:#000;}\n  .front .niti2 { margin:0.1mm 0 0 0; font:700 2mm/2.5mm Verdana,Arial,sans-serif; color:#000;}\n  .front .works { margin:0.2mm 0 0 0; font:800 1.9mm/2.6mm Verdana,Arial,sans-serif; color:var(--red);}\n  .front .identity { margin:0.2mm 0 0 0; font:900 2.4mm/3.0mm Verdana,Arial,sans-serif; color:var(--red);}\n  .front .main { display:grid; grid-template-columns:18mm auto 26mm; grid-gap:1.2mm; align-items:start; margin-top:1.4mm;}\n  .front .logo { width:13.5mm; height:13.5mm; object-fit:cover; border:0.4mm solid #fff; background:#fff; display:block; margin-bottom:1.2mm;}\n  .front .qr { width:14mm; height:14mm; object-fit:contain; display:block;}\n  .front .details { background:#F3F4F6; border:0.2mm solid #e5e7eb; border-radius:1.8mm; padding:2mm 2.2mm;}\n  .front .cell { margin:0 0 0.8mm 0; font:800 2.4mm/3.0mm Verdana,Arial,sans-serif; color:var(--blue);}\n  .front .name { margin:0 0 0.8mm 0; font:800 3.0mm/3.6mm Verdana,Arial,sans-serif; color:var(--text);}\n  .front .desig { margin:0 0 1.2mm 0; font:700 2.4mm/3.0mm Verdana,Arial,sans-serif; color:var(--red);}\n  .front .row { display:grid; grid-template-columns:15mm 2mm auto; align-items:center; column-gap:1mm; margin:0.6mm 0;}\n  .front .lbl { font:900 2.2mm/3.0mm Verdana,Arial,sans-serif; color:var(--text);}\n  .front .val { font:800 2.2mm/3.0mm Verdana,Arial,sans-serif; color:var(--text); overflow:hidden; white-space:nowrap; text-overflow:ellipsis;}\n  .front .photo-wrap { position:relative; width:24mm; height:28mm; border:0.2mm solid #e5e7eb; background:#fff; display:flex; align-items:center; justify-content:center;}\n  .front .photo { width:calc(100% - 1mm); height:calc(100% - 1mm); object-fit:cover;}\n  .front .stamp { position:absolute; right:1mm; bottom:1mm; width:14mm; height:14mm; border-radius:50%; object-fit:cover; background:transparent; box-shadow:0 0 0.4mm rgba(0,0,0,.15);}\n  .front .sign-wrap { margin-top:1mm; display:flex; flex-direction:column; align-items:center;}\n  .front .sign { width:22mm; height:10mm; object-fit:contain; background:transparent;}\n  .front .sign-label { margin-top:-1.2mm; font:900 2mm/1 Verdana,Arial,sans-serif; color:var(--blue);}\n  .back .body { position:absolute; top:var(--top-band); left:0; right:0; height:calc(var(--card-h) - var(--top-band)); box-sizing:border-box; padding:1.2mm 2mm var(--bottom-band) 2mm;}\n  .back .row-main { display:grid; grid-template-columns:16mm auto 16mm; grid-gap:1.2mm; align-items:start; margin-top:2mm;}\n  .back .qr { width:13mm; height:13mm; object-fit:contain;}\n  .back .logo { width:13mm; height:13mm; object-fit:cover; display:block; margin-left:auto;}\n  .back .reg { text-align:center; color:var(--text);}\n  .back .reg .line { margin:0.4mm 0; font:800 2.2mm/2.8mm Verdana,Arial,sans-serif;}\n  .back .terms-title { margin:1mm 0 0.6mm 0; font:900 2.2mm/2.8mm Verdana,Arial,sans-serif; text-align:center;}\n  .back .term { margin:0.3mm 0; font:700 1.8mm/2.4mm Verdana,Arial,sans-serif; text-align:center;}\n  .back .addr-label { margin:0.6mm 0 0.2mm 0; font:900 2mm/2.6mm Verdana,Arial,sans-serif; text-align:center;}\n  .back .addr { margin:0 0 0.4mm 0; font:700 1.8mm/2.4mm Verdana,Arial,sans-serif; text-align:center;}\n  .back .web { margin:0.6mm 0 0 0; font:800 2mm/2.6mm Verdana,Arial,sans-serif; text-align:center;}\n  .back .footer-blue { position:absolute; left:0; right:0; bottom:0; height:var(--bottom-band); background:var(--blue); color:#fff; display:flex; align-items:center; justify-content:center; padding:0 2mm; box-sizing:border-box;}\n  .back .footer-blue p { margin:0; font:800 2mm/1 Verdana,Arial,sans-serif; text-align:center;}\n`;
 
   // FRONT
-  const buildFront = () => {
+  const buildFront = async () => {
     const orientation = String(req.query.orientation || '').toLowerCase();
     const isVertical = orientation === 'vertical' || orientation === 'portrait';
     // Always use the new HTML+CSS front template
@@ -939,8 +976,13 @@ ${(() => {
     } catch {}
     // Simple inline SVG placeholders for legacy templates
     const svgPlaceholder = (text: string, w = 120, h = 80) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}'><rect width='100%' height='100%' fill='#fff'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='Verdana' font-size='14' fill='#555'>${text}</text></svg>`)}`;
-  // Add onerror fallback to secondLogo/front if primary fails
-  const frontLogoSrc = normalizeUrl(s?.frontLogoUrl) || normalizeUrl(s?.secondLogoUrl) || svgPlaceholder('Logo');
+    // Add onerror fallback to secondLogo/front if primary fails
+    let frontLogoSrc = normalizeUrl(s?.frontLogoUrl) || normalizeUrl(s?.secondLogoUrl) || svgPlaceholder('Logo');
+    // Server-side pre-inline critical images when PDF_INLINE_IMAGES is set
+    if (process.env.PDF_INLINE_IMAGES) {
+      const inlined = await toDataUrl(frontLogoSrc);
+      if (inlined) frontLogoSrc = inlined;
+    }
   html = setAttr(html, 'frontLogo', 'src', frontLogoSrc);
   html = html.replace(/id=\"frontLogo\"([^>]*?)>/, (m, rest) => `id="frontLogo"${rest} onerror="this.onerror=null;this.src='${normalizeUrl(s?.secondLogoUrl) || svgPlaceholder('Logo')}'">`);
     // Prefer inline SVG via data URL to avoid mixed-content/CSP/network blockers
@@ -956,7 +998,12 @@ ${(() => {
       html = setAttr(html, 'qrFront', 'src', relQr);
       html = html.replace(/id=\"qrFront\"([^>]*?)>/, (m, rest) => `id="qrFront"${rest} onerror="this.onerror=null;this.src='${relQr}'">`);
     }
-  html = setAttr(html, 'photoUrl', 'src', normalizeUrl(photoUrl || '') || svgPlaceholder('Photo', 140, 180));
+    let photoSrc = normalizeUrl(photoUrl || '') || svgPlaceholder('Photo', 140, 180);
+    if (process.env.PDF_INLINE_IMAGES) {
+      const inlinedPhoto = await toDataUrl(photoSrc);
+      if (inlinedPhoto) photoSrc = inlinedPhoto;
+    }
+    html = setAttr(html, 'photoUrl', 'src', photoSrc);
     const fmtUpper = (v: any) => (v == null || v === '') ? '-' : String(v).toUpperCase();
     // Format expiresAt to DD/MM/YYYY if parsable
     const fmtDate = (d: any) => {
@@ -999,13 +1046,20 @@ ${(() => {
   html = replaceIn(html, 'workPlace', fmtUpper(effectiveWorkPlace));
   html = replaceIn(html, 'cardNumber', fmtUpper(card.cardNumber));
   html = replaceIn(html, 'validUpto', fmtDate(expiresAt));
-    html = setAttr(html, 'authorSignUrl', 'src', normalizeUrl((global as any).__hrciSignOverride || s?.authorSignUrl || '') || svgPlaceholder('Sign', 160, 60));
-    html = setAttr(html, 'hrciStampUrl', 'src', normalizeUrl(s?.hrciStampUrl || '') || svgPlaceholder('Stamp', 120, 120));
+    let signSrc = normalizeUrl((global as any).__hrciSignOverride || s?.authorSignUrl || '') || svgPlaceholder('Sign', 160, 60);
+    let stampSrc = normalizeUrl(s?.hrciStampUrl || '') || svgPlaceholder('Stamp', 120, 120);
+    if (process.env.PDF_INLINE_IMAGES) {
+      const [signInline, stampInline] = await Promise.all([toDataUrl(signSrc), toDataUrl(stampSrc)]);
+      if (signInline) signSrc = signInline;
+      if (stampInline) stampSrc = stampInline;
+    }
+    html = setAttr(html, 'authorSignUrl', 'src', signSrc);
+    html = setAttr(html, 'hrciStampUrl', 'src', stampSrc);
     return html;
   };
 
   // BACK
-  const buildBack = () => {
+  const buildBack = async () => {
     // Use the new HTML+CSS back template
     let html = readTemplate('hrci_id_card_back_html_css.html');
   html = html.replace('</head>', `${colorsStyle}</head>`);
@@ -1028,15 +1082,23 @@ ${(() => {
     const contacts = [s?.contactNumber1, s?.contactNumber2].filter(Boolean).join(', ');
     html = replaceIn(html, 'contactNumbers', contacts);
     // Set second logo and watermark if present
-  const backPrimary = normalizeUrl(s?.frontLogoUrl) || normalizeUrl(s?.secondLogoUrl) || '';
-  const backFallback = normalizeUrl(s?.secondLogoUrl) || normalizeUrl(s?.frontLogoUrl) || '';
-  html = setAttr(html, 'secondLogo', 'src', backPrimary);
+    let backPrimary = normalizeUrl(s?.frontLogoUrl) || normalizeUrl(s?.secondLogoUrl) || '';
+    const backFallback = normalizeUrl(s?.secondLogoUrl) || normalizeUrl(s?.frontLogoUrl) || '';
+    if (process.env.PDF_INLINE_IMAGES) {
+      const inlinedBack = await toDataUrl(backPrimary);
+      if (inlinedBack) backPrimary = inlinedBack;
+    }
+    html = setAttr(html, 'secondLogo', 'src', backPrimary);
   html = html.replace(/id=\"secondLogo\"([^>]*?)>/, (m, rest) => `id="secondLogo"${rest} onerror="this.onerror=null;this.src='${backFallback}'">`);
   // Watermark override via ?watermark for back; fallback to settings
   try {
     const wmOverride = (() => { try { const v = String((req.query as any)?.watermark || '').trim(); return v || null; } catch { return null; } })();
     const wmRaw = wmOverride || (s?.watermarkLogoUrl || s?.secondLogoUrl || s?.frontLogoUrl || '');
-    const wmSrc = normalizeUrl(wmRaw);
+    let wmSrc = normalizeUrl(wmRaw);
+    if (process.env.PDF_INLINE_IMAGES) {
+      const wmi = await toDataUrl(wmSrc);
+      if (wmi) wmSrc = wmi;
+    }
     html = setAttr(html, 'watermark', 'src', wmSrc);
   } catch {
     html = setAttr(html, 'watermark', 'src', (normalizeUrl(s?.watermarkLogoUrl) || normalizeUrl(s?.frontLogoUrl) || normalizeUrl(s?.secondLogoUrl) || ''));
@@ -1060,15 +1122,14 @@ ${(() => {
     out = await buildCr80();
   } else if (designVariant === 'poppins' || designVariant === 'attached' || designVariant === 'v2') {
     // Respect side for poppins/attached when requested (e.g., during PDF generation)
-    if (side === 'front') out = buildFront();
-    else if (side === 'back') out = buildBack();
+    if (side === 'front') out = await buildFront();
+    else if (side === 'back') out = await buildBack();
     else out = await buildAttached();
-  } else if (side === 'front') out = buildFront();
-  else if (side === 'back') out = buildBack();
+  } else if (side === 'front') out = await buildFront();
+  else if (side === 'back') out = await buildBack();
   else {
     // Combined preview page with both sides; add simple wrapper for spacing
-    const front = buildFront();
-    const back = buildBack();
+    const [front, back] = await Promise.all([buildFront(), buildBack()]);
     out = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
       <title>ID Card ${card.cardNumber}</title>
       <style>body{margin:0;padding:8mm;background:#f5f5f5;display:flex;gap:6mm;flex-wrap:wrap;font-family:Arial,Helvetica,sans-serif} .sheet{box-shadow:0 6px 18px rgba(0,0,0,.15)} @media print{body{background:#fff;padding:0} .sheet{box-shadow:none}}</style>

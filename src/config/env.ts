@@ -77,4 +77,13 @@ export const config: AppConfig = {
   }
 };
 
+// Back-compat: many environments used DF_DEBUG earlier; bridge to PDF_DEBUG for Puppeteer logging
+if (!process.env.PDF_DEBUG && process.env.DF_DEBUG) {
+  process.env.PDF_DEBUG = process.env.DF_DEBUG;
+}
+if (!process.env.PDF_DEBUG_VERBOSE && process.env.DF_DEBUG) {
+  // enable verbose image logs if DF_DEBUG is truthy
+  process.env.PDF_DEBUG_VERBOSE = process.env.DF_DEBUG;
+}
+
 export default config;
