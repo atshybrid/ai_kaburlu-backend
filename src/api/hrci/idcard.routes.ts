@@ -1241,6 +1241,36 @@ const getChromeExecutablePath = () => {
       }
     }
   }
+
+  // Fallback: auto-discover Chrome inside Puppeteer cache directory (.cache/puppeteer)
+  try {
+    const cacheRoot = process.env.PUPPETEER_CACHE_DIR || path.resolve(process.cwd(), '.cache', 'puppeteer');
+    const chromeRoot = path.resolve(cacheRoot, 'chrome');
+    if (fs.existsSync(chromeRoot)) {
+      const entries = fs.readdirSync(chromeRoot).filter(name => {
+        try { return fs.statSync(path.join(chromeRoot, name)).isDirectory(); } catch { return false; }
+      }).sort((a,b) => a.localeCompare(b));
+      // Prefer latest entry
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const base = path.join(chromeRoot, entries[i]);
+        // Windows
+        const win64 = path.join(base, 'chrome-win64', 'chrome-win64', 'chrome.exe');
+        const win64Alt = path.join(base, 'chrome-win64', 'chrome.exe');
+        const win32 = path.join(base, 'chrome-win32', 'chrome.exe');
+        // Linux
+        const linux64 = path.join(base, 'chrome-linux64', 'chrome');
+        const linux = path.join(base, 'chrome-linux', 'chrome');
+        // Mac (Chromium builds naming may vary)
+        const mac1 = path.join(base, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium');
+        const mac2 = path.join(base, 'chrome-mac', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing');
+
+        const candidates = [win64, win64Alt, win32, linux64, linux, mac1, mac2];
+        for (const p of candidates) {
+          try { fs.accessSync(p, fs.constants.X_OK); return p; } catch {}
+        }
+      }
+    }
+  } catch {}
   
   return undefined; // Let Puppeteer use its bundled Chrome
 };
