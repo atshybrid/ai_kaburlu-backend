@@ -1273,9 +1273,90 @@ async function htmlToCardPdf(html: string): Promise<Buffer> {
   const browser = await getPdfBrowser();
   const page = await browser.newPage();
   try {
+    // Debug instrumentation: network + console logging when PDF_DEBUG env flag set
+    if (process.env.PDF_DEBUG) {
+      try {
+        page.on('requestfailed', (req) => {
+          console.warn('[PDF][requestfailed]', req.url(), req.failure()?.errorText);
+        });
+        page.on('response', (resp) => {
+          try {
+            const url = resp.url();
+            const status = resp.status();
+            const rType = resp.request().resourceType();
+            if (rType === 'image' && status >= 400) {
+              console.warn('[PDF][image-response][error]', status, url);
+            } else if (process.env.PDF_DEBUG_VERBOSE && rType === 'image') {
+              console.log('[PDF][image-response]', status, url);
+            }
+          } catch {}
+        });
+        page.on('console', (msg) => {
+          try {
+            console.log('[PDF][page-console]', msg.type(), msg.text());
+          } catch {}
+        });
+        page.on('pageerror', (err) => {
+          console.error('[PDF][pageerror]', err?.message || err);
+        });
+      } catch (e) {
+        console.error('[PDF][debug-setup-failed]', (e as any)?.message || e);
+      }
+    }
     // Ensure page size for print
     const injected = html.replace('</head>', `<style>@page{size:85.6mm 54mm;margin:0} html,body{margin:0;padding:0}</style></head>`);
     await page.setContent(injected, { waitUntil: 'networkidle0' });
+    // Optional inlining of <img> tags into data URLs to avoid network dependence (flag: PDF_INLINE_IMAGES=1)
+    if (process.env.PDF_INLINE_IMAGES) {
+      try {
+        await page.evaluate(async () => {
+          const g: any = (globalThis as any);
+          const doc: any = g.document;
+          const enc = (bytes: any) => {
+            const btoaFn = g.btoa || ((s: string) => Buffer.from(s, 'binary').toString('base64'));
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            return btoaFn(binary);
+          };
+          if (!doc) return;
+          const nodeList: any = doc.querySelectorAll('img');
+          const imgs: any[] = Array.prototype.slice.call(nodeList);
+          const whitelist = ['logo','stamp','sign','photo','qr','watermark','frontLogo','secondLogo','member-photo'];
+          let inlinedCount = 0;
+          for (const img of imgs) {
+            try {
+              const src = String(img.getAttribute('src') || '');
+              const lower = src.toLowerCase();
+              const shouldInline = /^https?:/.test(src) && whitelist.some(w => lower.includes(w));
+              if (!shouldInline) continue;
+              const fetchFn: any = g.fetch;
+              if (!fetchFn) continue;
+              const resp: any = await fetchFn(src);
+              if (!resp || !resp.ok) { console.warn('inline-skip-status', src, resp && resp.status); continue; }
+              const ab = await resp.arrayBuffer();
+              const buf = new Uint8Array(ab);
+              const mime = (resp.headers && (resp.headers.get && resp.headers.get('content-type'))) || 'image/png';
+              const b64 = enc(buf);
+              img.setAttribute('data-original-src', src);
+              img.setAttribute('src', `data:${mime};base64,${b64}`);
+              inlinedCount++;
+            } catch (e: any) {
+              console.warn('inline-error', e && (e.message || String(e)));
+            }
+          }
+          g.__PDF_INLINED_IMAGES = inlinedCount;
+          console.log('PDF inline images done count=', inlinedCount);
+        });
+        if (process.env.PDF_DEBUG) {
+          try {
+            const inlined = await page.evaluate(() => (globalThis as any).__PDF_INLINED_IMAGES || 0);
+            console.log('[PDF][inline-summary] inlined images:', inlined);
+          } catch {}
+        }
+      } catch (e) {
+        console.warn('[PDF][inline-failed]', (e as any)?.message || e);
+      }
+    }
     await page.emulateMediaType('screen');
     const pdf = await page.pdf({
       printBackground: true,
