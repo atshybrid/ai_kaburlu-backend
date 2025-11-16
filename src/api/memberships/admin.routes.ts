@@ -848,7 +848,13 @@ router.put('/:id/status', (req, res, next) => {
 router.post('/:id/idcard', requireAuth, async (req, res) => {
   try {
     const requester: any = (req as any).user;
-    const membership = await prisma.membership.findUnique({ where: { id: req.params.id }, include: { designation: true, cell: true } });
+    // Allow :id to be a membership.id OR an idCard.cardNumber
+    const identifier = String(req.params.id);
+    let membership = await prisma.membership.findUnique({ where: { id: identifier }, include: { designation: true, cell: true } }).catch(() => null);
+    if (!membership) {
+      const card = await prisma.iDCard.findUnique({ where: { cardNumber: identifier } }).catch(() => null);
+      if (card && card.membershipId) membership = await prisma.membership.findUnique({ where: { id: card.membershipId }, include: { designation: true, cell: true } }).catch(() => null);
+    }
     if (!membership) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
 
     // Authorization: allow HRCI_ADMIN/SUPERADMIN or the membership owner (MEMBER)
