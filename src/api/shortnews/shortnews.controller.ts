@@ -597,7 +597,27 @@ export const listShortNews = async (req: Request, res: Response) => {
 
     const languageId = user.languageId;
     const all = String(req.query.all || '').toLowerCase() === 'true';
-    const where: any = all ? {} : { language: languageId };
+    const where: any = {};
+    // Resolve language filter robustly (support rows that store either Language.id or Language.code)
+    let resolvedLang: { id: string; code: string } | null = null;
+    const qLanguageId = (req.query.languageId as string) || undefined;
+    if (qLanguageId) {
+      const langRow = await prisma.language.findUnique({ where: { id: qLanguageId } });
+      if (langRow) resolvedLang = { id: langRow.id, code: langRow.code };
+    } else if (!all && languageId) {
+      const langRow = await prisma.language.findUnique({ where: { id: languageId } });
+      if (langRow) resolvedLang = { id: langRow.id, code: langRow.code };
+    }
+    if (resolvedLang) {
+      where.AND = [
+        {
+          OR: [
+            { language: resolvedLang.id },
+            { language: { equals: resolvedLang.code, mode: 'insensitive' } },
+          ],
+        },
+      ];
+    }
     // Prefetch pool: optionally global when all=true; include author for ownership + future role-based filtering
     const seed = await prisma.shortNews.findMany({
       where,
@@ -896,6 +916,15 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
         return res.status(400).json({ success: false, error: 'Invalid latitude/longitude' });
       }
     }
+    // Debug: print resolved language and computed where filter to help diagnose empty-result cases
+    if (String(process.env.SHORTNEWS_DEBUG || '').toLowerCase() === '1') {
+      try {
+        // Limit verbose output length
+        const w = JSON.stringify(where, (_k, v) => (typeof v === 'string' && v.length > 200 ? v.slice(0, 200) + '...': v));
+        console.debug('[SHORTNEWS DEBUG] listAllShortNews: resolvedLang=', resolvedLang, 'where=', w);
+      } catch (e) { console.debug('[SHORTNEWS DEBUG] failed to stringify where', e); }
+    }
+
     const items = await prisma.shortNews.findMany({
       where,
       include: {
@@ -1381,7 +1410,7 @@ export const listShortNewsByStatus = async (req: Request, res: Response) => {
     const where: any = {};
     if (status) where.status = status;
     if (roleName === 'NEWS_DESK' || roleName === 'NEWS_DESK_ADMIN' || roleName === 'LANGUAGE_ADMIN' || roleName === 'SUPERADMIN') {
-      where.language = user.languageId; // show items in their language
+      if (user.languageId) where.language = user.languageId; // show items in their language when available
     } else {
       where.authorId = user.id; // citizens only their own
     }
@@ -1473,16 +1502,37 @@ export const listAllShortNews = async (req: Request, res: Response) => {
     }
 
     const where: any = {};
-    const qLanguageId = (req.query.languageId as string) || undefined;
+    const qLanguageIdParam = (req.query.languageId as string) || undefined;
+    // Resolve explicit language query param to a language object (id + code) if present
+    let resolvedLang: { id: string; code: string } | null = null;
+    if (qLanguageIdParam) {
+      const lrow = await prisma.language.findUnique({ where: { id: qLanguageIdParam } });
+      if (lrow) resolvedLang = { id: lrow.id, code: lrow.code };
+    }
     const qStatus = (req.query.status as string) || undefined;
     const qCategoryId = (req.query.categoryId as string) || undefined;
     if (qStatus) where.status = qStatus;
     if (qCategoryId) where.categoryId = qCategoryId;
-    if (isSuper) {
-      if (qLanguageId) where.language = qLanguageId;
-    } else {
-      // Non-super roles are scoped to their own language
-      where.language = user.languageId as any;
+    // If an explicit language was provided via query param, prefer that (already resolved above into resolvedLang)
+    if (!resolvedLang) {
+      if (isSuper || roleName === 'ADMIN') {
+        // no-op: super/admin may see all languages unless they provided languageId
+      } else {
+        // Non-super roles are scoped to their own language when set; if user has no language, do not apply language filter
+        if (user.languageId) {
+          const langRow = await prisma.language.findUnique({ where: { id: user.languageId } });
+          if (langRow) {
+            where.AND = [
+              {
+                OR: [
+                  { language: langRow.id },
+                  { language: { equals: langRow.code, mode: 'insensitive' } },
+                ],
+              },
+            ];
+          }
+        }
+      }
     }
 
     const items = await prisma.shortNews.findMany({

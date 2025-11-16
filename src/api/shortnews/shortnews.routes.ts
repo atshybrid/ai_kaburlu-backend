@@ -362,7 +362,8 @@ router.get('/', passport.authenticate('jwt', { session: false }), shortNewsContr
 // Role guard utility for privileged reads
 function requireDeskOrAdmin(req: any, res: any, next: any) {
 	const roleName = (req.user?.role?.name || '').toUpperCase();
-	const allowed = new Set(['SUPERADMIN', 'SUPER_ADMIN', 'LANGUAGE_ADMIN', 'NEWS_DESK', 'NEWS_DESK_ADMIN', 'HRCI_ADMIN']);
+	// Include ADMIN as a desk-level role so platform admins can access the desk endpoints
+	const allowed = new Set(['SUPERADMIN', 'SUPER_ADMIN', 'LANGUAGE_ADMIN', 'NEWS_DESK', 'NEWS_DESK_ADMIN', 'HRCI_ADMIN', 'ADMIN']);
 	if (allowed.has(roleName)) return next();
 	return res.status(403).json({ error: 'Forbidden: desk/admin access only' });
 }
