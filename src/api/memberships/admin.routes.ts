@@ -49,15 +49,74 @@ const router = Router();
  */
 router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
   try {
-    const { userId, status, level, cellId, designationId } = req.query as any;
+    const {
+      userId,
+      status,
+      level,
+      cell,
+      cellId,
+      designationId,
+      designationCode,
+      memberName,
+      mobileNumber,
+      zone,
+      hrcCountryId,
+      hrcStateId,
+      hrcDistrictId,
+      hrcMandalId,
+    } = req.query as any;
     const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 20));
     const cursor = (req.query.cursor as string) || undefined;
+
+    // Resolve cell filter (accept id/code/name)
+    let resolvedCellId: string | undefined = undefined;
+    if (cellId) resolvedCellId = String(cellId);
+    else if (cell) {
+      const c = await prisma.cell.findFirst({ where: { OR: [{ id: String(cell) }, { code: String(cell) }, { name: String(cell) }] } });
+      if (c) resolvedCellId = c.id;
+    }
+
+    // Resolve designation filter (accept id or code)
+    let resolvedDesignationId: string | undefined = undefined;
+    if (designationId) resolvedDesignationId = String(designationId);
+    else if (designationCode) {
+      const d = await prisma.designation.findFirst({ where: { OR: [{ id: String(designationCode) }, { code: String(designationCode) }, { name: String(designationCode) }] } });
+      if (d) resolvedDesignationId = d.id;
+    }
+
+    // Resolve user filter from mobileNumber if provided
+    let resolvedUserIds: string[] | undefined = undefined;
+    if (userId) resolvedUserIds = [String(userId)];
+    if (mobileNumber) {
+      const u = await prisma.user.findUnique({ where: { mobileNumber: String(mobileNumber) } }).catch(() => null);
+      if (u) resolvedUserIds = [u.id];
+      else {
+        // no user with that mobile -> empty result
+        return res.json({ success: true, count: 0, nextCursor: null, data: [] });
+      }
+    }
+
+    // Resolve userIds for memberName search (batch)
+    if (memberName) {
+      const profiles = await prisma.userProfile.findMany({ where: { fullName: { contains: String(memberName), mode: 'insensitive' } }, select: { userId: true } });
+      const ids = profiles.map((p: any) => p.userId);
+      if (ids.length === 0) return res.json({ success: true, count: 0, nextCursor: null, data: [] });
+      resolvedUserIds = resolvedUserIds ? resolvedUserIds.filter((id) => ids.includes(id)) : ids;
+      if (!resolvedUserIds || resolvedUserIds.length === 0) return res.json({ success: true, count: 0, nextCursor: null, data: [] });
+    }
+
     const where: any = {};
-    if (userId) where.userId = String(userId);
+    if (resolvedUserIds) where.userId = { in: resolvedUserIds };
     if (status) where.status = String(status);
     if (level) where.level = String(level);
-    if (cellId) where.cellId = String(cellId);
-    if (designationId) where.designationId = String(designationId);
+    if (resolvedCellId) where.cellId = resolvedCellId;
+    if (resolvedDesignationId) where.designationId = resolvedDesignationId;
+    if (zone) where.zone = String(zone);
+    if (hrcCountryId) where.hrcCountryId = String(hrcCountryId);
+    if (hrcStateId) where.hrcStateId = String(hrcStateId);
+    if (hrcDistrictId) where.hrcDistrictId = String(hrcDistrictId);
+    if (hrcMandalId) where.hrcMandalId = String(hrcMandalId);
+
     const rows = await prisma.membership.findMany({
       where,
       take: limit,
@@ -66,8 +125,57 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
       orderBy: { createdAt: 'desc' },
       include: { designation: true, cell: true, idCard: true }
     });
+
     const nextCursor = rows.length === limit ? rows[rows.length - 1].id : null;
-    return res.json({ success: true, count: rows.length, nextCursor, data: rows });
+
+    // Batch-fetch related user profiles and users
+    const userIds = Array.from(new Set(rows.map((r: any) => r.userId).filter(Boolean)));
+    const profiles = userIds.length > 0 ? await prisma.userProfile.findMany({ where: { userId: { in: userIds } }, select: { userId: true, fullName: true, profilePhotoUrl: true, profilePhotoMediaId: true } }) : [];
+    const users = userIds.length > 0 ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, mobileNumber: true } }) : [];
+    const profileByUser: any = {};
+    for (const p of profiles) profileByUser[p.userId] = p;
+    const mobileByUser: any = {};
+    for (const u of users) mobileByUser[u.id] = u.mobileNumber;
+
+    // Batch-fetch HRCI geo names
+    const countryIds = Array.from(new Set(rows.map((r: any) => r.hrcCountryId).filter(Boolean)));
+    const stateIds = Array.from(new Set(rows.map((r: any) => r.hrcStateId).filter(Boolean)));
+    const districtIds = Array.from(new Set(rows.map((r: any) => r.hrcDistrictId).filter(Boolean)));
+    const mandalIds = Array.from(new Set(rows.map((r: any) => r.hrcMandalId).filter(Boolean)));
+    const countries = countryIds.length > 0 ? await prisma.hrcCountry.findMany({ where: { id: { in: countryIds } }, select: { id: true, name: true } }) : [];
+    const states = stateIds.length > 0 ? await prisma.hrcState.findMany({ where: { id: { in: stateIds } }, select: { id: true, name: true } }) : [];
+    const districts = districtIds.length > 0 ? await prisma.hrcDistrict.findMany({ where: { id: { in: districtIds } }, select: { id: true, name: true } }) : [];
+    const mandals = mandalIds.length > 0 ? await prisma.hrcMandal.findMany({ where: { id: { in: mandalIds } }, select: { id: true, name: true } }) : [];
+    const countryById: any = {}; countries.forEach(c => countryById[c.id] = c.name);
+    const stateById: any = {}; states.forEach(s => stateById[s.id] = s.name);
+    const districtById: any = {}; districts.forEach(d => districtById[d.id] = d.name);
+    const mandalById: any = {}; mandals.forEach(m => mandalById[m.id] = m.name);
+
+    // Build summarized response items
+    const data = rows.map((r: any) => {
+      const prof = profileByUser[r.userId] || {};
+      return {
+        id: r.id,
+        fullName: prof.fullName || null,
+        mobileNumber: mobileByUser[r.userId] || null,
+        level: r.level,
+        cell: r.cell ? { id: r.cell.id, name: r.cell.name, code: (r.cell.code || null) } : null,
+        designation: r.designation ? { id: r.designation.id, name: r.designation.name, code: r.designation.code } : null,
+        hrcCountryName: r.hrcCountryId ? (countryById[r.hrcCountryId] || null) : null,
+        hrcStateName: r.hrcStateId ? (stateById[r.hrcStateId] || null) : null,
+        hrcDistrictName: r.hrcDistrictId ? (districtById[r.hrcDistrictId] || null) : null,
+        hrcMandalName: r.hrcMandalId ? (mandalById[r.hrcMandalId] || null) : null,
+        zone: r.zone || null,
+        profilePhotoUrl: prof.profilePhotoUrl || null,
+        profilePhotoMediaId: prof.profilePhotoMediaId || null,
+        idCardNumber: r.idCard ? r.idCard.cardNumber : null,
+        idCardExpiresAt: r.idCard ? r.idCard.expiresAt : null,
+        status: r.status,
+        createdAt: r.createdAt,
+      };
+    });
+
+    return res.json({ success: true, count: data.length, nextCursor, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'LIST_FAILED', message: e?.message });
   }
