@@ -143,10 +143,13 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
     const districtIds = Array.from(new Set(rows.map((r: any) => r.hrcDistrictId).filter(Boolean)));
     const mandalIds = Array.from(new Set(rows.map((r: any) => r.hrcMandalId).filter(Boolean)));
     const countries = countryIds.length > 0 ? await prisma.hrcCountry.findMany({ where: { id: { in: countryIds } }, select: { id: true, name: true } }) : [];
+    // If some NATIONAL memberships do not have hrcCountryId set, use a sensible fallback (first country)
+    const fallbackCountry = await prisma.hrcCountry.findFirst({ select: { id: true, name: true } }).catch(() => null);
     const states = stateIds.length > 0 ? await prisma.hrcState.findMany({ where: { id: { in: stateIds } }, select: { id: true, name: true } }) : [];
     const districts = districtIds.length > 0 ? await prisma.hrcDistrict.findMany({ where: { id: { in: districtIds } }, select: { id: true, name: true } }) : [];
     const mandals = mandalIds.length > 0 ? await prisma.hrcMandal.findMany({ where: { id: { in: mandalIds } }, select: { id: true, name: true } }) : [];
     const countryById: any = {}; countries.forEach(c => countryById[c.id] = c.name);
+    const fallbackCountryName = fallbackCountry ? fallbackCountry.name : null;
     const stateById: any = {}; states.forEach(s => stateById[s.id] = s.name);
     const districtById: any = {}; districts.forEach(d => districtById[d.id] = d.name);
     const mandalById: any = {}; mandals.forEach(m => mandalById[m.id] = m.name);
@@ -161,7 +164,7 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
         level: r.level,
         cell: r.cell ? { id: r.cell.id, name: r.cell.name, code: (r.cell.code || null) } : null,
         designation: r.designation ? { id: r.designation.id, name: r.designation.name, code: r.designation.code } : null,
-        hrcCountryName: r.hrcCountryId ? (countryById[r.hrcCountryId] || null) : null,
+        hrcCountryName: r.hrcCountryId ? (countryById[r.hrcCountryId] || null) : (r.level === 'NATIONAL' ? fallbackCountryName : null),
         hrcStateName: r.hrcStateId ? (stateById[r.hrcStateId] || null) : null,
         hrcDistrictName: r.hrcDistrictId ? (districtById[r.hrcDistrictId] || null) : null,
         hrcMandalName: r.hrcMandalId ? (mandalById[r.hrcMandalId] || null) : null,
