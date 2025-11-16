@@ -60,6 +60,7 @@ import adsRoutes from './api/ads/ads.routes';
 import paymentWebhookRoutes from './api/payments/webhook.routes';
 import { startAdsExpiryScheduler } from './services/adsExpiryScheduler';
 import adminBootstrapRoutes from './api/admin/bootstrap.routes';
+import { registerShareSupport } from './lib/share-support';
 
 const app = express();
 
@@ -153,6 +154,9 @@ app.use('/api/v1/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/healthz', (_req, res) => {
   res.json({ ok: true, uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
+
+// Share support for deep links and social sharing
+registerShareSupport(app);
 
 // API Routes (no version prefix) - legacy support
 app.use('/articles', articlesRoutes);
