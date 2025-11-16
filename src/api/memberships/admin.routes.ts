@@ -2,6 +2,7 @@ import { Router } from 'express';
 import prisma from '../../lib/prisma';
 import { requireAuth, requireAdmin, requireHrcAdmin } from '../middlewares/authz';
 import { generateNextIdCardNumber } from '../../lib/idCardNumber';
+import { hashMpin } from '../../lib/mpin';
 // Redeem codes are no longer used in simplified policy
 import { membershipService } from '../../lib/membershipService';
 
@@ -371,7 +372,13 @@ router.post('/create-member', requireAuth, requireHrcAdmin, async (req, res) => 
     const normProfilePhotoUrl = (typeof profilePhotoUrl === 'string' && profilePhotoUrl.trim() !== '') ? String(profilePhotoUrl) : null;
     let user = await prisma.user.findUnique({ where: { mobileNumber: String(mobileNumber) } });
     if (!user) {
-      user = await prisma.user.create({ data: { mobileNumber: String(mobileNumber), email: normEmail, roleId: memberRole.id, languageId: langEn.id, status: 'ACTIVE' } });
+      // Default MPIN: last 4 digits of mobileNumber (hashed into mpinHash)
+      let mpinHashVal: string | undefined = undefined;
+      try {
+        const last4 = String(mobileNumber).slice(-4);
+        if (last4) mpinHashVal = await hashMpin(last4);
+      } catch {}
+      user = await prisma.user.create({ data: { mobileNumber: String(mobileNumber), email: normEmail, roleId: memberRole.id, languageId: langEn.id, status: 'ACTIVE', mpinHash: mpinHashVal || null } });
     } else {
       // Ensure role is at least MEMBER (do not downgrade HRCI_ADMIN etc.)
       // No-op if user exists with any role
