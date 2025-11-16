@@ -773,14 +773,25 @@ router.put('/:id/status', (req, res, next) => {
     if (!status) return res.status(400).json({ success: false, error: 'STATUS_REQUIRED' });
     const data: any = { status: String(status) };
     if (expiresAt) data.expiresAt = new Date(expiresAt);
-    // If moving to ACTIVE without a card, issue a card
-  const updated = await prisma.$transaction(async (tx) => {
-      const m = await tx.membership.update({ where: { id: req.params.id }, data });
+
+    // Allow the path param to be either membership.id OR an idCard.cardNumber
+    const identifier = String(req.params.id);
+    // Resolve membership first by id, then by cardNumber
+    let membershipRow = await prisma.membership.findUnique({ where: { id: identifier } }).catch(() => null);
+    if (!membershipRow) {
+      const card = await prisma.iDCard.findUnique({ where: { cardNumber: identifier } }).catch(() => null);
+      if (card && card.membershipId) membershipRow = await prisma.membership.findUnique({ where: { id: card.membershipId } }).catch(() => null);
+    }
+    if (!membershipRow) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+
+    const membershipId = membershipRow.id;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const m = await tx.membership.update({ where: { id: membershipId }, data });
       const hasCard = await tx.iDCard.findUnique({ where: { membershipId: m.id } }).catch(() => null);
       if (m.status === 'ACTIVE' && !hasCard) {
         const cardNumber = `ID-${Date.now().toString(36)}-${m.id.slice(-6)}`;
-  // Resolve validityDays from DesignationPrice override or designation default
-  let validityDays = 730; // global fallback policy: 2 years
+        let validityDays = 730; // global fallback policy: 2 years
         try {
           const avail = await (membershipService as any).getAvailability({
             cellCodeOrName: m.cellId,
@@ -792,13 +803,13 @@ router.put('/:id/status', (req, res, next) => {
             hrcDistrictId: m.hrcDistrictId || undefined,
             hrcMandalId: m.hrcMandalId || undefined,
           });
-          validityDays = (avail?.designation?.validityDays ?? 730);
+          validityDays = (avail?.designation?.validityDays ?? validityDays);
         } catch {}
-        const expiresAt = new Date(Date.now() + (validityDays * 24 * 60 * 60 * 1000));
-        await tx.iDCard.create({ data: { membershipId: m.id, cardNumber, expiresAt } });
+        const expires = new Date(Date.now() + (validityDays * 24 * 60 * 60 * 1000));
+        await tx.iDCard.create({ data: { membershipId: m.id, cardNumber, expiresAt: expires } });
       }
       return m;
-  }, { timeout: 15000 });
+    }, { timeout: 15000 });
     return res.json({ success: true, data: updated });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: 'STATUS_UPDATE_FAILED', message: e?.message });
