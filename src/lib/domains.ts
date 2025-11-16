@@ -29,13 +29,19 @@ export function getCanonicalDomain(): string {
     return process.env.EXTRA_DOMAIN;
   }
 
+  // Prefer SHARE_DOMAIN (used for share/deep-link canonical URLs)
+  if (process.env.SHARE_DOMAIN) {
+    console.log(`[Domain] Using SHARE_DOMAIN: ${process.env.SHARE_DOMAIN}`);
+    return process.env.SHARE_DOMAIN;
+  }
+
   // Environment-based domain selection
   const environment = process.env.NODE_ENV || 'development';
   
   const domainConfig: DomainConfig = {
-    development: process.env.DEV_DOMAIN || 'http://localhost:3000',
+    development: process.env.DEV_DOMAIN || process.env.DEV_BASE_URL || 'http://localhost:3000',
     staging: process.env.STAGING_DOMAIN || 'https://staging.example.com',
-    production: process.env.PROD_DOMAIN || 'https://app.example.com'
+    production: process.env.PROD_DOMAIN || process.env.PROD_BASE_URL || 'https://app.example.com'
   };
 
   let selectedDomain: string;
