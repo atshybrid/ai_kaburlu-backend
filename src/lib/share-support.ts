@@ -9,7 +9,10 @@ const DOMAIN = process.env.SHARE_DOMAIN || 'https://app.hrcitodaynews.in'; // mu
 const PACKAGE_NAME = process.env.ANDROID_PACKAGE_NAME || 'com.amoghnya.khabarx';
 const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=' + PACKAGE_NAME;
 // Replace with your RELEASE keystore SHA-256 fingerprint
-const ANDROID_SHA256 = process.env.ANDROID_SHA256_FINGERPRINT || 'YOUR_RELEASE_KEY_SHA256';
+// Fingerprints: allow multiple (debug + release) via ANDROID_SHA256_FINGERPRINTS or comma-separated single env
+const ANDROID_SHA256_SINGLE = process.env.ANDROID_SHA256_FINGERPRINT || 'YOUR_RELEASE_KEY_SHA256';
+const ANDROID_SHA256_MULTI = process.env.ANDROID_SHA256_FINGERPRINTS || ANDROID_SHA256_SINGLE;
+const ANDROID_FINGERPRINTS = ANDROID_SHA256_MULTI.split(/\s*,\s*/).filter(Boolean);
 
 export function registerShareSupport(app: Express) {
   // 1) Android App Links verification
@@ -20,7 +23,7 @@ export function registerShareSupport(app: Express) {
         target: {
           namespace: 'android_app',
           package_name: PACKAGE_NAME,
-          sha256_cert_fingerprints: [ANDROID_SHA256],
+          sha256_cert_fingerprints: ANDROID_FINGERPRINTS.length ? ANDROID_FINGERPRINTS : ['YOUR_RELEASE_KEY_SHA256'],
         },
       },
     ]);
@@ -263,4 +266,39 @@ function slugify(s: string): string {
 
 function esc(s = ''): string {
   return s.replace(/[&<>\"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c]!));
+}
+
+// Helper: resolve an arbitrary article URL/slug into canonical ID
+async function resolveArticleUrl(url: string): Promise<{ id: string } | null> {
+  try {
+    const patterns: RegExp[] = [
+      /\/article\/([a-zA-Z0-9]+)$/,
+      /\/([a-z]{2})\/short\/[^?]*?-([a-zA-Z0-9]+)$/,
+      /[?&]id=([a-zA-Z0-9]+)/,
+      /-(\d+)$/,
+    ];
+    for (const pattern of patterns) {
+      const match = url.match(pattern);
+      if (match) {
+        const captured = match[1] || match[2];
+        if (!captured) continue;
+        // If looks like canonical ID (alphanumeric length > 10 with letters)
+        if (/^[a-zA-Z0-9]{12,}$/.test(captured) && /[a-z]/i.test(captured)) {
+          return { id: captured };
+        }
+        // Numeric external id, map via slug suffix
+        if (/^\d+$/.test(captured)) {
+          const found = await prisma.shortNews.findFirst({
+            where: { slug: { endsWith: `-${captured}` } },
+            select: { id: true },
+          });
+          if (found) return { id: found.id };
+        }
+      }
+    }
+    return null;
+  } catch (e) {
+    console.error('resolveArticleUrl failure', e);
+    return null;
+  }
 }
