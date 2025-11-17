@@ -12,6 +12,8 @@ import { PrismaClient } from '@prisma/client';
 import { sleep } from './lib/promiseTimeout';
 import http from 'http';
 import { startDonationsReconcileJob, stopDonationsReconcileJob } from './jobs/donationsReconcile';
+import { startAdsExpiryScheduler } from './services/adsExpiryScheduler';
+import { waitForPrisma } from './lib/prismaWait';
 
 const prisma = new PrismaClient();
 
@@ -65,8 +67,16 @@ async function start() {
       console.log(`Swagger is running on http://${displayHost}:${port}/api/docs`);
     });
 
-    // start background jobs
-    startDonationsReconcileJob();
+    // Defer background jobs until DB reachable
+    (async () => {
+      const ok = await waitForPrisma({ verbose: true });
+      if (!ok) {
+        console.error('[startup] Database unreachable after retries; background jobs deferred.');
+        return;
+      }
+      startDonationsReconcileJob();
+      startAdsExpiryScheduler();
+    })();
 
     // Optional DB keepalive to reduce cold-start timeouts on PaaS
     const keepAliveMs = Number(process.env.DB_KEEPALIVE_MS || (process.env.ENV_TYPE === 'prod' ? 60000 : 0));

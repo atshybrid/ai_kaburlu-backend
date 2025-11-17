@@ -1026,6 +1026,7 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
       // derive canonical url and primary media
       const languageCode = l?.code || 'en';
       const canonicalUrl = buildCanonicalUrl(languageCode, i.slug || i.id, 'short');
+      const shortUrl = `${process.env.SHARE_DOMAIN || 'https://app.hrcitodaynews.in'}/s/${i.id}`;
       const mediaUrls = Array.isArray(i.mediaUrls) ? i.mediaUrls : [];
       const imageUrls = mediaUrls.filter((u: string) => /\.(webp|png|jpe?g|gif|avif)$/i.test(u));
       const videoUrls = mediaUrls.filter((u: string) => /\.(webm|mp4|mov|ogg)$/i.test(u));
@@ -1055,6 +1056,7 @@ export const listApprovedShortNews = async (req: Request, res: Response) => {
         primaryImageUrl,
         primaryVideoUrl,
         canonicalUrl,
+        shortUrl,
         jsonLd,
         languageId: i.language ?? null,
         languageName: l?.name ?? null,

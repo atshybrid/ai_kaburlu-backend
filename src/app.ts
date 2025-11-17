@@ -58,7 +58,6 @@ import donationDonorsRoutes from './api/donations/donors.routes';
 import meetRoutes from './api/meet/meet.routes';
 import adsRoutes from './api/ads/ads.routes';
 import paymentWebhookRoutes from './api/payments/webhook.routes';
-import { startAdsExpiryScheduler } from './services/adsExpiryScheduler';
 import adminBootstrapRoutes from './api/admin/bootstrap.routes';
 import { registerShareSupport } from './lib/share-support';
 
@@ -349,5 +348,3 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 
 export default app;
 
-// Start background schedulers (non-blocking)
-startAdsExpiryScheduler();

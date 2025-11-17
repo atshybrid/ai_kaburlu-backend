@@ -35,8 +35,8 @@ export function registerShareSupport(app: Express) {
     try {
       const id = String(req.params.id);
       
-      // Try to find as ShortNews first
-      const shortNews = await prisma.shortNews.findUnique({
+      // Try cuid direct, then numeric slug-suffix fallback
+      let shortNews = await prisma.shortNews.findUnique({
         where: { id },
         include: {
           author: {
@@ -48,6 +48,15 @@ export function registerShareSupport(app: Express) {
           category: true,
         },
       });
+      if (!shortNews && /^\d+$/.test(id)) {
+        shortNews = await prisma.shortNews.findFirst({
+          where: { slug: { endsWith: `-${id}` } },
+          include: {
+            author: { include: { profile: true, role: true } },
+            category: true,
+          },
+        });
+      }
 
       if (!shortNews) {
         return res.status(404).json({ error: 'NOT_FOUND' });
@@ -63,7 +72,8 @@ export function registerShareSupport(app: Express) {
 
       const slug = shortNews.slug || slugify(shortNews.title);
       const languageCode = language?.code || 'te';
-      const canonicalUrl = `${DOMAIN}/${languageCode}/short/${slug}-${id}`;
+      const canonicalUrl = `${DOMAIN}/${languageCode}/short/${slug}-${shortNews.id}`;
+      const shortUrl = `${DOMAIN}/s/${shortNews.id}`;
 
       // Extract primary image from mediaUrls
       const mediaUrls = Array.isArray(shortNews.mediaUrls) ? shortNews.mediaUrls : [];
@@ -78,6 +88,7 @@ export function registerShareSupport(app: Express) {
         body: shortNews.content,
         image: primaryImage, // must be public
         canonicalUrl,      // required by the app
+        shortUrl,
         category: shortNews.category?.name ?? 'General',
         createdAt: shortNews.createdAt.toISOString(),
         author: {
@@ -101,8 +112,9 @@ export function registerShareSupport(app: Express) {
     try {
       const id = String(req.params.id);
       const lang = String(req.params.lang);
+      const slugPart = String(req.params.slug);
       
-      const shortNews = await prisma.shortNews.findUnique({
+      let shortNews = await prisma.shortNews.findUnique({
         where: { id },
         include: {
           author: {
@@ -115,8 +127,22 @@ export function registerShareSupport(app: Express) {
         },
       });
 
+      // Fallback: numeric external id in URL but canonical cuid in DB (slug ends with -<externalId>)
       if (!shortNews) {
-        return res.status(404).send('Not found');
+        if (/^\d+$/.test(id)) {
+          shortNews = await prisma.shortNews.findFirst({
+            where: { slug: { endsWith: `-${id}` } },
+            include: {
+              author: {
+                include: { profile: true, role: true },
+              },
+              category: true,
+            },
+          });
+        }
+        if (!shortNews) {
+          return res.status(404).send('Not found');
+        }
       }
 
       const title = shortNews.title || 'News';
