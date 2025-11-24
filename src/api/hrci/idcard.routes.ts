@@ -260,10 +260,17 @@ router.get('/:cardNumber', async (req, res) => {
       levelLocation.countryName
     ].filter(Boolean).join(', ');
 
-    // Designation formatting with prefix
+    // Zone / designation formatting enhancements
+    const zoneMap: Record<string, string> = { NORTH: 'North Zone', SOUTH: 'South Zone', EAST: 'East Zone', WEST: 'West Zone', CENTRAL: 'Central Zone' };
     const prefixMap: Record<string, string> = { NATIONAL: 'National', ZONE: '', STATE: 'State', DISTRICT: 'District', MANDAL: 'Mandal' };
-    const prefix = prefixMap[String(membershipLevel || '').toUpperCase()] || '';
+    const levelKey = String(membershipLevel || '').toUpperCase();
+    const zoneDisplay = levelKey === 'ZONE'
+      ? (zoneValue ? (zoneMap[String(zoneValue).toUpperCase()] || `${String(zoneValue).toLowerCase().replace(/\b\w/g, c => c.toUpperCase())} Zone`) : 'Zone')
+      : null;
+    // For ZONE level, use the full zone display as prefix (e.g., "South Zone")
+    const prefix = levelKey === 'ZONE' ? (zoneDisplay || '') : (prefixMap[levelKey] || '');
     const designationDisplay = [prefix, designationName || ''].filter(Boolean).join(' ').trim() || designationName || '';
+    const designationWithZone = designationDisplay; // explicit alias requested
     const designationNameFormatted = designationDisplay;
 
     const baseHost = ((s?.qrLandingBaseUrl || `${req.protocol}://${req.get('host')}`) as string).replace(/\/$/, '');
@@ -291,11 +298,14 @@ router.get('/:cardNumber', async (req, res) => {
           createdAt: (card as any).createdAt,
           updatedAt: (card as any).updatedAt,
           membershipLevel,
+          zoneValue,
+          zoneDisplay,
           levelTitle,
           levelLocation,
           locationTitle,
           memberLocationName,
           designationDisplay,
+          designationWithZone,
           designationNameFormatted,
           profilePhotoUrl: profilePhotoUrl || null,
           photoUrl: profilePhotoUrl || null
@@ -589,6 +599,9 @@ router.get('/:cardNumber/html', async (req, res) => {
     else if (membershipLevel === 'DISTRICT') prefix = 'District';
     else if (membershipLevel === 'MANDAL') prefix = 'Mandal';
     const designationFormatted = designationName ? [prefix, designationName].filter(Boolean).join(' ') : '';
+    const zoneDisplay = membershipLevel === 'ZONE'
+      ? (zoneValue ? (zoneMap[String(zoneValue).toUpperCase()] || `${String(zoneValue).toLowerCase().replace(/\b\w/g,c=>c.toUpperCase())} Zone`) : 'Zone')
+      : null;
     // Location display
     let memberLocationName: string | undefined;
     try {
@@ -756,6 +769,7 @@ router.get('/:cardNumber/html', async (req, res) => {
         <p class="cell">${cellName || '-'}</p>
         <p class="name">${fullName || '-'}</p>
         <p class="desig">${designationFormatted || '-'}</p>
+        ${membershipLevel === 'ZONE' ? `<div class="row"><span class="lbl">Work Place</span><span>:</span><span class="val">${(zoneDisplay || 'Zone').toUpperCase()}</span></div>` : ''}
         <div class="row"><span class="lbl">Name</span><span>:</span><span class="val">${(fullName || '-').toUpperCase()}</span></div>
         <div class="row"><span class="lbl">Designation</span><span>:</span><span class="val">${(designationFormatted || '-').toUpperCase()}</span></div>
         ${cellName ? `<div class="row"><span class="lbl">Cell</span><span>:</span><span class="val">${cellName.toUpperCase()}</span></div>` : ''}
@@ -848,6 +862,10 @@ ${(() => {
     const svgPlaceholder = (text: string, w = 120, h = 80) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}'><rect width='100%' height='100%' fill='#fff'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='Verdana' font-size='14' fill='#555'>${text}</text></svg>`)}`;
     
     // Compute location display similar to CR80
+    const zoneMapAttached: Record<string,string> = { NORTH:'North Zone', SOUTH:'South Zone', EAST:'East Zone', WEST:'West Zone', CENTRAL:'Central Zone' };
+    const zoneDisplay = membershipLevel === 'ZONE'
+      ? (zoneValue ? (zoneMapAttached[String(zoneValue).toUpperCase()] || `${String(zoneValue).toLowerCase().replace(/\b\w/g,c=>c.toUpperCase())} Zone`) : 'Zone')
+      : null;
     let memberLocationName: string | undefined;
     try {
       if (membershipLevel === 'NATIONAL') {
@@ -856,12 +874,8 @@ ${(() => {
           memberLocationName = c?.name || 'India';
         } else memberLocationName = 'India';
       } else if (membershipLevel === 'ZONE') {
-        const c = hrcCountryId ? await (prisma as any).hrcCountry.findUnique({ where: { id: hrcCountryId } }) : null;
-        // Reuse CR80 prefix for zone title
-        const zmap: Record<string,string> = { NORTH:'North Zone', SOUTH:'South Zone', EAST:'East Zone', WEST:'West Zone', CENTRAL:'Central Zone' };
-        const zoneTitle = zoneValue ? (zmap[String(zoneValue).toUpperCase()] || `${String(zoneValue).toLowerCase().replace(/\b\w/g,c=>c.toUpperCase())} Zone`) : 'Zone';
-        // For display as Work Place, use Country name only for Zone
-        memberLocationName = c?.name || 'India';
+        // For zone, Work Place should show the zone itself (not country)
+        memberLocationName = zoneDisplay || 'Zone';
       } else if (membershipLevel === 'STATE' && hrcStateId) {
         const st = await (prisma as any).hrcState.findUnique({ where: { id: hrcStateId } });
         memberLocationName = st?.name;
@@ -894,7 +908,8 @@ ${(() => {
   // Unified effective Work Place rule for Attached
   const workPlace = (() => {
     const lvl = String(membershipLevel || '').toUpperCase();
-    if (lvl === 'NATIONAL' || lvl === 'ZONE') return (memberLocationName || 'India');
+    if (lvl === 'NATIONAL') return (memberLocationName || 'India');
+    if (lvl === 'ZONE') return zoneDisplay || 'Zone';
     return memberLocationName || '';
   })();
     const helpNumbers = [s?.contactNumber1, s?.contactNumber2].filter(Boolean).join(', ') || '+91-XXXX-XXXX-XX';
@@ -932,7 +947,7 @@ ${(() => {
           <span class="identity">IDENTITY CARD</span>
           <div class="member-info">
             <div><span class="label">Name</span><span class="colon">:</span><span class="value">${(fullName || '-').toString().toUpperCase()}</span></div>
-            <div><span class="label">Designation</span><span class="colon">:</span><span class="value">${(designationName || '-').toString().toUpperCase()}</span></div>
+            <div><span class="label">Designation</span><span class="colon">:</span><span class="value">${((membershipLevel === 'ZONE' ? (designationName ? [zoneDisplay, designationName].filter(Boolean).join(' ') : zoneDisplay) : designationName) || '-').toString().toUpperCase()}</span></div>
             ${cellName ? `<div><span class=\"label\">Cell</span><span class=\"colon\">:</span><span class=\"value\">${String(cellName).toUpperCase()}</span></div>` : ''}
             ${workPlace ? `<div><span class=\"label\">Work Place</span><span class=\"colon\">:</span><span class=\"value\">${String(workPlace).toUpperCase()}</span></div>` : ''}
             <div><span class="label">ID No</span><span class="colon">:</span><span class="value">${String(card.cardNumber || '').toUpperCase()}</span></div>
@@ -1059,8 +1074,14 @@ ${(() => {
     html = replaceIn(html, 'mobileNumber', fmtUpper(mobileNumber));
   // Use a formatted designation display (e.g., State Legal Secretary)
   const prefixMap: Record<string,string> = { NATIONAL:'National', ZONE:'', STATE:'State', DISTRICT:'District', MANDAL:'Mandal' };
-  const designationDisplay = [prefixMap[String(membershipLevel || '').toUpperCase()] || '', designationName || ''].filter(Boolean).join(' ').trim() || (designationName || '-').toString();
-  html = replaceIn(html, 'designationName', fmtUpper(designationDisplay));
+  const zoneMapFront: Record<string,string> = { NORTH:'North Zone', SOUTH:'South Zone', EAST:'East Zone', WEST:'West Zone', CENTRAL:'Central Zone' };
+  const zoneDisplayFront = (String(membershipLevel || '').toUpperCase() === 'ZONE')
+    ? (zoneValue ? (zoneMapFront[String(zoneValue).toUpperCase()] || `${String(zoneValue).toLowerCase().replace(/\b\w/g,c=>c.toUpperCase())} Zone`) : 'Zone')
+    : null;
+  const designationDisplayFront = (String(membershipLevel || '').toUpperCase() === 'ZONE')
+    ? [zoneDisplayFront, designationName || ''].filter(Boolean).join(' ').trim() || (designationName || '-').toString()
+    : [prefixMap[String(membershipLevel || '').toUpperCase()] || '', designationName || ''].filter(Boolean).join(' ').trim() || (designationName || '-').toString();
+  html = replaceIn(html, 'designationName', fmtUpper(designationDisplayFront));
   html = replaceIn(html, 'cellName', fmtUpper(cellName));
   // Compute effective Work Place for Poppins
   const effectiveWorkPlace = (() => {
@@ -1073,8 +1094,8 @@ ${(() => {
       } catch { return 'INDIA'; }
     }
     if (lvl === 'ZONE') {
-      // Work Place should be Country name
-      return 'INDIA';
+      // Work Place should show zone name
+      return (zoneDisplayFront || 'Zone').toUpperCase();
     }
     if (lvl === 'STATE') return String(workPlace || '').split(',')[0] || workPlace || '';
     if (lvl === 'DISTRICT') return String(workPlace || '').split(',')[0] || workPlace || '';
