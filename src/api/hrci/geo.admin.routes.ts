@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import multer from 'multer';
+import csv from 'csv-parser';
 import prisma from '../../lib/prisma';
 import { requireAuth, requireHrcAdmin } from '../middlewares/authz';
 
@@ -9,6 +11,7 @@ import { requireAuth, requireHrcAdmin } from '../middlewares/authz';
  *   description: Admin-only HRCI Geography management
  */
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 router.use(requireAuth, requireHrcAdmin);
 
@@ -195,6 +198,112 @@ router.post('/mandals/upload', async (req, res) => {
     }
     return res.json({ success: true, created, skipped, districtsCreated });
   } catch (e: any) { return res.status(500).json({ success: false, error: 'UPLOAD_FAILED', message: e?.message }); }
+});
+
+/**
+ * @swagger
+ * /hrci/geo/admin/districts/upload:
+ *   post:
+ *     tags: [HRCI Admin]
+ *     summary: Bulk upload districts (CSV)
+ *     description: |
+ *       Upload a CSV with columns: `stateId` and `name` (district name).
+ *       Optionally, you can use `stateCode` instead of `stateId`, and `district` or `districtName` instead of `name`.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: dryRun
+ *         schema: { type: boolean, default: false }
+ *         description: If true, validates and reports without writing to DB
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: Upload result
+ *       400:
+ *         description: No file uploaded or invalid CSV
+ */
+router.post('/districts/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, error: 'No file uploaded (field name: file)' });
+    const dryRun = String(req.query.dryRun || 'false') === 'true';
+
+    const rows: any[] = [];
+    // CSV parse from memory buffer
+    await new Promise<void>((resolve, reject) => {
+      const readable = new (require('stream').Readable)();
+      readable._read = () => {};
+      readable.push(req.file!.buffer);
+      readable.push(null);
+      readable
+        .pipe(csv({ skipComments: true }))
+        .on('data', (r: any) => rows.push(r))
+        .on('end', resolve)
+        .on('error', reject);
+    });
+
+    let created = 0, skipped = 0;
+    const errors: any[] = [];
+    for (const r of rows) {
+      try {
+        // Normalize headers case-insensitively
+        const keys = Object.keys(r).reduce<Record<string, any>>((acc, k) => { acc[k.toLowerCase()] = r[k]; return acc; }, {});
+        const stateId = (keys['stateid'] || '').toString().trim();
+        const stateCode = (keys['statecode'] || '').toString().trim();
+        const name = (keys['name'] || keys['district'] || keys['districtname'] || '').toString().trim();
+        if (!name || (!stateId && !stateCode)) { skipped++; continue; }
+
+        let resolvedStateId = stateId;
+        if (!resolvedStateId && stateCode) {
+          const st = await (prisma as any).hrcState.findFirst({ where: { code: stateCode }, select: { id: true } });
+          if (!st) { errors.push({ row: r, error: `STATE_NOT_FOUND: ${stateCode}` }); continue; }
+          resolvedStateId = st.id;
+        }
+
+        const exists = await (prisma as any).hrcDistrict.findFirst({ where: { stateId: resolvedStateId, name } });
+        if (exists) { skipped++; continue; }
+        if (!dryRun) {
+          await (prisma as any).hrcDistrict.create({ data: { stateId: resolvedStateId, name } });
+        }
+        created++;
+      } catch (e: any) {
+        errors.push({ row: r, error: e?.message });
+      }
+    }
+
+    return res.json({ success: true, counts: { rows: rows.length, created, skipped }, errors });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'UPLOAD_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * @swagger
+ * /hrci/geo/admin/districts/sample-csv:
+ *   get:
+ *     tags: [HRCI Admin]
+ *     summary: Download a sample CSV header for districts upload
+ *     responses:
+ *       200:
+ *         description: CSV header file
+ *         content:
+ *           text/csv:
+ *             schema:
+ *               type: string
+ */
+router.get('/districts/sample-csv', (_req, res) => {
+  const header = 'stateId,name\n';
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="districts_sample.csv"');
+  res.send(header);
 });
 
 export default router;
