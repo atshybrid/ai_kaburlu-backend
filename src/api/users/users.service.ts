@@ -27,9 +27,22 @@ export const getLocation = async (userId: string) => {
 };
 import prisma from '../../lib/prisma';
 import { hashMpin } from '../../lib/mpin';
+import { buildUserMobileLookupWhere, normalizeMobileNumber } from '../../lib/mobileNumber';
 
 export const createUser = async (data: any) => {
     const toCreate = { ...data };
+
+    if (toCreate.mobileNumber) {
+        const norm = normalizeMobileNumber(toCreate.mobileNumber);
+        toCreate.mobileNumber = norm || null;
+        if (norm) {
+            const existing = await prisma.user.findFirst({ where: buildUserMobileLookupWhere(norm) as any, select: { id: true } });
+            if (existing) {
+                throw new Error('Mobile number already registered');
+            }
+        }
+    }
+
     if (toCreate.mpin) {
         const hashed = await hashMpin(toCreate.mpin);
         toCreate.mpinHash = hashed;
@@ -47,12 +60,26 @@ export const findUserById = async (id: string) => {
 };
 
 export const findUserByMobileNumber = async (mobileNumber: string) => {
-  return prisma.user.findUnique({ where: { mobileNumber }, include: { role: true } });
+    const norm = normalizeMobileNumber(mobileNumber);
+    const where = buildUserMobileLookupWhere(norm || mobileNumber);
+    return prisma.user.findFirst({ where: where as any, include: { role: true } });
 };
 
 export const updateUser = async (id: string, data: any) => {
     const { roleId, languageId, ...rest } = data;
     const updateData: any = { ...rest };
+
+    if (Object.prototype.hasOwnProperty.call(updateData, 'mobileNumber')) {
+        const norm = normalizeMobileNumber(updateData.mobileNumber);
+        updateData.mobileNumber = norm || null;
+        if (norm) {
+            const existing = await prisma.user.findFirst({ where: buildUserMobileLookupWhere(norm) as any, select: { id: true } });
+            if (existing && existing.id !== id) {
+                throw new Error('Mobile number already registered');
+            }
+        }
+    }
+
     if (updateData.mpin) {
         updateData.mpinHash = await hashMpin(updateData.mpin);
         updateData.mpin = null;
@@ -91,63 +118,56 @@ export const upgradeGuest = async (data: any) => {
         throw new Error('Required roles not found');
     }
 
-    let user = await prisma.user.findFirst({
+    const normMobile = normalizeMobileNumber(mobileNumber);
+    if (!normMobile) throw new Error('Invalid mobile number');
+
+    // If this mobile already exists (any legacy formatting), reuse that user.
+    const existingByMobile = await prisma.user.findFirst({ where: buildUserMobileLookupWhere(normMobile) as any });
+
+    // Otherwise, if device is linked to a guest user, upgrade that guest.
+    const guestUser = await prisma.user.findFirst({
         where: {
             devices: { some: { deviceId } },
             roleId: guestRole.id,
         },
-        include: { devices: true }
     });
 
-    if (user) {
-        // If device already exists, just update user and mark guest as upgraded
-    let hashed = mpin ? await hashMpin(mpin) : undefined;
-    return (prisma as any).user.update({
-            where: { id: user.id },
-            data: {
-                mobileNumber,
-                mpinHash: hashed,
-                mpin: null,
-                email,
-                roleId: citizenReporterRole.id,
-                status: 'ACTIVE',
-                upgradedAt: new Date(), // If you have this field
-                devices: {
-                    upsert: {
-                        where: { deviceId },
-                        update: {
-                            deviceModel,
-                            pushToken
-                        },
-                        create: {
-                            deviceId,
-                            deviceModel,
-                            pushToken
-                        }
-                    }
-                }
-            },
-        });
-    } else {
-        // Create user and device together
-    let hashed = mpin ? await hashMpin(mpin) : undefined;
-    return (prisma as any).user.create({
-            data: {
-                mobileNumber,
-    mpinHash: hashed,
-    mpin: null,
-                email,
-                roleId: citizenReporterRole.id,
-                languageId,
-                status: 'ACTIVE',
-                devices: {
-                    create: [{
-                        deviceId,
-                        deviceModel,
-                        pushToken
-                    }]
-                }
-            },
-        });
-    }
+    const targetUser = existingByMobile || guestUser;
+    const hashed = mpin ? await hashMpin(mpin) : undefined;
+
+    const user = targetUser
+        ? await (prisma as any).user.update({
+              where: { id: targetUser.id },
+              data: {
+                  mobileNumber: normMobile,
+                  mpinHash: hashed,
+                  mpin: null,
+                  email,
+                  roleId: citizenReporterRole.id,
+                  languageId: languageId || targetUser.languageId,
+                  status: 'ACTIVE',
+                  upgradedAt: new Date(),
+              },
+          })
+        : await (prisma as any).user.create({
+              data: {
+                  mobileNumber: normMobile,
+                  mpinHash: hashed,
+                  mpin: null,
+                  email,
+                  roleId: citizenReporterRole.id,
+                  languageId,
+                  status: 'ACTIVE',
+                  upgradedAt: new Date(),
+              },
+          });
+
+    // Ensure device is linked to the target user (even if it previously belonged to a guest).
+    await prisma.device.upsert({
+        where: { deviceId },
+        update: { deviceModel, pushToken, userId: user.id },
+        create: { deviceId, deviceModel, pushToken, userId: user.id },
+    });
+
+    return user;
 };

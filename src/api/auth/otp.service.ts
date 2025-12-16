@@ -2,23 +2,27 @@ import { RequestOtpDto, VerifyOtpDto, SetMpinDto } from './otp.dto';
 import prisma from '../../lib/prisma';
 import { sendToUser } from '../../lib/fcm';
 import { hashMpin, verifyMpin, isBcryptHash } from '../../lib/mpin';
+import { buildUserMobileLookupWhere, normalizeMobileNumber } from '../../lib/mobileNumber';
 
 export class OtpService {
     async requestOtp(data: RequestOtpDto) {
+        const normMobile = normalizeMobileNumber(data.mobileNumber);
+        if (!normMobile) throw new Error('Invalid mobile number');
+
         const otp = Math.floor(1000 + Math.random() * 9000).toString();
         const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
         // Save OTP log to DB
         const otpLog = await prisma.otpLog.create({
             data: {
-                mobileNumber: data.mobileNumber,
+                mobileNumber: normMobile,
                 otp,
                 expiresAt,
             },
         });
 
         // Check if the mobile number is already registered
-    const user = await prisma.user.findUnique({ where: { mobileNumber: data.mobileNumber } });
+        const user = await prisma.user.findFirst({ where: buildUserMobileLookupWhere(normMobile) as any });
         const isRegistered = !!user;
 
         // Optional: deliver OTP via push notification to existing user's devices
@@ -28,7 +32,7 @@ export class OtpService {
                 const resp = await sendToUser(user.id, {
                     title: 'Your verification code',
                     body: `OTP: ${otp}`,
-                    data: { type: 'OTP', mobileNumber: data.mobileNumber },
+                    data: { type: 'OTP', mobileNumber: normMobile },
                 });
                 notification = { successCount: resp.successCount, failureCount: resp.failureCount } as any;
             } catch (e) {
@@ -38,7 +42,7 @@ export class OtpService {
         }
 
         // In a real application, you would also send the OTP via SMS.
-        console.log(`OTP for ${data.mobileNumber} is ${otp}`);
+        console.log(`OTP for ${normMobile} is ${otp}`);
         return { success: true, id: otpLog.id, isRegistered, notification };
     }
 
@@ -62,7 +66,10 @@ export class OtpService {
     }
 
     async setMpin(data: SetMpinDto) {
-        const user = await prisma.user.findUnique({ where: { mobileNumber: data.mobileNumber } });
+        const normMobile = normalizeMobileNumber(data.mobileNumber);
+        if (!normMobile) throw new Error('Invalid mobile number');
+
+        const user = await prisma.user.findFirst({ where: buildUserMobileLookupWhere(normMobile) as any });
         if (!user) throw new Error('User not found');
 
         const hashed = await hashMpin(data.mpin);
@@ -74,7 +81,12 @@ export class OtpService {
     }
 
     async getMpinStatus(mobileNumber: string) {
-    const user = await prisma.user.findUnique({ where: { mobileNumber }, include: { role: true } });
+        const normMobile = normalizeMobileNumber(mobileNumber);
+        if (!normMobile) {
+            return { mpinStatus: false, isRegistered: false, roleId: null, roleName: null };
+        }
+
+        const user = await prisma.user.findFirst({ where: buildUserMobileLookupWhere(normMobile) as any, include: { role: true } });
         if (!user) {
             return { mpinStatus: false, isRegistered: false, roleId: null, roleName: null };
         }

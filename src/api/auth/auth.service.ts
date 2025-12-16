@@ -3,8 +3,11 @@ export const logout = async (refreshToken: string, deviceId: string) => {
   // For now, just scaffold (no-op)
   return true;
 };
+import { buildUserMobileLookupWhere, normalizeMobileNumber } from '../../lib/mobileNumber';
 export const checkUserExists = async (mobile: string) => {
-  const user = await prisma.user.findUnique({ where: { mobileNumber: mobile } });
+  const norm = normalizeMobileNumber(mobile);
+  if (!norm) return false;
+  const user = await prisma.user.findFirst({ where: buildUserMobileLookupWhere(norm) as any });
   return !!user;
 };
 
@@ -36,10 +39,11 @@ const validateOtp = async (mobileNumber: string, otp: string): Promise<boolean> 
 
 export const login = async (loginDto: MpinLoginDto) => {
     console.log("loginDto", loginDto)
-  console.log("Attempting to log in with mobile number:", loginDto.mobileNumber);
-  const user = await findUserByMobileNumber(loginDto.mobileNumber);
+  const normMobile = normalizeMobileNumber(loginDto.mobileNumber);
+  console.log("Attempting to log in with mobile number:", normMobile || loginDto.mobileNumber);
+  const user = await findUserByMobileNumber(normMobile || loginDto.mobileNumber);
   if (!user) {
-    console.log("User not found for mobile number:", loginDto.mobileNumber);
+    console.log("User not found for mobile number:", normMobile || loginDto.mobileNumber);
     return null; // User not found
   }
   console.log("User found:", user);

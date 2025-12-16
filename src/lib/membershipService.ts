@@ -56,7 +56,30 @@ export async function getAvailability(q: AvailabilityQuery) {
   if (q.level === 'MANDAL') where.hrcMandalId = q.hrcMandalId;
 
   const used = await p.membership.count({ where });
-  const designationRemaining = designation.defaultCapacity - used;
+
+  // Seat numbers are globally unique per bucket (composite unique includes seatSequence without status filtering).
+  // So availability should reflect actual free seat numbers within 1..capacity, not only "active" row counts.
+  const seatBucketWhere: any = {
+    cellId: cell.id,
+    designationId: designation.id,
+    level: q.level,
+  };
+  if (q.level === 'ZONE') seatBucketWhere.zone = q.zone;
+  if (q.level === 'NATIONAL') seatBucketWhere.hrcCountryId = q.hrcCountryId;
+  if (q.level === 'STATE') seatBucketWhere.hrcStateId = q.hrcStateId;
+  if (q.level === 'DISTRICT') seatBucketWhere.hrcDistrictId = q.hrcDistrictId;
+  if (q.level === 'MANDAL') seatBucketWhere.hrcMandalId = q.hrcMandalId;
+
+  const seatRows = await p.membership.findMany({ where: seatBucketWhere, select: { seatSequence: true } });
+  const usedSeats = new Set<number>();
+  for (const r of seatRows) {
+    const s = (r as any).seatSequence;
+    if (typeof s === 'number' && s >= 1 && s <= designation.defaultCapacity) usedSeats.add(s);
+  }
+
+  const remainingBySeats = Math.max(0, designation.defaultCapacity - usedSeats.size);
+  const remainingByActive = Math.max(0, designation.defaultCapacity - used);
+  const designationRemaining = Math.min(remainingBySeats, remainingByActive);
   // Also compute aggregate usage across all designations for this cell+level if level cap exists
   let aggregate: any = undefined;
   if (levelCap) {
@@ -121,6 +144,31 @@ export async function joinSeat(req: JoinRequest) {
       return { accepted: false, reason: 'NO_SEATS_DESIGNATION', remaining: 0 };
     }
 
+    // Seat numbers must be unique per bucket across ALL rows (unique index includes seatSequence without filtering by status).
+    // To allow reuse after deletions/revocations, pick the smallest available seatSequence within 1..capacity.
+    const seatBucketWhere: any = {
+      cellId: cell.id,
+      designationId: designation.id,
+      level: req.level,
+    };
+    if (req.level === 'ZONE') seatBucketWhere.zone = req.zone;
+    if (req.level === 'NATIONAL') seatBucketWhere.hrcCountryId = req.hrcCountryId;
+    if (req.level === 'STATE') seatBucketWhere.hrcStateId = req.hrcStateId;
+    if (req.level === 'DISTRICT') seatBucketWhere.hrcDistrictId = req.hrcDistrictId;
+    if (req.level === 'MANDAL') seatBucketWhere.hrcMandalId = req.hrcMandalId;
+
+    const usedSeats = await tx.membership.findMany({ where: seatBucketWhere, select: { seatSequence: true } });
+    const used = new Set<number>();
+    for (const r of usedSeats) if (typeof r.seatSequence === 'number') used.add(r.seatSequence);
+    let nextSeat: number | null = null;
+    for (let i = 1; i <= designation.defaultCapacity; i++) {
+      if (!used.has(i)) { nextSeat = i; break; }
+    }
+    if (!nextSeat) {
+      // Should be rare (e.g. dirty data with seatSequence > capacity). Fail safe.
+      return { accepted: false, reason: 'NO_SEATS_DESIGNATION', remaining: 0 };
+    }
+
     // Enforce cell-level aggregate cap if present
     const levelCap = await tx.cellLevelCapacity.findFirst({
       where: {
@@ -170,7 +218,7 @@ export async function joinSeat(req: JoinRequest) {
   hrcMandalId: req.level === 'MANDAL' ? req.hrcMandalId : null,
   status: (requiresPayment ? 'PENDING_PAYMENT' : 'PENDING_APPROVAL'),
   paymentStatus: (requiresPayment ? 'PENDING' : 'NOT_REQUIRED'),
-        seatSequence: count + 1,
+        seatSequence: nextSeat,
         lockedAt: new Date()
       }
     });

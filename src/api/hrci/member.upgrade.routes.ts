@@ -112,8 +112,29 @@ router.post('/preview', requireAuth, requireHrcAdmin, async (req, res) => {
         }
       }
 
-      const maxSeat = await tx.membership.aggregate({ where: whereBase, _max: { seatSequence: true } });
-      const nextSeat = (maxSeat._max.seatSequence || 0) + 1;
+      // Pick the smallest available seatSequence within capacity (reuses freed seats and avoids unique collisions).
+      const seatBucketWhere: any = {
+        cellId: cellRow.id,
+        designationId: desigRow.id,
+        level: lvl,
+        NOT: { id: m.id },
+      };
+      if (lvl === 'ZONE') seatBucketWhere.zone = zone || null;
+      if (lvl === 'NATIONAL') seatBucketWhere.hrcCountryId = hrcCountryId || null;
+      if (lvl === 'STATE') seatBucketWhere.hrcStateId = hrcStateId || null;
+      if (lvl === 'DISTRICT') seatBucketWhere.hrcDistrictId = hrcDistrictId || null;
+      if (lvl === 'MANDAL') seatBucketWhere.hrcMandalId = hrcMandalId || null;
+
+      const seatsInUse = await tx.membership.findMany({ where: seatBucketWhere, select: { seatSequence: true } });
+      const usedSeats = new Set<number>();
+      for (const r of seatsInUse) if (typeof (r as any).seatSequence === 'number') usedSeats.add((r as any).seatSequence);
+      let nextSeat: number | null = null;
+      for (let i = 1; i <= desigRow.defaultCapacity; i++) {
+        if (!usedSeats.has(i)) { nextSeat = i; break; }
+      }
+      if (!nextSeat) {
+        return { accepted: false, reason: 'NO_SEATS_DESIGNATION', remaining: 0 };
+      }
 
       const availability = await (membershipService as any).getAvailability({
         cellCodeOrName: cellRow.id,
@@ -262,8 +283,29 @@ router.post('/apply', requireAuth, requireHrcAdmin, async (req, res) => {
         }
       }
 
-      const maxSeat = await tx.membership.aggregate({ where: whereBase, _max: { seatSequence: true } });
-      const nextSeat = (maxSeat._max.seatSequence || 0) + 1;
+      // Pick the smallest available seatSequence within capacity (reuses freed seats and avoids unique collisions).
+      const seatBucketWhere: any = {
+        cellId: cellRow.id,
+        designationId: desigRow.id,
+        level: lvl,
+        NOT: { id: m.id },
+      };
+      if (lvl === 'ZONE') seatBucketWhere.zone = zone || null;
+      if (lvl === 'NATIONAL') seatBucketWhere.hrcCountryId = hrcCountryId || null;
+      if (lvl === 'STATE') seatBucketWhere.hrcStateId = hrcStateId || null;
+      if (lvl === 'DISTRICT') seatBucketWhere.hrcDistrictId = hrcDistrictId || null;
+      if (lvl === 'MANDAL') seatBucketWhere.hrcMandalId = hrcMandalId || null;
+
+      const seatsInUse = await tx.membership.findMany({ where: seatBucketWhere, select: { seatSequence: true } });
+      const usedSeats = new Set<number>();
+      for (const r of seatsInUse) if (typeof (r as any).seatSequence === 'number') usedSeats.add((r as any).seatSequence);
+      let nextSeat: number | null = null;
+      for (let i = 1; i <= desigRow.defaultCapacity; i++) {
+        if (!usedSeats.has(i)) { nextSeat = i; break; }
+      }
+      if (!nextSeat) {
+        return { accepted: false, reason: 'NO_SEATS_DESIGNATION', remaining: 0 };
+      }
 
       const availability = await (membershipService as any).getAvailability({
         cellCodeOrName: cellRow.id,
@@ -566,8 +608,29 @@ router.post('/', requireAuth, requireHrcAdmin, async (req, res) => {
         }
       }
 
-      const maxSeat = await tx.membership.aggregate({ where: whereBase, _max: { seatSequence: true } });
-      const nextSeat = (maxSeat._max.seatSequence || 0) + 1;
+      // Pick the smallest available seatSequence within capacity (reuses freed seats and avoids unique collisions).
+      const seatBucketWhere: any = {
+        cellId: cellRow.id,
+        designationId: desigRow.id,
+        level: lvl,
+        NOT: { id: m.id },
+      };
+      if (lvl === 'ZONE') seatBucketWhere.zone = zone || null;
+      if (lvl === 'NATIONAL') seatBucketWhere.hrcCountryId = hrcCountryId || null;
+      if (lvl === 'STATE') seatBucketWhere.hrcStateId = hrcStateId || null;
+      if (lvl === 'DISTRICT') seatBucketWhere.hrcDistrictId = hrcDistrictId || null;
+      if (lvl === 'MANDAL') seatBucketWhere.hrcMandalId = hrcMandalId || null;
+
+      const seatsInUse = await tx.membership.findMany({ where: seatBucketWhere, select: { seatSequence: true } });
+      const usedSeats = new Set<number>();
+      for (const r of seatsInUse) if (typeof (r as any).seatSequence === 'number') usedSeats.add((r as any).seatSequence);
+      let nextSeat: number | null = null;
+      for (let i = 1; i <= desigRow.defaultCapacity; i++) {
+        if (!usedSeats.has(i)) { nextSeat = i; break; }
+      }
+      if (!nextSeat) {
+        return { accepted: false, reason: 'NO_SEATS_DESIGNATION', remaining: 0 };
+      }
 
       const availability = await (membershipService as any).getAvailability({
         cellCodeOrName: cellRow.id,

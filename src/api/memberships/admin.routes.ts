@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
+import { buildUserMobileLookupWhere, normalizeMobileNumber } from '../../lib/mobileNumber';
 import { requireAuth, requireAdmin, requireHrcAdmin } from '../middlewares/authz';
 import { generateNextIdCardNumber } from '../../lib/idCardNumber';
 import { hashMpin } from '../../lib/mpin';
@@ -89,7 +90,8 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
     let resolvedUserIds: string[] | undefined = undefined;
     if (userId) resolvedUserIds = [String(userId)];
     if (mobileNumber) {
-      const u = await prisma.user.findUnique({ where: { mobileNumber: String(mobileNumber) } }).catch(() => null);
+      const norm = normalizeMobileNumber(String(mobileNumber));
+      const u = norm ? await prisma.user.findFirst({ where: buildUserMobileLookupWhere(norm) as any }).catch(() => null) : null;
       if (u) resolvedUserIds = [u.id];
       else {
         // no user with that mobile -> empty result
@@ -370,7 +372,10 @@ router.post('/create-member', requireAuth, requireHrcAdmin, async (req, res) => 
     // Normalize optional strings: treat empty strings as null
     const normEmail = (typeof email === 'string' && email.trim() !== '') ? String(email) : null;
     const normProfilePhotoUrl = (typeof profilePhotoUrl === 'string' && profilePhotoUrl.trim() !== '') ? String(profilePhotoUrl) : null;
-    let user = await prisma.user.findUnique({ where: { mobileNumber: String(mobileNumber) } });
+    const normMobile = normalizeMobileNumber(String(mobileNumber));
+    if (!normMobile) return res.status(400).json({ success: false, error: 'INVALID_MOBILE' });
+
+    let user = await prisma.user.findFirst({ where: buildUserMobileLookupWhere(normMobile) as any });
     if (!user) {
       // Default MPIN: last 4 digits of mobileNumber (hashed into mpinHash)
       let mpinHashVal: string | undefined = undefined;
@@ -378,7 +383,7 @@ router.post('/create-member', requireAuth, requireHrcAdmin, async (req, res) => 
         const last4 = String(mobileNumber).slice(-4);
         if (last4) mpinHashVal = await hashMpin(last4);
       } catch {}
-      user = await prisma.user.create({ data: { mobileNumber: String(mobileNumber), email: normEmail, roleId: memberRole.id, languageId: langEn.id, status: 'ACTIVE', mpinHash: mpinHashVal || null } });
+      user = await prisma.user.create({ data: { mobileNumber: normMobile, email: normEmail, roleId: memberRole.id, languageId: langEn.id, status: 'ACTIVE', mpinHash: mpinHashVal || null } });
     } else {
       // Ensure role is at least MEMBER (do not downgrade HRCI_ADMIN etc.)
       // No-op if user exists with any role
@@ -414,7 +419,31 @@ router.post('/create-member', requireAuth, requireHrcAdmin, async (req, res) => 
         hrcMandalId: lvl === 'MANDAL' ? (hrcMandalId || null) : null,
         status,
         paymentStatus,
-        seatSequence: ((availability.designation.capacity - availability.designation.remaining) + 1),
+        // Pick the smallest available seat number within capacity (reuses freed seats after deletions/revokes).
+        seatSequence: await (async () => {
+          const seatBucketWhere: any = {
+            cellId: cellRow.id,
+            designationId: desigRow.id,
+            level: lvl,
+          };
+          if (lvl === 'ZONE') { seatBucketWhere.zone = zone || null; seatBucketWhere.hrcCountryId = hrcCountryId || null; }
+          if (lvl === 'NATIONAL') seatBucketWhere.hrcCountryId = hrcCountryId || null;
+          if (lvl === 'STATE') seatBucketWhere.hrcStateId = hrcStateId || null;
+          if (lvl === 'DISTRICT') seatBucketWhere.hrcDistrictId = hrcDistrictId || null;
+          if (lvl === 'MANDAL') seatBucketWhere.hrcMandalId = hrcMandalId || null;
+
+          const seatRows = await prisma.membership.findMany({ where: seatBucketWhere, select: { seatSequence: true } });
+          const used = new Set<number>();
+          for (const r of seatRows) {
+            const s = (r as any).seatSequence;
+            if (typeof s === 'number') used.add(s);
+          }
+          for (let i = 1; i <= desigRow.defaultCapacity; i++) {
+            if (!used.has(i)) return i;
+          }
+          // Fall back (shouldn't happen if availability.remaining > 0)
+          throw new Error('NO_SEATS_DESIGNATION');
+        })(),
         lockedAt: new Date(),
         activatedAt: status === 'ACTIVE' ? new Date() : null
       }
@@ -524,7 +553,7 @@ router.post('/create-member', requireAuth, requireHrcAdmin, async (req, res) => 
  *       409: { description: Capacity exhausted }
  *       500: { description: Internal error }
  */
-router.put('/:id/assign', requireAuth, requireHrcAdmin, async (req, res) => {
+const handleMembershipAssign = async (req: any, res: any) => {
   try {
     const membershipId = String(req.params.id);
     const { cell, designationCode, designationId, level, zone, hrcCountryId, hrcStateId, hrcDistrictId, hrcMandalId, dryRun } = req.body || {};
@@ -566,8 +595,8 @@ router.put('/:id/assign', requireAuth, requireHrcAdmin, async (req, res) => {
       if (lvl === 'DISTRICT') whereBase.hrcDistrictId = hrcDistrictId || null;
       if (lvl === 'MANDAL') whereBase.hrcMandalId = hrcMandalId || null;
 
-      const used = await tx.membership.count({ where: whereBase });
-      if (used >= desigRow.defaultCapacity) {
+      const usedCount = await tx.membership.count({ where: whereBase });
+      if (usedCount >= desigRow.defaultCapacity) {
         return { accepted: false, reason: 'NO_SEATS_DESIGNATION', remaining: 0 };
       }
 
@@ -600,9 +629,30 @@ router.put('/:id/assign', requireAuth, requireHrcAdmin, async (req, res) => {
         }
       }
 
-      // Determine next seatSequence for the target bucket (max+1 to avoid collisions)
-      const maxSeat = await tx.membership.aggregate({ where: whereBase, _max: { seatSequence: true } });
-      const nextSeat = (maxSeat._max.seatSequence || 0) + 1;
+      // Determine next seatSequence for the target bucket.
+      // Must be unique across ALL rows (unique index is not filtered by status), so we compute the smallest free seat within 1..capacity.
+      const seatBucketWhere: any = {
+        cellId: cellRow.id,
+        designationId: desigRow.id,
+        level: lvl,
+        NOT: { id: m.id },
+      };
+      if (lvl === 'ZONE') { seatBucketWhere.zone = zone || null; seatBucketWhere.hrcCountryId = hrcCountryId || null; }
+      if (lvl === 'NATIONAL') seatBucketWhere.hrcCountryId = hrcCountryId || null;
+      if (lvl === 'STATE') seatBucketWhere.hrcStateId = hrcStateId || null;
+      if (lvl === 'DISTRICT') seatBucketWhere.hrcDistrictId = hrcDistrictId || null;
+      if (lvl === 'MANDAL') seatBucketWhere.hrcMandalId = hrcMandalId || null;
+
+      const seatsInUse = await tx.membership.findMany({ where: seatBucketWhere, select: { seatSequence: true } });
+      const usedSeats = new Set<number>();
+      for (const r of seatsInUse) if (typeof (r as any).seatSequence === 'number') usedSeats.add((r as any).seatSequence);
+      let nextSeat: number | null = null;
+      for (let i = 1; i <= desigRow.defaultCapacity; i++) {
+        if (!usedSeats.has(i)) { nextSeat = i; break; }
+      }
+      if (!nextSeat) {
+        return { accepted: false, reason: 'NO_SEATS_DESIGNATION', remaining: 0 };
+      }
 
       // Price via availability resolver (reuses override logic)
       const availability = await (membershipService as any).getAvailability({
@@ -692,6 +742,273 @@ router.put('/:id/assign', requireAuth, requireHrcAdmin, async (req, res) => {
     }
     return res.status(500).json({ success: false, error: 'ASSIGN_FAILED', message });
   }
+};
+
+// API #1 (simple): change designation/location.
+// Existing endpoint retained; PATCH alias added for convenience.
+router.put('/:id/assign', requireAuth, requireHrcAdmin, handleMembershipAssign);
+
+/**
+ * @swagger
+ * /memberships/admin/{id}/change:
+ *   patch:
+ *     tags: [HRCI Membership - Admin APIs]
+ *     summary: Change membership designation/location (simple)
+ *     description: Alias of PUT /memberships/admin/{id}/assign. Performs seat availability checks and updates seatSequence.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [cell, level]
+ *             properties:
+ *               cell: { type: string, description: "Cell id or code or name" }
+ *               designationCode: { type: string, nullable: true }
+ *               designationId: { type: string, nullable: true }
+ *               level: { type: string, enum: [NATIONAL, ZONE, STATE, DISTRICT, MANDAL] }
+ *               zone: { type: string, nullable: true }
+ *               hrcCountryId: { type: string, nullable: true }
+ *               hrcStateId: { type: string, nullable: true }
+ *               hrcDistrictId: { type: string, nullable: true }
+ *               hrcMandalId: { type: string, nullable: true }
+ *               dryRun: { type: boolean, default: false }
+ *           example:
+ *             cell: "CELL-HRCI-01"
+ *             designationCode: "DISTRICT_HEAD"
+ *             level: "DISTRICT"
+ *             hrcDistrictId: "hrc_dist_guntur"
+ *             dryRun: true
+ *     responses:
+ *       200:
+ *         description: Change result / preview
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 accepted: true
+ *                 membershipId: "cmXXXX"
+ *                 to:
+ *                   cellId: "cmCell"
+ *                   designationId: "cmDesig"
+ *                   level: "DISTRICT"
+ *                   hrcDistrictId: "hrc_dist_guntur"
+ *                   seatSequence: 3
+ *                 pricing: { fee: 500, paid: 0, deltaDue: 500 }
+ *                 status:
+ *                   from: { status: "PENDING_PAYMENT", paymentStatus: "PENDING" }
+ *                   to: { status: "PENDING_PAYMENT", paymentStatus: "PENDING" }
+ *       400: { description: Validation error }
+ *       404: { description: Membership / cell / designation not found }
+ *       409: { description: Capacity exhausted }
+ *       500: { description: Internal error }
+ */
+router.patch('/:id/change', requireAuth, requireHrcAdmin, handleMembershipAssign);
+
+// API #2 (simple): delete (revoke) membership and free its seat number for reuse.
+
+/**
+ * @swagger
+ * /memberships/admin/by-user/{userId}:
+ *   delete:
+ *     tags: [HRCI Membership - Admin APIs]
+ *     summary: Delete membership by userId (best-practice revoke)
+ *     description: Revokes the latest non-revoked membership for a userId and frees its seat for reuse. Prefer DELETE /memberships/admin/{id} when you have membershipId.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Revoked
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               resolvedFrom: "USER_ID"
+ *               data:
+ *                 id: "cmXXXX"
+ *                 userId: "cmUser"
+ *                 status: "REVOKED"
+ *                 revokedAt: "2025-12-16T10:00:00.000Z"
+ *       404:
+ *         description: Not found
+ *         content:
+ *           application/json:
+ *             example: { success: false, error: "NOT_FOUND" }
+ *       500:
+ *         description: Internal error
+ */
+router.delete('/by-user/:userId', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const userId = String(req.params.userId);
+
+    const outcome = await prisma.$transaction(async (tx) => {
+      const m = await tx.membership.findFirst({
+        where: {
+          userId,
+          status: { in: ['ACTIVE', 'PENDING_APPROVAL', 'PENDING_PAYMENT'] },
+        },
+        orderBy: { createdAt: 'desc' },
+        include: { designation: true },
+      });
+
+      if (!m) {
+        return { ok: false as const, status: 404 as const, body: { success: false, error: 'NOT_FOUND' } };
+      }
+
+      const capacity = (m as any).designation?.defaultCapacity || 0;
+      const seatBucketWhere: any = {
+        cellId: m.cellId,
+        designationId: m.designationId,
+        level: m.level,
+        zone: m.zone ?? null,
+        hrcCountryId: m.hrcCountryId ?? null,
+        hrcStateId: m.hrcStateId ?? null,
+        hrcDistrictId: m.hrcDistrictId ?? null,
+        hrcMandalId: m.hrcMandalId ?? null,
+      };
+
+      const maxSeat = await tx.membership.aggregate({ where: seatBucketWhere, _max: { seatSequence: true } });
+      const currentMax = maxSeat._max.seatSequence || 0;
+      const newSeatSequence = Math.max(currentMax + 1, capacity + 1, 1);
+
+      const updated = await tx.membership.update({
+        where: { id: m.id },
+        data: {
+          status: 'REVOKED',
+          revokedAt: new Date(),
+          seatSequence: newSeatSequence,
+          idCardStatus: 'REVOKED',
+        },
+      });
+
+      await tx.iDCard.updateMany({
+        where: { membershipId: m.id },
+        data: { status: 'REVOKED' },
+      });
+
+      return { ok: true as const, status: 200 as const, body: { success: true, resolvedFrom: 'USER_ID', data: updated } };
+    }, { timeout: 15000 });
+
+    return res.status(outcome.status).json(outcome.body);
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'DELETE_FAILED', message: e?.message });
+  }
+});
+
+router.delete('/:id', requireAuth, requireHrcAdmin, async (req, res) => {
+  try {
+    const refId = String(req.params.id);
+
+    const outcome = await prisma.$transaction(async (tx) => {
+      let resolvedFrom: 'MEMBERSHIP_ID' | 'ID_CARD_ID' | 'ID_CARD_NUMBER' | 'PAYMENT_ID' | 'PAYMENT_INTENT_ID' = 'MEMBERSHIP_ID';
+      let membershipId = refId;
+
+      let m = await tx.membership.findUnique({ where: { id: membershipId }, include: { designation: true } });
+      if (!m) {
+        // Helpful resolution: allow admins to paste an IDCard id/cardNumber or payment/paymentIntent id.
+        const cardById = await tx.iDCard.findUnique({ where: { id: refId } }).catch(() => null);
+        const cardByNumber = !cardById ? await tx.iDCard.findUnique({ where: { cardNumber: refId } }).catch(() => null) : null;
+        const payment = await tx.membershipPayment.findUnique({ where: { id: refId } }).catch(() => null);
+        const intent = await (tx as any).paymentIntent?.findUnique
+          ? await (tx as any).paymentIntent.findUnique({ where: { id: refId } }).catch(() => null)
+          : null;
+
+        if (cardById?.membershipId) { membershipId = cardById.membershipId; resolvedFrom = 'ID_CARD_ID'; }
+        else if (cardByNumber?.membershipId) { membershipId = cardByNumber.membershipId; resolvedFrom = 'ID_CARD_NUMBER'; }
+        else if ((payment as any)?.membershipId) { membershipId = (payment as any).membershipId; resolvedFrom = 'PAYMENT_ID'; }
+        else if ((intent as any)?.membershipId) { membershipId = (intent as any).membershipId; resolvedFrom = 'PAYMENT_INTENT_ID'; }
+
+        m = await tx.membership.findUnique({ where: { id: membershipId }, include: { designation: true } });
+      }
+
+      if (!m) {
+        // Provide a safe hint to the caller to reduce confusion.
+        const membershipsForUser = await tx.membership.findMany({
+          where: { userId: refId },
+          take: 5,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            status: true,
+            paymentStatus: true,
+            level: true,
+            zone: true,
+            cellId: true,
+            designationId: true,
+            seatSequence: true,
+            createdAt: true,
+          },
+        }).catch(() => []);
+
+        return {
+          ok: false as const,
+          status: 404 as const,
+          body: {
+            success: false,
+            error: 'NOT_FOUND',
+            hint: {
+              message: 'No membership found for this id. Ensure you are passing Membership.id (or paste IDCard.id / cardNumber / MembershipPayment.id / PaymentIntent.id).',
+              membershipsForUserId: membershipsForUser,
+            },
+          },
+        };
+      }
+
+      // IMPORTANT:
+      // seatSequence is part of a UNIQUE composite key that is not filtered by status.
+      // To truly free the seat number for reuse, we move the revoked membership out of the in-capacity range.
+      const capacity = (m as any).designation?.defaultCapacity || 0;
+      const seatBucketWhere: any = {
+        cellId: m.cellId,
+        designationId: m.designationId,
+        level: m.level,
+        zone: m.zone ?? null,
+        hrcCountryId: m.hrcCountryId ?? null,
+        hrcStateId: m.hrcStateId ?? null,
+        hrcDistrictId: m.hrcDistrictId ?? null,
+        hrcMandalId: m.hrcMandalId ?? null,
+      };
+
+      const maxSeat = await tx.membership.aggregate({ where: seatBucketWhere, _max: { seatSequence: true } });
+      const currentMax = maxSeat._max.seatSequence || 0;
+      const newSeatSequence = Math.max(currentMax + 1, capacity + 1, 1);
+
+      const updated = await tx.membership.update({
+        where: { id: m.id },
+        data: {
+          status: 'REVOKED',
+          revokedAt: new Date(),
+          seatSequence: newSeatSequence,
+          idCardStatus: 'REVOKED',
+        },
+      });
+
+      // IDCard is linked by membershipId (unique)
+      await tx.iDCard.updateMany({
+        where: { membershipId: m.id },
+        data: { status: 'REVOKED' },
+      });
+
+      return { ok: true as const, status: 200 as const, body: { success: true, resolvedFrom, data: updated } };
+    }, { timeout: 15000 });
+
+    return res.status(outcome.status).json(outcome.body);
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'DELETE_FAILED', message: e?.message });
+  }
 });
 
 /**
@@ -716,6 +1033,37 @@ router.put('/:id/assign', requireAuth, requireHrcAdmin, async (req, res) => {
  *               $ref: '#/components/schemas/SuccessResponseMembership'
  *       404: { description: Not found }
  *       500: { description: Internal error }
+ *   delete:
+ *     tags: [HRCI Membership - Admin APIs]
+ *     summary: Delete membership (best-practice revoke) and free seat
+ *     description: Revokes the membership (keeps history) and moves seatSequence out of the in-capacity range so the seat can be reused.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Revoked
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               resolvedFrom: "MEMBERSHIP_ID"
+ *               data:
+ *                 id: "cmXXXX"
+ *                 status: "REVOKED"
+ *                 revokedAt: "2025-12-16T10:00:00.000Z"
+ *                 seatSequence: 99
+ *       404:
+ *         description: Not found
+ *         content:
+ *           application/json:
+ *             example: { success: false, error: "NOT_FOUND" }
+ *       500:
+ *         description: Internal error
  */
 // Important: avoid matching '/discounts' as ':id' to ensure HRCI discount routes work
 router.get('/:id', (req, res, next) => {

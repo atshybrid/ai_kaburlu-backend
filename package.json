@@ -40,7 +40,9 @@
     "db:discounts:apply": "npx prisma db execute --file scripts/sql/add_discount_table.sql --schema prisma/schema.prisma",
     "hrci:letters:regen": "npx ts-node scripts/regenerate_all_appointment_letters.ts",
     "hrci:geo:check-dupes": "npx ts-node scripts/check_hrci_geo_duplicates.ts",
-    "hrci:geo:fix-caps": "cross-env FIX_CAPS=1 npx ts-node scripts/check_hrci_geo_duplicates.ts"
+    "hrci:geo:fix-caps": "cross-env FIX_CAPS=1 npx ts-node scripts/check_hrci_geo_duplicates.ts",
+    "check:mobile-dupes": "node scripts/check_mobile_duplicates.js",
+    "backup:db": "node scripts/backup_db.js"
   },
   "engines": {
     "node": ">=18.0.0"

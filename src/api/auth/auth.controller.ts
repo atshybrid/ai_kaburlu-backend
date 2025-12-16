@@ -86,17 +86,24 @@ import * as bcrypt from 'bcrypt';
 import { getAdmin } from '../../lib/firebase';
 import { verifyToken } from '../../lib/tokenVerification';
 import jwtLib from 'jsonwebtoken';
+import { buildUserMobileLookupWhere, normalizeMobileNumber } from '../../lib/mobileNumber';
 
 export const upgradeGuestController = async (req: Request, res: Response) => {
   try {
     const { deviceId, mobileNumber, mpin, email } = req.body;
+    const normMobile = normalizeMobileNumber(mobileNumber);
+    if (!normMobile) {
+      return res.status(400).json({ error: 'Invalid mobile number' });
+    }
+
+    // If this mobile is already registered (any formatting), link the device to that user and update MPIN/email.
+    const existing = await prisma.user.findFirst({ where: buildUserMobileLookupWhere(normMobile) as any });
+
     // Find guest user by deviceId
     const guestUser = await prisma.user.findFirst({
       where: { devices: { some: { deviceId } }, role: { name: 'GUEST' } }
     });
-    if (!guestUser) {
-      return res.status(404).json({ error: 'Guest user not found' });
-    }
+
     // Hash the MPIN before storing
     const hashedMpin = await bcrypt.hash(mpin, 10);
     // Upgrade user: set role to CITIZEN_REPORTER, update details, keep languageId
@@ -104,17 +111,30 @@ export const upgradeGuestController = async (req: Request, res: Response) => {
     if (!citizenRole) {
       return res.status(500).json({ error: 'Citizen reporter role not found' });
     }
+    const target = existing || guestUser;
+    if (!target) {
+      return res.status(404).json({ error: 'Guest user not found' });
+    }
+
     const updatedUser = await prisma.user.update({
-      where: { id: guestUser.id },
+      where: { id: target.id },
       data: {
-        mobileNumber,
+        mobileNumber: normMobile,
         mpin: hashedMpin,
         email,
         roleId: citizenRole.id,
-        languageId: guestUser.languageId,
+        languageId: target.languageId,
         status: 'ACTIVE'
       }
     });
+
+    // Ensure device is linked to the upgraded user (prevents duplicate accounts across devices).
+    await prisma.device.upsert({
+      where: { deviceId },
+      update: { userId: updatedUser.id },
+      create: { deviceId, deviceModel: 'unknown', userId: updatedUser.id }
+    });
+
     res.json({ success: true, user: updatedUser });
   } catch (error) {
     res.status(500).json({ error: 'Internal server error' });
@@ -147,6 +167,11 @@ export const createCitizenReporterByMobileController = async (req: Request, res:
     if (!mobileNumber || !mpin || !fullName || !location || !languageId) {
       return res.status(400).json({ success: false, message: 'mobileNumber, mpin, fullName, languageId and location are required' });
     }
+
+    const normMobile = normalizeMobileNumber(mobileNumber);
+    if (!normMobile) {
+      return res.status(400).json({ success: false, message: 'Invalid mobileNumber' });
+    }
     if (!/^\d{4}$/.test(mpin)) {
       return res.status(400).json({ success: false, message: 'mpin must be a 4-digit number' });
     }
@@ -164,8 +189,8 @@ export const createCitizenReporterByMobileController = async (req: Request, res:
 
     const hashedMpin = await bcrypt.hash(mpin, 10);
 
-    // Try to find an existing user by mobile or a guest user linked via deviceId
-    let user = await prisma.user.findFirst({ where: { mobileNumber } });
+    // Try to find an existing user by mobile (any formatting) or a guest user linked via deviceId
+    let user = await prisma.user.findFirst({ where: buildUserMobileLookupWhere(normMobile) as any });
     if (!user && deviceId) {
       const guestUser = await prisma.user.findFirst({ where: { devices: { some: { deviceId } }, role: { name: 'GUEST' } } });
       if (guestUser) user = guestUser;
@@ -175,7 +200,7 @@ export const createCitizenReporterByMobileController = async (req: Request, res:
       user = await prisma.user.update({
         where: { id: user.id },
         data: {
-          mobileNumber,
+          mobileNumber: normMobile,
           mpin: hashedMpin,
           roleId: citizenRole.id,
           languageId: lang.id,
@@ -186,7 +211,7 @@ export const createCitizenReporterByMobileController = async (req: Request, res:
     } else {
       user = await prisma.user.create({
         data: {
-          mobileNumber,
+          mobileNumber: normMobile,
           mpin: hashedMpin,
           roleId: citizenRole.id,
           languageId: lang.id,

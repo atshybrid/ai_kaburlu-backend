@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
+import { buildUserMobileLookupWhere, normalizeMobileNumber } from '../../lib/mobileNumber';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -70,14 +71,21 @@ router.post('/bootstrap-accounts', requireBootstrapToken, async (req, res) => {
       if (!languageId) {
         throw new Error('No language found in DB; seed languages first');
       }
-      const where: any = input.email ? { email: input.email } : { mobileNumber: input.mobileNumber };
-      let existing = await prisma.user.findFirst({ where: { OR: [ { mobileNumber: input.mobileNumber || '' }, { email: input.email || '' } ] } });
+      const normMobile = input.mobileNumber ? normalizeMobileNumber(input.mobileNumber) : '';
+      const existing = await prisma.user.findFirst({
+        where: {
+          OR: [
+            ...(normMobile ? [buildUserMobileLookupWhere(normMobile) as any] : []),
+            ...(input.email ? [{ email: input.email }] : []),
+          ],
+        } as any,
+      });
       const dataBase: any = {
         roleId,
         languageId,
         status: 'ACTIVE'
       };
-      if (input.mobileNumber) dataBase.mobileNumber = input.mobileNumber;
+      if (input.mobileNumber) dataBase.mobileNumber = normMobile || input.mobileNumber;
       if (input.email) dataBase.email = input.email;
       if (input.mpin) {
         // Store hashed; if your app uses mpin (plain) elsewhere, adjust accordingly

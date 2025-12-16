@@ -7,7 +7,11 @@ export const createUser = async (req: Request, res: Response) => {
     const user = await userService.createUser(req.body);
     res.status(201).json({ success: true, data: user });
   } catch (error) {
-    res.status(500).json({ success: false, message: (error as Error).message });
+        const msg = (error as Error).message || 'Internal server error';
+        if (msg.toLowerCase().includes('mobile number already')) {
+            return res.status(409).json({ success: false, message: msg });
+        }
+        res.status(500).json({ success: false, message: msg });
   }
 };
 
@@ -40,7 +44,11 @@ export const updateUser = async (req: Request, res: Response) => {
         }
         res.status(200).json({ success: true, data: user });
     } catch (error) {
-        res.status(500).json({ success: false, message: (error as Error).message });
+        const msg = (error as Error).message || 'Internal server error';
+        if (msg.toLowerCase().includes('mobile number already')) {
+            return res.status(409).json({ success: false, message: msg });
+        }
+        res.status(500).json({ success: false, message: msg });
     }
 };
 
@@ -58,6 +66,13 @@ export const upgradeGuest = async (req: Request, res: Response) => {
         const user = await userService.upgradeGuest(req.body);
         res.status(200).json({ success: true, data: user });
     } catch (error) {
-        res.status(500).json({ success: false, message: (error as Error).message });
+        const msg = (error as Error).message || 'Internal server error';
+        if (msg.toLowerCase().includes('invalid mobile')) {
+            return res.status(400).json({ success: false, message: msg });
+        }
+        if (msg.toLowerCase().includes('mobile number already')) {
+            return res.status(409).json({ success: false, message: msg });
+        }
+        res.status(500).json({ success: false, message: msg });
     }
 };
