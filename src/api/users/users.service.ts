@@ -51,8 +51,36 @@ export const createUser = async (data: any) => {
     return (prisma as any).user.create({ data: toCreate as any });
 };
 
-export const findAllUsers = async () => {
-  return prisma.user.findMany({ include: { role: true } });
+export const findAllUsers = async (page = 1, limit = 20, search?: string) => {
+  const skip = (page - 1) * limit;
+  const where: any = {};
+  if (search) {
+    where.OR = [
+      { mobileNumber: { contains: search } },
+      { email: { contains: search, mode: 'insensitive' } },
+    ];
+  }
+  const [users, total] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      select: {
+        id: true,
+        mobileNumber: true,
+        email: true,
+        status: true,
+        languageId: true,
+        createdAt: true,
+        updatedAt: true,
+        role: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit,
+    }),
+    prisma.user.count({ where }),
+  ]);
+  const totalPages = Math.ceil(total / limit) || 1;
+  return { users, total, page, limit, totalPages };
 };
 
 export const findUserById = async (id: string) => {

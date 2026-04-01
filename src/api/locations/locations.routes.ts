@@ -211,4 +211,51 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
         res.status(400).json({ error: error.message });
     }
 });
+
+/**
+ * @swagger
+ * /locations/districts/bulk-upload:
+ *   post:
+ *     summary: Bulk upload districts via CSV file
+ *     tags: [Locations]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: CSV file with district data.
+ *     responses:
+ *       200:
+ *         description: Districts uploaded successfully.
+ *       400:
+ *         description: Bad request, please check the file format.
+ *     x-csv-example:
+ *       districtName,stateId,stateName
+ *       Bengaluru Urban,,Karnataka
+ *       Mysuru,,Karnataka
+ *       Hassan,,Karnataka
+ *       Tumakuru,,Karnataka
+ *       Ramanagara,,Karnataka
+ *       Shivamogga,,Karnataka
+ *     x-field-explanations:
+ *       - districtName: The district name to insert (required).
+ *       - stateId: The ID of the state (optional if stateName provided).
+ *       - stateName: The name of the state (optional if stateId provided). When both are present, stateId takes precedence.
+ */
+router.post('/districts/bulk-upload', upload.single('file'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).send('No file uploaded.');
+    }
+    try {
+        const result = await locationService.bulkUploadDistricts(req.file.path);
+        res.status(200).json({ message: 'Districts uploaded successfully', result });
+    } catch (error: any) {
+        res.status(400).json({ error: error.message });
+    }
+});
 export default router;

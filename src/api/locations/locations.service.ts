@@ -105,3 +105,53 @@ export const bulkUploadLocations = (filePath: string): Promise<any> => {
             });
     });
 };
+
+// Bulk upload Districts from CSV (non-destructive):
+// Columns: stateId?, stateName?, districtName
+export const bulkUploadDistricts = (filePath: string): Promise<any> => {
+    return new Promise((resolve, reject) => {
+        const rows: any[] = [];
+        fs.createReadStream(filePath)
+            .pipe(csv())
+            .on('data', (row) => {
+                const districtName = String(row.districtName || '').trim();
+                const stateId = row.stateId ? String(row.stateId).trim() : '';
+                const stateName = row.stateName ? String(row.stateName).trim() : '';
+                if (!districtName || (!stateId && !stateName)) {
+                    return; // skip invalid row
+                }
+                rows.push({ districtName, stateId, stateName });
+            })
+            .on('end', async () => {
+                try {
+                    if (rows.length === 0) {
+                        fs.unlinkSync(filePath);
+                        return reject(new Error('CSV file is empty or headers are incorrect. Expected headers: districtName,stateId?,stateName?'));
+                    }
+                    let created = 0, skipped = 0;
+                    for (const r of rows) {
+                        let state: any = null;
+                        if (r.stateId) {
+                            state = await prisma.state.findUnique({ where: { id: r.stateId } });
+                        } else if (r.stateName) {
+                            state = await prisma.state.findUnique({ where: { name: r.stateName } });
+                        }
+                        if (!state) { skipped++; continue; }
+                        const exists = await prisma.district.findFirst({ where: { name: r.districtName, stateId: state.id } });
+                        if (exists) { skipped++; continue; }
+                        await prisma.district.create({ data: { name: r.districtName, stateId: state.id } });
+                        created++;
+                    }
+                    fs.unlinkSync(filePath);
+                    resolve({ created, skipped, total: rows.length });
+                } catch (error) {
+                    fs.unlinkSync(filePath);
+                    reject(error);
+                }
+            })
+            .on('error', (error) => {
+                fs.unlinkSync(filePath);
+                reject(error);
+            });
+    });
+};

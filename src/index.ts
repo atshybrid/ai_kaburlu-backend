@@ -15,6 +15,16 @@ import { startDonationsReconcileJob, stopDonationsReconcileJob } from './jobs/do
 import { startAdsExpiryScheduler } from './services/adsExpiryScheduler';
 import { waitForPrisma } from './lib/prismaWait';
 
+// Ensure Prisma gets a usable DATABASE_URL by falling back to ENV_TYPE-specific URLs
+const envType = String(process.env.ENV_TYPE || '').toLowerCase();
+if (!process.env.DATABASE_URL) {
+  if (envType === 'prod' && process.env.PROD_DATABASE_URL) {
+    process.env.DATABASE_URL = process.env.PROD_DATABASE_URL;
+  } else if (process.env.DEV_DATABASE_URL) {
+    process.env.DATABASE_URL = process.env.DEV_DATABASE_URL;
+  }
+}
+
 const prisma = new PrismaClient();
 
 // ensure PORT is a number

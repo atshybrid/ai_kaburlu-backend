@@ -34,6 +34,8 @@ import preferencesRoutes from './api/preferences/preferences.routes';
 import legalRoutes from './api/legal/legal.routes';
 import prisma from './lib/prisma';
 import { Request, Response } from 'express';
+import policiesRoutes from './api/policies/policies.routes';
+import legacyPoliciesRoutes from './api/policies/legacyPolicies.routes';
 import { Router } from 'express';
 import geoHrcRoutes from './api/hrci/geo.routes';
 import geoHrcAdminRoutes from './api/hrci/geo.admin.routes';
@@ -186,6 +188,7 @@ app.use('/devices', devicesRoutes);
 app.use('/notifications', notificationsRoutes);
 app.use('/prompts', promptsRoutes);
 app.use('/preferences', preferencesRoutes);
+<<<<<<< HEAD
 app.use('/legal', legalRoutes);
 app.use('/org/settings', orgSettingsRoutes);
 app.use('/donations', donationsRoutes);
@@ -267,6 +270,7 @@ apiV1.use('/devices', devicesRoutes);
 apiV1.use('/notifications', notificationsRoutes);
 apiV1.use('/prompts', promptsRoutes);
 apiV1.use('/preferences', preferencesRoutes);
+<<<<<<< HEAD
 apiV1.use('/legal', legalRoutes);
 apiV1.use('/org/settings', orgSettingsRoutes);
 apiV1.use('/donations', donationsRoutes);
@@ -313,8 +317,39 @@ if (String(process.env.ENABLE_INTERNAL_TEST_ROUTES) === '1') {
     }
   });
 }
+apiV1.use('/policies', policiesRoutes);
+apiV1.use('/policies', legacyPoliciesRoutes);
 app.use('/api/v1', apiV1);
 
+// Public policies convenience path
+app.use('/policies', policiesRoutes);
+app.use('/policies', legacyPoliciesRoutes);
+
+// Android App Links verification file served from the backend so Play Console can validate domains
+app.get('/.well-known/assetlinks.json', (_req, res) => {
+  const packageName = process.env.ANDROID_PACKAGE_NAME || 'com.amoghnya.khabarx';
+  const rawFingerprints = process.env.ANDROID_SHA256_FINGERPRINT || '';
+  const fingerprints = rawFingerprints
+    .split(',')
+    .map(fp => fp.trim())
+    .filter(Boolean);
+
+  if (!fingerprints.length) {
+    return res.status(500).json({ error: 'Missing ANDROID_SHA256_FINGERPRINT env value' });
+  }
+
+  res.setHeader('Content-Type', 'application/json');
+  res.status(200).json([
+    {
+      relation: ['delegate_permission/common.handle_all_urls'],
+      target: {
+        namespace: 'android_app',
+        package_name: packageName,
+        sha256_cert_fingerprints: fingerprints
+      }
+    }
+  ]);
+});
 
 // Protected sample route
 app.get(

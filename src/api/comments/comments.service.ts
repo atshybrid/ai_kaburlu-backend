@@ -115,10 +115,11 @@ export interface GetCommentsParams {
 }
 
 export const getComments = async ({ articleId, shortNewsId, depth = 5 }: GetCommentsParams) => {
-  const where: any = {};
+  const where: any = { parentId: null }; // Only fetch top-level comments; replies come via nested includes
   if (articleId) where.articleId = articleId;
   if (shortNewsId) where.shortNewsId = shortNewsId;
 
+<<<<<<< HEAD
   // Workaround for Prisma type limitation on deep self-relation include chain
   const includeObj: any = {
     user: {
@@ -140,7 +141,7 @@ export const getComments = async ({ articleId, shortNewsId, depth = 5 }: GetComm
     include: includeObj,
     orderBy: { createdAt: 'desc' }
   });
-  return comments.filter(c => !c.parentId);
+  return comments;
 };
 
 export const updateComment = async (id: string, commentDto: UpdateCommentDto) => {

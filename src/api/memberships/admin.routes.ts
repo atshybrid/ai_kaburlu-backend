@@ -61,6 +61,8 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
       designationCode,
       memberName,
       mobileNumber,
+      search,
+      name,
       zone,
       hrcCountryId,
       hrcStateId,
@@ -69,6 +71,9 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
     } = req.query as any;
     const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 20));
     const cursor = (req.query.cursor as string) || undefined;
+
+    // search / name is an OR alias that matches both memberName and mobileNumber
+    const searchTerm: string | undefined = search || name || undefined;
 
     // Resolve cell filter (accept id/code/name)
     let resolvedCellId: string | undefined = undefined;
@@ -89,6 +94,22 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
     // Resolve user filter from mobileNumber if provided
     let resolvedUserIds: string[] | undefined = undefined;
     if (userId) resolvedUserIds = [String(userId)];
+
+    // search/name: OR match on mobile number AND full name simultaneously
+    if (searchTerm) {
+      const norm = normalizeMobileNumber(searchTerm);
+      const [mobileMatches, nameMatches] = await Promise.all([
+        norm ? prisma.user.findMany({ where: buildUserMobileLookupWhere(norm) as any, select: { id: true } }).catch(() => []) : Promise.resolve([]),
+        prisma.userProfile.findMany({ where: { fullName: { contains: searchTerm, mode: 'insensitive' } }, select: { userId: true } }),
+      ]);
+      const mobileIds = mobileMatches.map((u: any) => u.id);
+      const nameIds = nameMatches.map((p: any) => p.userId);
+      const combined = Array.from(new Set([...mobileIds, ...nameIds]));
+      if (combined.length === 0) return res.json({ success: true, count: 0, nextCursor: null, data: [] });
+      resolvedUserIds = resolvedUserIds ? resolvedUserIds.filter((id) => combined.includes(id)) : combined;
+      if (!resolvedUserIds || resolvedUserIds.length === 0) return res.json({ success: true, count: 0, nextCursor: null, data: [] });
+    }
+
     if (mobileNumber) {
       const norm = normalizeMobileNumber(String(mobileNumber));
       const u = norm ? await prisma.user.findFirst({ where: buildUserMobileLookupWhere(norm) as any }).catch(() => null) : null;

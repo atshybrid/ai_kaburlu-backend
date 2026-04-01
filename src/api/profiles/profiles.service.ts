@@ -1,8 +1,5 @@
-
-import { PrismaClient } from '@prisma/client';
+import prisma from '../../lib/prisma';
 import { CreateProfileDto, UpdateProfileDto } from './profiles.dto';
-
-const prisma = new PrismaClient();
 
 function parseDate(dateString: string): Date | null {
   if (!dateString) return null;

@@ -15,10 +15,13 @@ export const createUser = async (req: Request, res: Response) => {
   }
 };
 
-export const getAllUsers = async (_req: Request, res: Response) => {
+export const getAllUsers = async (req: Request, res: Response) => {
   try {
-    const users = await userService.findAllUsers();
-    res.status(200).json({ success: true, data: users });
+    const page = Math.max(1, parseInt((req.query.page as string) || '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) || '20', 10)));
+    const search = (req.query.search as string) || undefined;
+    const result = await userService.findAllUsers(page, limit, search);
+    res.status(200).json({ success: true, ...result });
   } catch (error) {
     res.status(500).json({ success: false, message: (error as Error).message });
   }
