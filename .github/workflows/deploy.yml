@@ -1,16 +1,16 @@
-name: Deploy to DigitalOcean
+name: Deploy to Droplet
 
 on:
   push:
     branches:
-      - main          # Auto-deploy on push to main
-  workflow_dispatch:  # Manual trigger from GitHub Actions tab
+      - main
+  workflow_dispatch:
 
 jobs:
-  # ─── Job 1: Build & Test ────────────────────────────────────────────────────
-  build:
-    name: Build & Type Check
+  deploy:
+    name: Build & Deploy to Droplet
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout code
@@ -34,47 +34,31 @@ jobs:
       - name: Build
         run: npm run build
 
-  # ─── Job 2: Deploy to DigitalOcean App Platform ────────────────────────────
-  deploy:
-    name: Deploy to DigitalOcean
-    runs-on: ubuntu-latest
-    needs: build   # Only deploy if build passes
-    if: github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install doctl (DigitalOcean CLI)
-        uses: digitalocean/action-doctl@v2
+      - name: Deploy to Droplet via SSH
+        uses: appleboy/ssh-action@v1.0.3
         with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          host: ${{ secrets.DROPLET_IP }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          timeout: 120s
+          script: |
+            set -e
+            cd /opt/app
 
-      - name: Deploy app via App Platform
-        run: |
-          doctl apps create --spec .do/app.yaml --no-wait 2>/dev/null || \
-          doctl apps update ${{ secrets.DIGITALOCEAN_APP_ID }} --spec .do/app.yaml --no-wait
+            echo ">>> Pulling latest code..."
+            git pull origin main
 
-      - name: Wait for deployment
-        run: |
-          echo "Deployment triggered. Waiting for it to go live..."
-          for i in $(seq 1 20); do
-            STATUS=$(doctl apps get ${{ secrets.DIGITALOCEAN_APP_ID }} --format ActiveDeployment.Phase --no-header 2>/dev/null || echo "UNKNOWN")
-            echo "[$i/20] Status: $STATUS"
-            if [ "$STATUS" = "ACTIVE" ]; then
-              echo "✅ Deployment successful!"
-              exit 0
-            fi
-            if [ "$STATUS" = "ERROR" ]; then
-              echo "❌ Deployment failed!"
-              exit 1
-            fi
-            sleep 30
-          done
-          echo "⏱ Deployment still in progress. Check DigitalOcean dashboard."
+            echo ">>> Installing dependencies..."
+            npm ci --omit=dev
 
-      - name: Notify success
-        if: success()
-        run: |
-          echo "🚀 KhabarX Backend deployed successfully to DigitalOcean!"
-          echo "App ID: ${{ secrets.DIGITALOCEAN_APP_ID }}"
+            echo ">>> Generating Prisma client..."
+            npx prisma generate
+
+            echo ">>> Building TypeScript..."
+            npm run build
+
+            echo ">>> Restarting PM2..."
+            pm2 restart kaburlu-api --update-env
+
+            echo ">>> Deploy complete!"
+            pm2 status

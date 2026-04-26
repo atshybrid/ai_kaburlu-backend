@@ -1,89 +1,63 @@
-spec:
-  name: khabarx-backend
-  region: blr  # Bangalore (closest to India)
+name: khabarx-backend
+region: blr
 
-  services:
-    - name: api
-      # --- Source ---
-      github:
-        repo: atshybrid/ai_kaburlu-backend
-        branch: main
-        deploy_on_push: true
-
-      # --- Build ---
-      dockerfile_path: Dockerfile
-
-      # --- Runtime ---
-      instance_size_slug: basic-s            # 1 vCPU, 1GB RAM ($12/mo) — upgrade to basic-m for production load
-      instance_count: 1
-
-      # --- Network ---
-      http_port: 3001
-      health_check:
-        http_path: /healthz
-        initial_delay_seconds: 30
-        period_seconds: 15
-        timeout_seconds: 10
-        failure_threshold: 3
-        success_threshold: 1
-
-      # --- Environment Variables ---
-      # Set these in DigitalOcean App Platform dashboard → Settings → App-Level Env Vars
-      # OR fill in the values below (not recommended for secrets)
-      envs:
-        - key: NODE_ENV
-          value: "production"
-          scope: RUN_AND_BUILD_TIME
-
-        - key: ENV_TYPE
-          value: "prod"
-          scope: RUN_AND_BUILD_TIME
-
-        - key: PORT
-          value: "3001"
-          scope: RUN_AND_BUILD_TIME
-
-        - key: HOST
-          value: "0.0.0.0"
-          scope: RUN_AND_BUILD_TIME
-
-        - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
-          value: "true"
-          scope: RUN_AND_BUILD_TIME
-
-        - key: PUPPETEER_EXECUTABLE_PATH
-          value: "/usr/bin/chromium"
-          scope: RUN_AND_BUILD_TIME
-
-        # ⚠  Add these secrets in the DigitalOcean dashboard (do NOT put values here)
-        - key: DATABASE_URL
-          scope: RUN_AND_BUILD_TIME
-          type: SECRET
-
-        - key: JWT_SECRET
-          scope: RUN_AND_BUILD_TIME
-          type: SECRET
-
-        - key: JWT_REFRESH_SECRET
-          scope: RUN_AND_BUILD_TIME
-          type: SECRET
-
-        - key: RAZORPAY_KEY_ID
-          scope: RUN_AND_BUILD_TIME
-          type: SECRET
-
-        - key: RAZORPAY_KEY_SECRET
-          scope: RUN_AND_BUILD_TIME
-          type: SECRET
-
-        - key: RAZORPAY_WEBHOOK_SECRET
-          scope: RUN_AND_BUILD_TIME
-          type: SECRET
-
-        - key: FIREBASE_SERVICE_ACCOUNT
-          scope: RUN_AND_BUILD_TIME
-          type: SECRET
-
-        - key: CORS_ORIGINS
-          scope: RUN_AND_BUILD_TIME
-          type: SECRET
+services:
+  - name: api
+    github:
+      repo: atshybrid/ai_kaburlu-backend
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    instance_size_slug: basic-s
+    instance_count: 1
+    http_port: 3001
+    health_check:
+      http_path: /healthz
+      initial_delay_seconds: 30
+      period_seconds: 15
+      timeout_seconds: 10
+      failure_threshold: 3
+      success_threshold: 1
+    envs:
+      - key: NODE_ENV
+        value: "production"
+        scope: RUN_AND_BUILD_TIME
+      - key: ENV_TYPE
+        value: "prod"
+        scope: RUN_AND_BUILD_TIME
+      - key: PORT
+        value: "3001"
+        scope: RUN_AND_BUILD_TIME
+      - key: HOST
+        value: "0.0.0.0"
+        scope: RUN_AND_BUILD_TIME
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: "true"
+        scope: RUN_AND_BUILD_TIME
+      - key: PUPPETEER_EXECUTABLE_PATH
+        value: "/usr/bin/chromium"
+        scope: RUN_AND_BUILD_TIME
+      - key: DATABASE_URL
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
+      - key: JWT_SECRET
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
+      - key: JWT_REFRESH_SECRET
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
+      - key: RAZORPAY_KEY_ID
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
+      - key: RAZORPAY_KEY_SECRET
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
+      - key: RAZORPAY_WEBHOOK_SECRET
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
+      - key: FIREBASE_SERVICE_ACCOUNT
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
+      - key: CORS_ORIGINS
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
