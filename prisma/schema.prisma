@@ -1344,3 +1344,22 @@ model MeetingParticipant {
   @@index([meetingId])
   @@index([userId])
 }
+
+/// Unified policy store (Terms & Privacy)
+enum PolicyType {
+  TERMS
+  PRIVACY
+}
+
+model Policy {
+  id          String     @id @default(cuid())
+  type        PolicyType
+  version     String     @default("1.0.0")
+  title       String
+  content     String     @db.Text
+  isPublished Boolean    @default(false)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([type, isPublished])
+}

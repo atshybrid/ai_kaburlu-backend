@@ -69,35 +69,14 @@ export async function listAdminMemberships(opts: ListAdminMembershipsOptions) {
     orderBy: { createdAt: 'desc' },
     take: limit + 1,
     include: {
-      User: {
-        select: {
-          id: true,
-          mobileNumber: true,
-          profile: {
-            select: {
-              fullName: true,
-              profilePhotoUrl: true,
-            },
-          },
-        },
-      },
-      Cell: {
+      cell: {
         select: { id: true, name: true, code: true },
       },
-      Designation: {
+      designation: {
         select: { id: true, name: true, code: true },
       },
-      IDCard: {
+      idCard: {
         select: { cardNumber: true, issuedAt: true, expiresAt: true, status: true },
-      },
-      HrcState: {
-        select: { id: true, name: true, code: true },
-      },
-      HrcDistrict: {
-        select: { id: true, name: true },
-      },
-      HrcMandal: {
-        select: { id: true, name: true },
       },
     },
   });
@@ -117,36 +96,26 @@ export async function listAdminMemberships(opts: ListAdminMembershipsOptions) {
     activatedAt: m.activatedAt,
     expiresAt: m.expiresAt,
     createdAt: m.createdAt,
-    user: m.User
+    userId: m.userId,
+    user: null,
+    cell: m.cell
+      ? { id: m.cell.id, name: m.cell.name, code: m.cell.code }
+      : null,
+    designation: m.designation
+      ? { id: m.designation.id, name: m.designation.name, code: m.designation.code }
+      : null,
+    idCard: m.idCard
       ? {
-          id: m.User.id,
-          mobileNumber: m.User.mobileNumber,
-          profile: m.User.profile
-            ? {
-                fullName: m.User.profile.fullName,
-                profilePhotoUrl: m.User.profile.profilePhotoUrl,
-              }
-            : null,
-        }
-      : null,
-    cell: m.Cell
-      ? { id: m.Cell.id, name: m.Cell.name, code: m.Cell.code }
-      : null,
-    designation: m.Designation
-      ? { id: m.Designation.id, name: m.Designation.name, code: m.Designation.code }
-      : null,
-    idCard: m.IDCard
-      ? {
-          cardNumber: m.IDCard.cardNumber,
-          issuedAt: m.IDCard.issuedAt,
-          expiresAt: m.IDCard.expiresAt,
-          status: m.IDCard.status,
+          cardNumber: m.idCard.cardNumber,
+          issuedAt: m.idCard.issuedAt,
+          expiresAt: m.idCard.expiresAt,
+          status: m.idCard.status,
         }
       : null,
     hrci: {
-      state: m.HrcState ? { id: m.HrcState.id, name: m.HrcState.name, code: m.HrcState.code } : null,
-      district: m.HrcDistrict ? { id: m.HrcDistrict.id, name: m.HrcDistrict.name } : null,
-      mandal: m.HrcMandal ? { id: m.HrcMandal.id, name: m.HrcMandal.name } : null,
+      stateId: m.hrcStateId ?? null,
+      districtId: m.hrcDistrictId ?? null,
+      mandalId: m.hrcMandalId ?? null,
     },
   }));
 
