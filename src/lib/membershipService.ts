@@ -57,12 +57,13 @@ export async function getAvailability(q: AvailabilityQuery) {
 
   const used = await p.membership.count({ where });
 
-  // Seat numbers are globally unique per bucket (composite unique includes seatSequence without status filtering).
-  // So availability should reflect actual free seat numbers within 1..capacity, not only "active" row counts.
+  // Only count seats held by non-terminal rows. REVOKED and EXPIRED memberships release their seats
+  // so new members can claim them. Without this filter, expired/revoked rows permanently block seats.
   const seatBucketWhere: any = {
     cellId: cell.id,
     designationId: designation.id,
     level: q.level,
+    status: { in: ['PENDING_PAYMENT', 'PENDING_APPROVAL', 'ACTIVE'] },
   };
   if (q.level === 'ZONE') seatBucketWhere.zone = q.zone;
   if (q.level === 'NATIONAL') seatBucketWhere.hrcCountryId = q.hrcCountryId;
@@ -127,6 +128,26 @@ export async function joinSeat(req: JoinRequest) {
     const designation = await tx.designation.findFirst({ where: { OR: [ { code: req.designationCode }, { id: req.designationCode } ] } });
     if (!designation) throw new Error('DESIGNATION_NOT_FOUND');
 
+    // Idempotency: if user already has a non-revoked membership for same cell+designation+level, return it
+    const existingUserMembership = await tx.membership.findFirst({
+      where: {
+        userId: req.userId,
+        cellId: cell.id,
+        designationId: designation.id,
+        level: req.level,
+        ...(req.level === 'ZONE' ? { zone: req.zone } : {}),
+        ...(req.level === 'NATIONAL' ? { hrcCountryId: req.hrcCountryId ?? null } : {}),
+        ...(req.level === 'STATE' ? { hrcStateId: req.hrcStateId ?? null } : {}),
+        ...(req.level === 'DISTRICT' ? { hrcDistrictId: req.hrcDistrictId ?? null } : {}),
+        ...(req.level === 'MANDAL' ? { hrcMandalId: req.hrcMandalId ?? null } : {}),
+        status: { in: ['PENDING_PAYMENT', 'PENDING_APPROVAL', 'ACTIVE'] }
+      }
+    });
+    if (existingUserMembership) {
+      const price = await resolveDesignationPrice({ designationId: designation.id, cellId: cell.id, level: req.level, zone: req.level === 'ZONE' ? req.zone : undefined, hrcCountryId: req.hrcCountryId, hrcStateId: req.hrcStateId, hrcDistrictId: req.hrcDistrictId, hrcMandalId: req.hrcMandalId });
+      return { accepted: true, membershipId: existingUserMembership.id, requiresPayment: price.fee > 0, fee: price.fee, existing: true };
+    }
+
     const where: any = {
       cellId: cell.id,
       designationId: designation.id,
@@ -144,12 +165,12 @@ export async function joinSeat(req: JoinRequest) {
       return { accepted: false, reason: 'NO_SEATS_DESIGNATION', remaining: 0 };
     }
 
-    // Seat numbers must be unique per bucket across ALL rows (unique index includes seatSequence without filtering by status).
-    // To allow reuse after deletions/revocations, pick the smallest available seatSequence within 1..capacity.
+    // Only count seats held by non-terminal rows so REVOKED/EXPIRED seats are available for reuse.
     const seatBucketWhere: any = {
       cellId: cell.id,
       designationId: designation.id,
       level: req.level,
+      status: { in: ['PENDING_PAYMENT', 'PENDING_APPROVAL', 'ACTIVE'] },
     };
     if (req.level === 'ZONE') seatBucketWhere.zone = req.zone;
     if (req.level === 'NATIONAL') seatBucketWhere.hrcCountryId = req.hrcCountryId;

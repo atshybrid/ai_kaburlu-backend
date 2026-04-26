@@ -750,7 +750,7 @@ router.get('/:cardNumber/html', async (req, res) => {
   </div>
 
   <div class="body">
-    ${watermarkUrl ? `<div class=\"watermark\" aria-hidden=\"true\"><img src=\"${watermarkUrl}\" alt=\"Watermark\" style=\"width:30mm;height:30mm;opacity:.30\"/></div>` : ''}
+    ${wmSrc ? `<div class=\"watermark\" aria-hidden=\"true\"><img src=\"${wmSrc}\" alt=\"Watermark\" style=\"width:30mm;height:30mm;opacity:.30\"/></div>` : ''}
     <div class="juris-wrap">
       <p class="juris">ALL INDIA JURISDICTION</p>
       <p class="niti1">REGD BY GOVT OF \"NITI AAYOG\"</p>
@@ -804,7 +804,7 @@ router.get('/:cardNumber/html', async (req, res) => {
     <h1>HUMAN RIGHTS COUNCIL FOR INDIA (HRCI)</h1>
   </div>
   <div class="body">
-  ${watermarkUrl ? `<div class=\"watermark\" aria-hidden=\"true\"><img src=\"${watermarkUrl}\" alt=\"Watermark\" style=\"width:30mm;height:30mm;opacity:.30\"/></div>` : ''}
+  ${wmSrc ? `<div class=\"watermark\" aria-hidden=\"true\"><img src=\"${wmSrc}\" alt=\"Watermark\" style=\"width:30mm;height:30mm;opacity:.30\"/></div>` : ''}
   <div class="row-main">
   <div><img class="qr" src="${inlineQr}" alt="QR" onerror="this.onerror=null;this.src='${qrEndpointUrl}'" /></div>
       <div class="reg">
@@ -1765,3 +1765,4 @@ router.post('/appointments/regenerate', requireAuth, requireHrcAdmin, async (req
     return res.status(500).json({ success: false, error: 'FAILED_TO_REGENERATE', message: e?.message || 'Unknown error' });
   }
 });
+

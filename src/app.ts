@@ -188,7 +188,6 @@ app.use('/devices', devicesRoutes);
 app.use('/notifications', notificationsRoutes);
 app.use('/prompts', promptsRoutes);
 app.use('/preferences', preferencesRoutes);
-<<<<<<< HEAD
 app.use('/legal', legalRoutes);
 app.use('/org/settings', orgSettingsRoutes);
 app.use('/donations', donationsRoutes);
@@ -270,7 +269,6 @@ apiV1.use('/devices', devicesRoutes);
 apiV1.use('/notifications', notificationsRoutes);
 apiV1.use('/prompts', promptsRoutes);
 apiV1.use('/preferences', preferencesRoutes);
-<<<<<<< HEAD
 apiV1.use('/legal', legalRoutes);
 apiV1.use('/org/settings', orgSettingsRoutes);
 apiV1.use('/donations', donationsRoutes);

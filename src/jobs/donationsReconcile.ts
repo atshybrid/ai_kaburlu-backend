@@ -96,9 +96,19 @@ async function runOnce() {
           updatedCount++;
         }
       } catch (e) {
-        // ignore single row failure; continue with others
-        if (process.env.NODE_ENV !== 'production') {
-          console.warn('[donation-reconcile] row failed', d.id, (e as any)?.message || e);
+        // If Razorpay returns 400 (invalid/expired payment link), mark donation FAILED to stop retries
+        const status = (e as any)?.response?.status ?? (e as any)?.status;
+        if (status === 400 || status === 404) {
+          await (prisma as any).donation.updateMany({
+            where: { id: d.id, status: 'PENDING' },
+            data: { status: 'FAILED' },
+          }).catch(() => null);
+          console.warn('[donation-reconcile] marked FAILED (provider error', status, ')', d.id);
+        } else {
+          const isProd = process.env.NODE_ENV === 'production' || process.env.ENV_TYPE === 'prod';
+          if (!isProd) {
+            console.warn('[donation-reconcile] row failed', d.id, (e as any)?.message || e);
+          }
         }
       }
     }

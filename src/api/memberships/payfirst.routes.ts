@@ -222,6 +222,34 @@ router.post('/orders', async (req, res) => {
     const discountPercent = picked.type === 'PERCENT' ? (picked.percent || null) : null;
     const appliedType = picked.type;
     const finalAmount = Math.max(0, baseAmount - discountAmount);
+
+    // Re-use an existing PENDING intent for the same mobile + seat created within the last 45 minutes
+    // to prevent duplicate PaymentIntent records when the client times out and retries.
+    const reuseCutoff = new Date(Date.now() - 45 * 60 * 1000);
+    const existingPending = finalAmount > 0 ? await (prisma as any).paymentIntent.findFirst({
+      where: {
+        status: 'PENDING',
+        membershipId: null,
+        cellCodeOrName: String(cell),
+        designationCode: String(designationCode),
+        level: String(level),
+        zone: zone || null,
+        hrcCountryId: hrcCountryId || null,
+        hrcStateId: hrcStateId || null,
+        hrcDistrictId: hrcDistrictId || null,
+        hrcMandalId: hrcMandalId || null,
+        amount: finalAmount,
+        createdAt: { gte: reuseCutoff },
+        meta: { path: ['registrationMobile'], equals: norm || String(mobileNumber) }
+      },
+      orderBy: { createdAt: 'desc' }
+    }).catch(() => null) : null;
+
+    if (existingPending) {
+      const providerOrderId = existingPending?.meta?.providerOrderId as string | undefined;
+      return res.json({ success: true, data: { order: { orderId: existingPending.id, amount: finalAmount, priceAfterDiscount: finalAmount, baseAmount, currency: 'INR', provider: razorpayEnabled() && finalAmount > 0 ? 'razorpay' : null, providerOrderId: providerOrderId || null, providerKeyId: razorpayEnabled() && finalAmount > 0 ? getRazorpayKeyId() : null, breakdown: { baseAmount, discountAmount, discountPercent, appliedType, finalAmount, note: appliedDiscount ? (appliedType === 'PERCENT' ? 'Mobile-based percentage discount applied' : 'Mobile-based amount discount applied') : null } } } });
+    }
+
     const intent = await (prisma as any).paymentIntent.create({
       data: {
         cellCodeOrName: String(cell), designationCode: String(designationCode), level: String(level),
@@ -604,6 +632,12 @@ router.post('/register', async (req, res) => {
     }
 
     const result = await (prisma as any).$transaction(async (tx: any) => {
+      // Re-check inside transaction to prevent race condition (double-submit / network retry)
+      const freshIntent = await tx.paymentIntent.findUnique({ where: { id: String(orderId) } });
+      if (freshIntent?.membershipId) {
+        return { membershipId: freshIntent.membershipId, alreadyRegistered: true };
+      }
+
       // 1) Upsert user with mpinHash and ensure proper MEMBER role
       let user = await tx.user.findFirst({ where: { mobileNumber: String(mobileNumber) } });
       const bcrypt = await import('bcrypt');
@@ -705,7 +739,7 @@ router.post('/register', async (req, res) => {
       data: { 
         status: 'ACTIVE', 
         membershipId: result.membershipId,
-        message: 'Registration completed successfully'
+        message: result.alreadyRegistered ? 'Already registered' : 'Registration completed successfully'
       } 
     });
   } catch (e: any) {
@@ -1035,11 +1069,18 @@ router.post('/admin/complete/:orderId', async (req, res) => {
       }
     });
 
-    // Link the membership to payment intent
-    await (prisma as any).paymentIntent.update({
-      where: { id: orderId },
+    // Link the membership to payment intent — use conditional update to prevent overwriting a race winner
+    const linkedUpdate = await (prisma as any).paymentIntent.updateMany({
+      where: { id: orderId, membershipId: null },
       data: { membershipId: join.membershipId }
     });
+    // If another concurrent request already linked a membership, re-fetch and return that
+    if (linkedUpdate.count === 0) {
+      const latestIntent = await (prisma as any).paymentIntent.findUnique({ where: { id: orderId } });
+      if (latestIntent?.membershipId && latestIntent.membershipId !== join.membershipId) {
+        return res.json({ success: true, data: { membershipId: latestIntent.membershipId, message: 'Already registered' } });
+      }
+    }
 
     // Update MembershipPayment record to SUCCESS (if exists)
     try {

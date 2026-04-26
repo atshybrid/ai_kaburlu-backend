@@ -143,17 +143,19 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
 
     const rows = await prisma.membership.findMany({
       where,
-      take: limit,
+      take: limit + 1,
       skip: cursor ? 1 : 0,
       cursor: cursor ? { id: cursor } : undefined,
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       include: { designation: true, cell: true, idCard: true }
     });
 
-    const nextCursor = rows.length === limit ? rows[rows.length - 1].id : null;
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor = hasMore ? pageRows[pageRows.length - 1].id : null;
 
     // Batch-fetch related user profiles and users
-    const userIds = Array.from(new Set(rows.map((r: any) => r.userId).filter(Boolean)));
+    const userIds = Array.from(new Set(pageRows.map((r: any) => r.userId).filter(Boolean)));
     const profiles = userIds.length > 0 ? await prisma.userProfile.findMany({ where: { userId: { in: userIds } }, select: { userId: true, fullName: true, profilePhotoUrl: true, profilePhotoMediaId: true } }) : [];
     const users = userIds.length > 0 ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, mobileNumber: true } }) : [];
     const profileByUser: any = {};
@@ -162,10 +164,10 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
     for (const u of users) mobileByUser[u.id] = u.mobileNumber;
 
     // Batch-fetch HRCI geo names
-    const countryIds = Array.from(new Set(rows.map((r: any) => r.hrcCountryId).filter(Boolean)));
-    const stateIds = Array.from(new Set(rows.map((r: any) => r.hrcStateId).filter(Boolean)));
-    const districtIds = Array.from(new Set(rows.map((r: any) => r.hrcDistrictId).filter(Boolean)));
-    const mandalIds = Array.from(new Set(rows.map((r: any) => r.hrcMandalId).filter(Boolean)));
+    const countryIds = Array.from(new Set(pageRows.map((r: any) => r.hrcCountryId).filter(Boolean)));
+    const stateIds = Array.from(new Set(pageRows.map((r: any) => r.hrcStateId).filter(Boolean)));
+    const districtIds = Array.from(new Set(pageRows.map((r: any) => r.hrcDistrictId).filter(Boolean)));
+    const mandalIds = Array.from(new Set(pageRows.map((r: any) => r.hrcMandalId).filter(Boolean)));
     const countries = countryIds.length > 0 ? await prisma.hrcCountry.findMany({ where: { id: { in: countryIds } }, select: { id: true, name: true } }) : [];
     // If some NATIONAL memberships do not have hrcCountryId set, use a sensible fallback (first country)
     const fallbackCountry = await prisma.hrcCountry.findFirst({ select: { id: true, name: true } }).catch(() => null);
@@ -179,7 +181,7 @@ router.get('/', requireAuth, requireHrcAdmin, async (req, res) => {
     const mandalById: any = {}; mandals.forEach(m => mandalById[m.id] = m.name);
 
     // Build summarized response items
-    const data = rows.map((r: any) => {
+    const data = pageRows.map((r: any) => {
       const prof = profileByUser[r.userId] || {};
       return {
         id: r.id,
@@ -360,115 +362,118 @@ router.post('/create-member', requireAuth, requireHrcAdmin, async (req, res) => 
     if (lvl === 'DISTRICT' && !hrcDistrictId) return res.status(400).json({ success: false, error: 'HRC_DISTRICT_ID_REQUIRED' });
     if (lvl === 'MANDAL' && !hrcMandalId) return res.status(400).json({ success: false, error: 'HRC_MANDAL_ID_REQUIRED' });
 
-    // Resolve references
-    const cellRow = await prisma.cell.findFirst({ where: { OR: [ { id: String(cell) }, { code: String(cell) }, { name: String(cell) } ] } });
-    if (!cellRow) return res.status(404).json({ success: false, error: 'CELL_NOT_FOUND' });
-    const desigRow = designationId
-      ? await prisma.designation.findUnique({ where: { id: String(designationId) } })
-      : await prisma.designation.findFirst({ where: { OR: [ { code: String(designationCode) }, { id: String(designationCode) } ] } });
-    if (!desigRow) return res.status(404).json({ success: false, error: 'DESIGNATION_NOT_FOUND' });
-
-    // Capacity + pricing via service
-    const availability = await (membershipService as any).getAvailability({
-      cellCodeOrName: cellRow.id,
-      designationCode: desigRow.id,
-      level: lvl,
-      zone: lvl === 'ZONE' ? (zone || undefined) : undefined,
-      hrcCountryId: (lvl === 'NATIONAL' || lvl === 'ZONE') ? (hrcCountryId || undefined) : undefined,
-      hrcStateId: lvl === 'STATE' ? (hrcStateId || undefined) : undefined,
-      hrcDistrictId: lvl === 'DISTRICT' ? (hrcDistrictId || undefined) : undefined,
-      hrcMandalId: lvl === 'MANDAL' ? (hrcMandalId || undefined) : undefined,
-    });
-    if (!availability?.designation || availability.designation.remaining <= 0) {
-      return res.status(409).json({ success: false, error: 'NO_SEATS_DESIGNATION' });
-    }
-    if (availability.levelAggregate && availability.levelAggregate.remaining <= 0) {
-      return res.status(409).json({ success: false, error: 'NO_SEATS_LEVEL_AGGREGATE' });
-    }
-
-    // Find or create user (default MEMBER role, English language)
-    const memberRole = await prisma.role.findUnique({ where: { name: 'MEMBER' } });
-    const langEn = await prisma.language.findUnique({ where: { code: 'en' } });
-    if (!memberRole || !langEn) return res.status(500).json({ success: false, error: 'MISSING_CORE_REFERENCES' });
-    // Normalize optional strings: treat empty strings as null
+    // Normalize inputs early (before any async work)
     const normEmail = (typeof email === 'string' && email.trim() !== '') ? String(email) : null;
     const normProfilePhotoUrl = (typeof profilePhotoUrl === 'string' && profilePhotoUrl.trim() !== '') ? String(profilePhotoUrl) : null;
     const normMobile = normalizeMobileNumber(String(mobileNumber));
     if (!normMobile) return res.status(400).json({ success: false, error: 'INVALID_MOBILE' });
 
-    let user = await prisma.user.findFirst({ where: buildUserMobileLookupWhere(normMobile) as any });
-    if (!user) {
-      // Default MPIN: last 4 digits of mobileNumber (hashed into mpinHash)
-      let mpinHashVal: string | undefined = undefined;
-      try {
-        const last4 = String(mobileNumber).slice(-4);
-        if (last4) mpinHashVal = await hashMpin(last4);
-      } catch {}
-      user = await prisma.user.create({ data: { mobileNumber: normMobile, email: normEmail, roleId: memberRole.id, languageId: langEn.id, status: 'ACTIVE', mpinHash: mpinHashVal || null } });
-    } else {
-      // Ensure role is at least MEMBER (do not downgrade HRCI_ADMIN etc.)
-      // No-op if user exists with any role
-    }
-    // Ensure profile exists / updated
+    // Step 1: Parallelize all independent reference lookups to cut round trips
+    const [cellRow, desigRow, memberRole, langEn] = await Promise.all([
+      prisma.cell.findFirst({ where: { OR: [ { id: String(cell) }, { code: String(cell) }, { name: String(cell) } ] } }),
+      designationId
+        ? prisma.designation.findUnique({ where: { id: String(designationId) } })
+        : prisma.designation.findFirst({ where: { OR: [ { code: String(designationCode) }, { id: String(designationCode) } ] } }),
+      prisma.role.findUnique({ where: { name: 'MEMBER' } }),
+      prisma.language.findUnique({ where: { code: 'en' } }),
+    ]);
+    if (!cellRow) return res.status(404).json({ success: false, error: 'CELL_NOT_FOUND' });
+    if (!desigRow) return res.status(404).json({ success: false, error: 'DESIGNATION_NOT_FOUND' });
+    if (!memberRole || !langEn) return res.status(500).json({ success: false, error: 'MISSING_CORE_REFERENCES' });
+
+    // Step 2: Compute bcrypt hash BEFORE the transaction (CPU-bound, ~150ms — don't hold a DB connection for it)
+    let mpinHashVal: string | null = null;
     try {
-      const existingProfile = await prisma.userProfile.findUnique({ where: { userId: user.id } });
-      if (existingProfile) {
-        await prisma.userProfile.update({ where: { userId: user.id }, data: { fullName: String(fullName), profilePhotoUrl: (normProfilePhotoUrl !== null ? normProfilePhotoUrl : existingProfile.profilePhotoUrl) } });
-      } else {
-        await prisma.userProfile.create({ data: { userId: user.id, fullName: String(fullName), profilePhotoUrl: normProfilePhotoUrl } });
-      }
+      const last4 = String(mobileNumber).slice(-4);
+      if (last4) mpinHashVal = await hashMpin(last4);
     } catch {}
 
-    // Create membership (skip payment by default)
-    const requiresPayment = (availability.designation.fee || 0) > 0;
-    // For admin direct create, default to NOT_REQUIRED and PENDING_APPROVAL unless activate=true
-    let status: any = (activate ? 'ACTIVE' : (requiresPayment ? 'PENDING_PAYMENT' : 'PENDING_APPROVAL'));
-    let paymentStatus: any = (requiresPayment ? 'PENDING' : 'NOT_REQUIRED');
-    // If activating but fee > 0, we still mark payment NOT_REQUIRED (admin override)
-    if (activate) paymentStatus = 'NOT_REQUIRED';
+    // Step 3: Availability check + user upsert + seatSequence + membership.create — all inside ONE transaction
+    // This prevents race conditions and ensures idempotency on retry.
+    const { user, membership, availability } = await (prisma as any).$transaction(async (tx: any) => {
+      // Capacity + pricing
+      const avail = await (membershipService as any).getAvailability({
+        cellCodeOrName: cellRow.id,
+        designationCode: desigRow.id,
+        level: lvl,
+        zone: lvl === 'ZONE' ? (zone || undefined) : undefined,
+        hrcCountryId: (lvl === 'NATIONAL' || lvl === 'ZONE') ? (hrcCountryId || undefined) : undefined,
+        hrcStateId: lvl === 'STATE' ? (hrcStateId || undefined) : undefined,
+        hrcDistrictId: lvl === 'DISTRICT' ? (hrcDistrictId || undefined) : undefined,
+        hrcMandalId: lvl === 'MANDAL' ? (hrcMandalId || undefined) : undefined,
+      });
+      if (!avail?.designation || avail.designation.remaining <= 0) throw Object.assign(new Error('NO_SEATS_DESIGNATION'), { statusCode: 409 });
+      if (avail.levelAggregate && avail.levelAggregate.remaining <= 0) throw Object.assign(new Error('NO_SEATS_LEVEL_AGGREGATE'), { statusCode: 409 });
 
-    const membership = await prisma.membership.create({
-      data: {
-        userId: user.id,
+      // Find or create user
+      let txUser = await tx.user.findFirst({ where: buildUserMobileLookupWhere(normMobile) });
+      if (!txUser) {
+        txUser = await tx.user.create({ data: { mobileNumber: normMobile, email: normEmail, roleId: memberRole.id, languageId: langEn.id, status: 'ACTIVE', mpinHash: mpinHashVal || null } });
+      }
+
+      // Idempotency: if a non-revoked membership already exists for this user+seat, return it
+      const geoMatch: any = {
+        userId: txUser.id,
         cellId: cellRow.id,
         designationId: desigRow.id,
-  level: lvl as any,
-  zone: lvl === 'ZONE' ? (zone || null) : null,
-  hrcCountryId: (lvl === 'NATIONAL' || lvl === 'ZONE') ? (hrcCountryId || null) : null,
+        level: lvl,
+        zone: lvl === 'ZONE' ? (zone || null) : null,
+        hrcCountryId: (lvl === 'NATIONAL' || lvl === 'ZONE') ? (hrcCountryId || null) : null,
         hrcStateId: lvl === 'STATE' ? (hrcStateId || null) : null,
         hrcDistrictId: lvl === 'DISTRICT' ? (hrcDistrictId || null) : null,
         hrcMandalId: lvl === 'MANDAL' ? (hrcMandalId || null) : null,
-        status,
-        paymentStatus,
-        // Pick the smallest available seat number within capacity (reuses freed seats after deletions/revokes).
-        seatSequence: await (async () => {
-          const seatBucketWhere: any = {
-            cellId: cellRow.id,
-            designationId: desigRow.id,
-            level: lvl,
-          };
-          if (lvl === 'ZONE') { seatBucketWhere.zone = zone || null; seatBucketWhere.hrcCountryId = hrcCountryId || null; }
-          if (lvl === 'NATIONAL') seatBucketWhere.hrcCountryId = hrcCountryId || null;
-          if (lvl === 'STATE') seatBucketWhere.hrcStateId = hrcStateId || null;
-          if (lvl === 'DISTRICT') seatBucketWhere.hrcDistrictId = hrcDistrictId || null;
-          if (lvl === 'MANDAL') seatBucketWhere.hrcMandalId = hrcMandalId || null;
-
-          const seatRows = await prisma.membership.findMany({ where: seatBucketWhere, select: { seatSequence: true } });
-          const used = new Set<number>();
-          for (const r of seatRows) {
-            const s = (r as any).seatSequence;
-            if (typeof s === 'number') used.add(s);
-          }
-          for (let i = 1; i <= desigRow.defaultCapacity; i++) {
-            if (!used.has(i)) return i;
-          }
-          // Fall back (shouldn't happen if availability.remaining > 0)
-          throw new Error('NO_SEATS_DESIGNATION');
-        })(),
-        lockedAt: new Date(),
-        activatedAt: status === 'ACTIVE' ? new Date() : null
+        status: { notIn: ['REVOKED'] },
+      };
+      const existingMembership = await tx.membership.findFirst({ where: geoMatch });
+      if (existingMembership) {
+        // Update profile in case fullName/photo changed
+        await tx.userProfile.upsert({ where: { userId: txUser.id }, update: { fullName: String(fullName), ...(normProfilePhotoUrl ? { profilePhotoUrl: normProfilePhotoUrl } : {}) }, create: { userId: txUser.id, fullName: String(fullName), profilePhotoUrl: normProfilePhotoUrl } });
+        return { user: txUser, membership: existingMembership, availability: avail, alreadyExists: true };
       }
-    });
+
+      // Upsert profile
+      await tx.userProfile.upsert({ where: { userId: txUser.id }, update: { fullName: String(fullName), ...(normProfilePhotoUrl ? { profilePhotoUrl: normProfilePhotoUrl } : {}) }, create: { userId: txUser.id, fullName: String(fullName), profilePhotoUrl: normProfilePhotoUrl } });
+
+      // Calculate seat sequence inside transaction to prevent race conditions.
+      // Only count non-terminal rows so REVOKED/EXPIRED seats are reusable.
+      const seatBucketWhere: any = { cellId: cellRow.id, designationId: desigRow.id, level: lvl, status: { in: ['PENDING_PAYMENT', 'PENDING_APPROVAL', 'ACTIVE'] } };
+      if (lvl === 'ZONE') { seatBucketWhere.zone = zone || null; seatBucketWhere.hrcCountryId = hrcCountryId || null; }
+      if (lvl === 'NATIONAL') seatBucketWhere.hrcCountryId = hrcCountryId || null;
+      if (lvl === 'STATE') seatBucketWhere.hrcStateId = hrcStateId || null;
+      if (lvl === 'DISTRICT') seatBucketWhere.hrcDistrictId = hrcDistrictId || null;
+      if (lvl === 'MANDAL') seatBucketWhere.hrcMandalId = hrcMandalId || null;
+      const seatRows = await tx.membership.findMany({ where: seatBucketWhere, select: { seatSequence: true } });
+      const usedSeats = new Set<number>();
+      for (const r of seatRows) { const s = r.seatSequence; if (typeof s === 'number') usedSeats.add(s); }
+      let nextSeat: number | null = null;
+      for (let i = 1; i <= desigRow.defaultCapacity; i++) { if (!usedSeats.has(i)) { nextSeat = i; break; } }
+      if (!nextSeat) throw Object.assign(new Error('NO_SEATS_DESIGNATION'), { statusCode: 409 });
+
+      const requiresPayment = (avail.designation.fee || 0) > 0;
+      const memStatus: any = activate ? 'ACTIVE' : (requiresPayment ? 'PENDING_PAYMENT' : 'PENDING_APPROVAL');
+      const memPaymentStatus: any = activate ? 'NOT_REQUIRED' : (requiresPayment ? 'PENDING' : 'NOT_REQUIRED');
+
+      const newMembership = await tx.membership.create({
+        data: {
+          userId: txUser.id,
+          cellId: cellRow.id,
+          designationId: desigRow.id,
+          level: lvl as any,
+          zone: lvl === 'ZONE' ? (zone || null) : null,
+          hrcCountryId: (lvl === 'NATIONAL' || lvl === 'ZONE') ? (hrcCountryId || null) : null,
+          hrcStateId: lvl === 'STATE' ? (hrcStateId || null) : null,
+          hrcDistrictId: lvl === 'DISTRICT' ? (hrcDistrictId || null) : null,
+          hrcMandalId: lvl === 'MANDAL' ? (hrcMandalId || null) : null,
+          status: memStatus,
+          paymentStatus: memPaymentStatus,
+          seatSequence: nextSeat,
+          lockedAt: new Date(),
+          activatedAt: memStatus === 'ACTIVE' ? new Date() : null,
+        },
+      });
+
+      return { user: txUser, membership: newMembership, availability: avail };
+    }, { timeout: 20000 });
 
     // Compute expiry: from input or from validityDays
     let cardExpiresAt: Date | null = null;
@@ -480,35 +485,39 @@ router.post('/create-member', requireAuth, requireHrcAdmin, async (req, res) => 
       }
     } catch {}
 
-    // Issue card when requested and ACTIVE and has photo
+    // Issue card when requested and ACTIVE and has photo (outside transaction — idempotent)
     let card: any = null;
-    if (issueCard && status === 'ACTIVE') {
+    if (issueCard && membership.status === 'ACTIVE') {
       const prof = await prisma.userProfile.findUnique({ where: { userId: user.id } });
       const hasPhoto = !!(prof?.profilePhotoUrl || prof?.profilePhotoMediaId);
-      if (!hasPhoto) {
-        // Create membership but warn about photo
-      } else {
-        const cardNumber = await generateNextIdCardNumber(prisma as any);
-        const expires = cardExpiresAt || new Date(Date.now() + 730 * 24 * 60 * 60 * 1000);
-        card = await prisma.iDCard.create({
-          data: {
-            membershipId: membership.id,
-            cardNumber,
-            expiresAt: expires,
-            status: 'GENERATED' as any,
-            fullName: String(fullName),
-            mobileNumber: String(mobileNumber),
-            designationName: desigRow.name,
-            cellName: cellRow.name,
-          } as any
-        });
-        try { await prisma.membership.update({ where: { id: membership.id }, data: { idCardStatus: 'GENERATED' as any } }); } catch {}
+      if (hasPhoto && !membership.idCard) {
+        try {
+          const cardNumber = await generateNextIdCardNumber(prisma as any);
+          const expires = cardExpiresAt || new Date(Date.now() + 730 * 24 * 60 * 60 * 1000);
+          card = await prisma.iDCard.create({
+            data: {
+              membershipId: membership.id,
+              cardNumber,
+              expiresAt: expires,
+              status: 'GENERATED' as any,
+              fullName: String(fullName),
+              mobileNumber: String(mobileNumber),
+              designationName: desigRow.name,
+              cellName: cellRow.name,
+            } as any
+          });
+          await prisma.membership.update({ where: { id: membership.id }, data: { idCardStatus: 'GENERATED' as any } }).catch(() => null);
+        } catch {}
       }
     }
 
     return res.json({ success: true, data: { user, membership, card } });
   } catch (e: any) {
-    return res.status(500).json({ success: false, error: 'CREATE_MEMBER_FAILED', message: e?.message || 'Unknown error' });
+    const statusCode = (e as any)?.statusCode || 500;
+    const errorCode = e?.message === 'NO_SEATS_DESIGNATION' ? 'NO_SEATS_DESIGNATION'
+      : e?.message === 'NO_SEATS_LEVEL_AGGREGATE' ? 'NO_SEATS_LEVEL_AGGREGATE'
+      : 'CREATE_MEMBER_FAILED';
+    return res.status(statusCode).json({ success: false, error: errorCode, message: e?.message || 'Unknown error' });
   }
 });
 
@@ -651,11 +660,12 @@ const handleMembershipAssign = async (req: any, res: any) => {
       }
 
       // Determine next seatSequence for the target bucket.
-      // Must be unique across ALL rows (unique index is not filtered by status), so we compute the smallest free seat within 1..capacity.
+      // Only count non-terminal rows — REVOKED/EXPIRED seats are available for reuse.
       const seatBucketWhere: any = {
         cellId: cellRow.id,
         designationId: desigRow.id,
         level: lvl,
+        status: { in: ['PENDING_PAYMENT', 'PENDING_APPROVAL', 'ACTIVE'] },
         NOT: { id: m.id },
       };
       if (lvl === 'ZONE') { seatBucketWhere.zone = zone || null; seatBucketWhere.hrcCountryId = hrcCountryId || null; }

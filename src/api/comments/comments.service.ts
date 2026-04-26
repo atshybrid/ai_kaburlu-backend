@@ -119,7 +119,6 @@ export const getComments = async ({ articleId, shortNewsId, depth = 5 }: GetComm
   if (articleId) where.articleId = articleId;
   if (shortNewsId) where.shortNewsId = shortNewsId;
 
-<<<<<<< HEAD
   // Workaround for Prisma type limitation on deep self-relation include chain
   const includeObj: any = {
     user: {

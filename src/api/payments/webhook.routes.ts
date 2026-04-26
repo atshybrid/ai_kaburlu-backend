@@ -86,6 +86,16 @@ router.post('/webhook', async (req: any, res) => {
           } else if (String(intent.intentType) === 'AD') {
             const adId = (intent.meta as any)?.adId;
             if (adId) await (prisma as any).ad.update({ where: { id: String(adId) }, data: { status: 'ACTIVE' } }).catch(() => null);
+          } else {
+            // Membership payment (intentType is null / MEMBERSHIP / default)
+            // Mark the intent as SUCCESS so the user can complete /register even if the
+            // client timed out before calling /confirm.
+            if (intent.status === 'PENDING' && !intent.membershipId) {
+              await prisma.paymentIntent.update({
+                where: { id: intent.id },
+                data: { status: 'SUCCESS' as any }
+              }).catch(() => null);
+            }
           }
         }
       }
