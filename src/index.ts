@@ -13,6 +13,7 @@ import { sleep } from './lib/promiseTimeout';
 import http from 'http';
 import { startDonationsReconcileJob, stopDonationsReconcileJob } from './jobs/donationsReconcile';
 import { startAdsExpiryScheduler } from './services/adsExpiryScheduler';
+import { startSeatLockExpiryScheduler } from './services/seatLockExpiryScheduler';
 import { waitForPrisma } from './lib/prismaWait';
 
 // Ensure Prisma gets a usable DATABASE_URL by falling back to ENV_TYPE-specific URLs
@@ -86,6 +87,7 @@ async function start() {
       }
       startDonationsReconcileJob();
       startAdsExpiryScheduler();
+      startSeatLockExpiryScheduler();
     })();
 
     // Optional DB keepalive to reduce cold-start timeouts on PaaS

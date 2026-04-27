@@ -10,6 +10,24 @@ export type HrcZone = 'NORTH' | 'SOUTH' | 'EAST' | 'WEST' | 'CENTRAL';
 const prisma = new PrismaClient();
 const p: any = prisma;
 
+// Seat lock timeout: PENDING_PAYMENT seats older than this are treated as expired (seat released).
+// Configurable via env var; default 5 minutes.
+const SEAT_LOCK_TIMEOUT_MS = Number(process.env.SEAT_LOCK_TIMEOUT_MS) || 5 * 60 * 1000;
+
+/**
+ * Returns a Prisma OR filter that counts only non-expired active seats.
+ * PENDING_PAYMENT rows older than SEAT_LOCK_TIMEOUT_MS (or with null lockedAt) are excluded.
+ */
+function activeSeatFilter(): any {
+  const lockExpiry = new Date(Date.now() - SEAT_LOCK_TIMEOUT_MS);
+  return {
+    OR: [
+      { status: { in: ['PENDING_APPROVAL', 'ACTIVE'] } },
+      { status: 'PENDING_PAYMENT', lockedAt: { gte: lockExpiry } },
+    ],
+  };
+}
+
 export interface AvailabilityQuery {
   cellCodeOrName: string;
   designationCode: string;
@@ -47,7 +65,7 @@ export async function getAvailability(q: AvailabilityQuery) {
     cellId: cell.id,
     designationId: designation.id,
     level: q.level,
-  status: { in: ['PENDING_PAYMENT','PENDING_APPROVAL','ACTIVE'] }
+    ...activeSeatFilter(),
   };
   if (q.level === 'ZONE') where.zone = q.zone;
   if (q.level === 'NATIONAL') where.hrcCountryId = q.hrcCountryId; // optional
@@ -63,7 +81,7 @@ export async function getAvailability(q: AvailabilityQuery) {
     cellId: cell.id,
     designationId: designation.id,
     level: q.level,
-    status: { in: ['PENDING_PAYMENT', 'PENDING_APPROVAL', 'ACTIVE'] },
+    ...activeSeatFilter(),
   };
   if (q.level === 'ZONE') seatBucketWhere.zone = q.zone;
   if (q.level === 'NATIONAL') seatBucketWhere.hrcCountryId = q.hrcCountryId;
@@ -84,7 +102,7 @@ export async function getAvailability(q: AvailabilityQuery) {
   // Also compute aggregate usage across all designations for this cell+level if level cap exists
   let aggregate: any = undefined;
   if (levelCap) {
-    const aggregateWhere: any = { cellId: cell.id, level: q.level, status: { in: ['PENDING_PAYMENT','PENDING_APPROVAL','ACTIVE'] } };
+    const aggregateWhere: any = { cellId: cell.id, level: q.level, ...activeSeatFilter() };
     if (q.level === 'ZONE') aggregateWhere.zone = q.zone;
     if (q.level === 'NATIONAL') aggregateWhere.hrcCountryId = q.hrcCountryId;
     if (q.level === 'STATE') aggregateWhere.hrcStateId = q.hrcStateId;
@@ -152,7 +170,7 @@ export async function joinSeat(req: JoinRequest) {
       cellId: cell.id,
       designationId: designation.id,
       level: req.level,
-  status: { in: ['PENDING_PAYMENT','PENDING_APPROVAL','ACTIVE'] }
+      ...activeSeatFilter(),
     };
   if (req.level === 'ZONE') where.zone = req.zone;
   if (req.level === 'NATIONAL') where.hrcCountryId = req.hrcCountryId;
@@ -170,7 +188,7 @@ export async function joinSeat(req: JoinRequest) {
       cellId: cell.id,
       designationId: designation.id,
       level: req.level,
-      status: { in: ['PENDING_PAYMENT', 'PENDING_APPROVAL', 'ACTIVE'] },
+      ...activeSeatFilter(),
     };
     if (req.level === 'ZONE') seatBucketWhere.zone = req.zone;
     if (req.level === 'NATIONAL') seatBucketWhere.hrcCountryId = req.hrcCountryId;
@@ -202,7 +220,7 @@ export async function joinSeat(req: JoinRequest) {
       }
     });
     if (levelCap) {
-      const aggregateWhere: any = { cellId: cell.id, level: req.level, status: { in: ['PENDING_PAYMENT','PENDING_APPROVAL','ACTIVE'] } };
+      const aggregateWhere: any = { cellId: cell.id, level: req.level, ...activeSeatFilter() };
       if (req.level === 'ZONE') aggregateWhere.zone = req.zone;
       if (req.level === 'NATIONAL') aggregateWhere.hrcCountryId = req.hrcCountryId;
       if (req.level === 'STATE') aggregateWhere.hrcStateId = req.hrcStateId;
