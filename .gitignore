@@ -54,3 +54,9 @@ coverage/
 
 # IDX
 .IDX/
+
+# Temp debug/ops scripts
+activate-members.sh
+check-prod-user.sh
+check-user-designation.js
+fix-kari-dasu-membership.sh
