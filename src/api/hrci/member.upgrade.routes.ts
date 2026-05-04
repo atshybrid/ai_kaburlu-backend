@@ -321,8 +321,12 @@ router.post('/apply', requireAuth, requireHrcAdmin, async (req, res) => {
       const paidSum = (m.payments || []).filter((p: any) => p.status === 'SUCCESS').reduce((s: number, p: any) => s + (p.amount || 0), 0);
       const deltaDue = Math.max(0, newFee - paidSum);
       const willRequirePayment = deltaDue > 0;
-      const targetStatus = willRequirePayment ? 'PENDING_PAYMENT' : (m.status !== 'ACTIVE' ? 'PENDING_APPROVAL' : 'ACTIVE');
-      const targetPaymentStatus = willRequirePayment ? 'PENDING' : (paidSum > 0 ? 'SUCCESS' : 'NOT_REQUIRED');
+      // Admin-initiated upgrade: never set PENDING_PAYMENT.
+      // PENDING_PAYMENT causes the seat-lock scheduler to EXPIRE the membership in 5 min.
+      const targetStatus = m.status === 'ACTIVE' ? 'ACTIVE'
+        : (m.status === 'PENDING_PAYMENT' || m.status === 'EXPIRED') ? 'PENDING_APPROVAL'
+        : 'PENDING_APPROVAL';
+      const targetPaymentStatus = 'NOT_REQUIRED';
 
       const updated = await tx.membership.update({
         where: { id: m.id },
@@ -341,10 +345,6 @@ router.post('/apply', requireAuth, requireHrcAdmin, async (req, res) => {
           lockedAt: new Date(),
         }
       });
-
-      if (willRequirePayment) {
-        await tx.membershipPayment.create({ data: { membershipId: m.id, amount: deltaDue, status: 'PENDING' } });
-      }
 
       return {
         accepted: true,
@@ -646,8 +646,12 @@ router.post('/', requireAuth, requireHrcAdmin, async (req, res) => {
       const paidSum = (m.payments || []).filter((p: any) => p.status === 'SUCCESS').reduce((s: number, p: any) => s + (p.amount || 0), 0);
       const deltaDue = Math.max(0, newFee - paidSum);
       const willRequirePayment = deltaDue > 0;
-      const targetStatus = willRequirePayment ? 'PENDING_PAYMENT' : (m.status !== 'ACTIVE' ? 'PENDING_APPROVAL' : 'ACTIVE');
-      const targetPaymentStatus = willRequirePayment ? 'PENDING' : (paidSum > 0 ? 'SUCCESS' : 'NOT_REQUIRED');
+      // Admin-initiated upgrade: never set PENDING_PAYMENT.
+      // PENDING_PAYMENT causes the seat-lock scheduler to EXPIRE the membership in 5 min.
+      const targetStatus = m.status === 'ACTIVE' ? 'ACTIVE'
+        : (m.status === 'PENDING_PAYMENT' || m.status === 'EXPIRED') ? 'PENDING_APPROVAL'
+        : 'PENDING_APPROVAL';
+      const targetPaymentStatus = 'NOT_REQUIRED';
 
       const preview = {
         accepted: true,
@@ -687,8 +691,8 @@ router.post('/', requireAuth, requireHrcAdmin, async (req, res) => {
         }
       });
 
-      if (willRequirePayment) {
-        await tx.membershipPayment.create({ data: { membershipId: m.id, amount: deltaDue, status: 'PENDING' } });
+      if (willRequirePayment && m.status !== 'ACTIVE') {
+        // No payment record for admin upgrades
       }
 
       return { ...preview, data: updated };

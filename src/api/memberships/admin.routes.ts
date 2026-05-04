@@ -449,9 +449,10 @@ router.post('/create-member', requireAuth, requireHrcAdmin, async (req, res) => 
       for (let i = 1; i <= desigRow.defaultCapacity; i++) { if (!usedSeats.has(i)) { nextSeat = i; break; } }
       if (!nextSeat) throw Object.assign(new Error('NO_SEATS_DESIGNATION'), { statusCode: 409 });
 
-      const requiresPayment = (avail.designation.fee || 0) > 0;
-      const memStatus: any = activate ? 'ACTIVE' : (requiresPayment ? 'PENDING_PAYMENT' : 'PENDING_APPROVAL');
-      const memPaymentStatus: any = activate ? 'NOT_REQUIRED' : (requiresPayment ? 'PENDING' : 'NOT_REQUIRED');
+      // Admin-created memberships never require payment upfront.
+      // PENDING_PAYMENT would cause the seat-lock scheduler to EXPIRE the membership in 5 min.
+      const memStatus: any = activate ? 'ACTIVE' : 'PENDING_APPROVAL';
+      const memPaymentStatus: any = 'NOT_REQUIRED';
 
       const newMembership = await tx.membership.create({
         data: {
@@ -706,15 +707,19 @@ const handleMembershipAssign = async (req: any, res: any) => {
       // Compute post-update statuses conservatively
       let targetPaymentStatus = m.paymentStatus as any;
       let targetStatus = m.status as any;
-      if (willRequirePayment) {
-        targetPaymentStatus = 'PENDING';
-        targetStatus = 'PENDING_PAYMENT';
+      // Admin-initiated designation change: never set PENDING_PAYMENT.
+      // PENDING_PAYMENT causes the seat-lock scheduler to EXPIRE the membership in 5 min.
+      if (m.status === 'ACTIVE') {
+        targetStatus = 'ACTIVE';
+        targetPaymentStatus = 'NOT_REQUIRED';
+      } else if (m.status === 'PENDING_PAYMENT' || m.status === 'EXPIRED') {
+        // Recover expired/stale memberships back to a usable state on admin reassign
+        targetStatus = 'PENDING_APPROVAL';
+        targetPaymentStatus = 'NOT_REQUIRED';
       } else {
-        // No further amount due. If previously pending payment and now zero-due, move to PENDING_APPROVAL (unless already ACTIVE)
-        if (m.status !== 'ACTIVE') {
-          targetStatus = 'PENDING_APPROVAL';
-        }
-        targetPaymentStatus = paidSum > 0 ? 'SUCCESS' : 'NOT_REQUIRED';
+        // PENDING_APPROVAL or other — keep as PENDING_APPROVAL
+        targetStatus = 'PENDING_APPROVAL';
+        targetPaymentStatus = 'NOT_REQUIRED';
       }
 
       const preview = {
