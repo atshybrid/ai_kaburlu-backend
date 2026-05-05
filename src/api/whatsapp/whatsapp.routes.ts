@@ -186,21 +186,11 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
   if (['hi', 'hello', 'నమస్కారం', 'khabarx', 'hrci', 'helo', 'hey'].includes(text)) {
     const idCardInfo = await lookupIdCardByPhone(from);
     if (idCardInfo) {
+      // Member → directly send ID card, no extra prompts
       await sendIdCard(from, idCardInfo.cardNumber, idCardInfo.fullName || waName);
-      await sendButtonMessage(from, `What would you like to do next?`, [
-        { id: 'btn_news',    title: '📰 Latest News' },
-        { id: 'btn_support', title: '📞 Support' },
-        { id: 'btn_donate',  title: '💝 Donate to HRCI' },
-      ]).catch(() => null);
     } else {
-      await sendButtonMessage(from,
-        `Hello ${waName}! 👋 Welcome to *KhabarX & HRCI*.\n\nAre you an HRCI member?`,
-        [
-          { id: 'btn_member_yes',  title: '✅ Yes, I am Member' },
-          { id: 'btn_member_join', title: '🤝 I want to Join' },
-          { id: 'btn_news',        title: '📰 Latest News' },
-        ],
-      );
+      // Not a member → directly start lead capture (ask for name)
+      await startLeadCapture(from);
     }
     return;
   }
