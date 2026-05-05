@@ -200,7 +200,7 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
     if (idCardInfo) {
       await sendIdCard(from, idCardInfo.cardNumber, idCardInfo.fullName || waName);
     } else {
-      await sendTextMessage(from, `❌ *No ID card found* for your number.\n\nTo join HRCI: https://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`);
+      await sendTextMessage(from, `❌ *ID Card not found* for your number.\n\nTo join *Human Rights Council of India*:\nhttps://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`);
     }
     return;
   }
@@ -208,7 +208,7 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
   if (text === 'join' || text === 'join hrci') { await startLeadCapture(from); return; }
 
   if (text === 'news') {
-    await sendTextMessage(from, `📰 *Today's Top Headlines*\n\nVisit: https://app.humanrightscouncilforindia.org`);
+    await sendTextMessage(from, `📰 *Today's Top Headlines*\n\nVisit: https://app.humanrightscouncilforindia.org\n\n— *Human Rights Council of India*`);
     return;
   }
 
@@ -222,13 +222,13 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
   }
 
   if (text === 'support') {
-    await sendTextMessage(from, `📞 *HRCI Support*\n\nWhatsApp: +91 89061 89999\nEmail: support@humanrightscouncilforindia.org`);
+    await sendTextMessage(from, `📞 *Human Rights Council of India*\n\nWhatsApp: +91 89061 89999\nEmail: support@humanrightscouncilforindia.org\nWebsite: https://app.humanrightscouncilforindia.org`);
     return;
   }
 
   if (text === 'help') {
     await sendTextMessage(from,
-      `*HRCI / KhabarX Bot Commands*\n\n` +
+      `*Human Rights Council of India Bot*\n\n` +
       `• *hi* — Welcome menu\n` +
       `• *idcard* — Get your HRCI ID card PDF\n` +
       `• *join* — Join HRCI membership\n` +
@@ -240,7 +240,7 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
     return;
   }
 
-  await sendTextMessage(from, `I didn't understand that 😊\n\nType *hi* to start or *help* for all commands.`);
+  await sendTextMessage(from, `I didn't understand that 😊\n\nType *hi* to start or *help* for all commands.\n\n— *Human Rights Council of India*`);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -258,16 +258,16 @@ async function handleButtonOrList(from: string, replyId: string, contacts: any[]
       if (idCardInfo) {
         await sendIdCard(from, idCardInfo.cardNumber, contacts[0]?.profile?.name || 'Member');
       } else {
-        await sendTextMessage(from, `We couldn't find your membership. Register at:\nhttps://app.humanrightscouncilforindia.org/join\n\nOr call: +91 89061 89999`);
+        await sendTextMessage(from, `We couldn't find your membership in *Human Rights Council of India*.\n\nRegister at:\nhttps://app.humanrightscouncilforindia.org/join\n\nOr call: +91 89061 89999`);
       }
       break;
     }
     case 'btn_member_join': await startLeadCapture(from); break;
     case 'btn_news':
-      await sendTextMessage(from, `📰 *Today's Top Headlines*\n\nVisit: https://app.humanrightscouncilforindia.org`);
+      await sendTextMessage(from, `📰 *Today's Top Headlines*\n\nVisit: https://app.humanrightscouncilforindia.org\n\n— *Human Rights Council of India*`);
       break;
     case 'btn_support':
-      await sendTextMessage(from, `📞 *HRCI Support*\n\nWhatsApp: +91 89061 89999\nEmail: support@humanrightscouncilforindia.org`);
+      await sendTextMessage(from, `📞 *Human Rights Council of India*\n\nWhatsApp: +91 89061 89999\nEmail: support@humanrightscouncilforindia.org\nWebsite: https://app.humanrightscouncilforindia.org`);
       break;
     case 'btn_donate':
     case 'btn_donate_info':
@@ -293,7 +293,7 @@ async function handleButtonOrList(from: string, replyId: string, contacts: any[]
 ───────────────────────────────────────────────────────────────────────────── */
 async function startLeadCapture(from: string): Promise<void> {
   setSession(from, 'ASK_NAME');
-  await sendTextMessage(from, `🤝 *Join HRCI*\n\nGreat! We'd love to have you.\n\nPlease share your *full name*:`);
+  await sendTextMessage(from, `🤝 *Join Human Rights Council of India*\n\nGreat! We'd love to have you as a member.\n\nPlease share your *full name*:`);
 }
 
 async function handleSessionStep(from: string, text: string, session: BotSession): Promise<void> {
@@ -347,9 +347,9 @@ async function finishLeadCapture(from: string, session: BotSession, postName: st
 
   await sendTextMessage(from,
     `✅ *Thank you, ${fullName}!*\n\n` +
-    `Your interest in *${postName}* from *${area}* has been noted.${seatsMsg}\n\n` +
-    `📞 The *HRCI team will contact you soon* on your number.\n\n` +
-    `Learn more: https://app.humanrightscouncilforindia.org`,
+    `Your interest in the *${postName}* post from *${area}* has been registered with *Human Rights Council of India*.${seatsMsg}\n\n` +
+    `📞 Our team will contact you soon on your number.\n\n` +
+    `🌐 www.humanrightscouncilforindia.org`,
   );
 }
 
@@ -359,7 +359,7 @@ async function finishLeadCapture(from: string, session: BotSession, postName: st
 async function sendIdCard(from: string, cardNumber: string, memberName: string): Promise<void> {
   const pdfUrl   = `${BASE_URL}/api/v1/hrci/idcard/${encodeURIComponent(cardNumber)}/pdf`;
   const filename = `HRCI-ID-Card-${cardNumber}.pdf`;
-  await sendTextMessage(from, `🪪 *HRCI ID Card*\n\nHello *${memberName}*!\nCard No: *${cardNumber}*`).catch(() => null);
+  await sendTextMessage(from, `🪪 *Human Rights Council of India*\n\nHello *${memberName}*!\nYour ID Card No: *${cardNumber}*`).catch(() => null);
   await sendDocumentMessage(from, pdfUrl, filename, `HRCI Member ID Card — ${cardNumber}`)
     .catch(async (err) => {
       console.warn('[WhatsApp] Document send failed, falling back to link:', err?.message);
