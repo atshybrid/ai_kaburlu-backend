@@ -28,6 +28,7 @@ export const getLocation = async (userId: string) => {
 import prisma from '../../lib/prisma';
 import { hashMpin } from '../../lib/mpin';
 import { buildUserMobileLookupWhere, normalizeMobileNumber } from '../../lib/mobileNumber';
+import { sendAccountSetupMessage } from '../../lib/whatsapp';
 
 export const createUser = async (data: any) => {
     const toCreate = { ...data };
@@ -196,6 +197,13 @@ export const upgradeGuest = async (data: any) => {
         update: { deviceModel, pushToken, userId: user.id },
         create: { deviceId, deviceModel, pushToken, userId: user.id },
     });
+
+    // Send WhatsApp account setup confirmation (fire-and-forget; never block registration).
+    const waTo = normMobile.replace(/^\+/, ''); // E.164 without leading +
+    const waName = (data.fullName || data.name || '').trim() || waTo;
+    sendAccountSetupMessage(waTo, waName).catch(err =>
+        console.warn('[WhatsApp] sendAccountSetupMessage failed:', err?.message),
+    );
 
     return user;
 };

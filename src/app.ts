@@ -61,6 +61,7 @@ import meetRoutes from './api/meet/meet.routes';
 import adsRoutes from './api/ads/ads.routes';
 import paymentWebhookRoutes from './api/payments/webhook.routes';
 import adminBootstrapRoutes from './api/admin/bootstrap.routes';
+import whatsappRoutes from './api/whatsapp/whatsapp.routes';
 import { registerShareSupport } from './lib/share-support';
 
 const app = express();
@@ -200,6 +201,7 @@ app.use('/ads', adsRoutes);
 app.use('/payment', paymentWebhookRoutes); // exposes POST /payment/webhook
 // Admin bootstrap (token-guarded, no JWT needed): POST /admin/bootstrap-accounts
 app.use('/admin', adminBootstrapRoutes);
+app.use('/whatsapp', whatsappRoutes); // WhatsApp Cloud API webhook
 // Public joining endpoints (no version prefix per request)
 app.use('/hrci/geo', geoHrcRoutes); // expose HRCI geo reads without versioned base
 app.use('/hrci/geo/admin', geoHrcAdminRoutes); // protected via JWT + admin
@@ -281,6 +283,7 @@ apiV1.use('/ads', adsRoutes);
 apiV1.use('/payment', paymentWebhookRoutes); // exposes POST /api/v1/payment/webhook
 // Also mount under versioned base: POST /api/v1/admin/bootstrap-accounts
 apiV1.use('/admin', adminBootstrapRoutes);
+apiV1.use('/whatsapp', whatsappRoutes); // WhatsApp Cloud API webhook
 apiV1.use('/hrci/geo', geoHrcRoutes);
 apiV1.use('/hrci/geo/admin', geoHrcAdminRoutes); // add versioned admin mount for parity
 apiV1.use('/hrci/cells', hrciCellsRoutes);
