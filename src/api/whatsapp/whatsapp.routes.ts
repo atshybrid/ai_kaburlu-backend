@@ -12,7 +12,42 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { sendTextMessage, sendButtonMessage, markAsRead } from '../../lib/whatsapp';
+import { sendTextMessage, sendButtonMessage, sendDocumentMessage, markAsRead } from '../../lib/whatsapp';
+import prisma from '../../lib/prisma';
+import { normalizeMobileNumber } from '../../lib/mobileNumber';
+
+const BASE_URL = process.env.PROD_BASE_URL?.replace('/api/v1', '') || 'https://app.humanrightscouncilforindia.org';
+
+/**
+ * Lookup member ID card by incoming WhatsApp phone (E.164 without +, e.g. 919502337775).
+ * Returns cardNumber string or null if not found.
+ */
+async function lookupIdCardByPhone(waPhone: string): Promise<{ cardNumber: string; fullName: string | null } | null> {
+  try {
+    const norm = normalizeMobileNumber(waPhone); // → 10-digit e.g. 9502337775
+    if (!norm) return null;
+
+    const user = await (prisma as any).user.findFirst({
+      where: { OR: [{ mobileNumber: norm }, { mobileNumber: { endsWith: norm } }] },
+      select: { id: true },
+    });
+    if (!user) return null;
+
+    const membership = await (prisma as any).membership.findFirst({
+      where: { userId: user.id, status: 'ACTIVE' },
+      include: { idCard: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (!membership?.idCard) return null;
+
+    return {
+      cardNumber: membership.idCard.cardNumber,
+      fullName: membership.idCard.fullName || null,
+    };
+  } catch {
+    return null;
+  }
+}
 
 const router = Router();
 
@@ -97,16 +132,56 @@ async function handleTextMessage(
 ): Promise<void> {
   const name = contacts[0]?.profile?.name ?? 'there';
 
-  if (text === 'hi' || text === 'hello' || text === 'నమస్కారం') {
-    await sendButtonMessage(
-      from,
-      `Hello ${name}! 👋 Welcome to *KhabarX*.\nWhat would you like to do?`,
-      [
-        { id: 'btn_news',    title: '📰 Latest News' },
-        { id: 'btn_join',    title: '🤝 Join HRCI' },
-        { id: 'btn_support', title: '📞 Support' },
-      ],
-    );
+  if (text === 'hi' || text === 'hello' || text === 'నమస్కారం' || text === 'khabarx' || text === 'hrci') {
+    // Check if this user has an ID card
+    const idCardInfo = await lookupIdCardByPhone(from);
+
+    if (idCardInfo) {
+      const { cardNumber, fullName } = idCardInfo;
+      const memberName = fullName || name;
+      const pdfUrl = `${BASE_URL}/api/v1/hrci/idcard/${encodeURIComponent(cardNumber)}/pdf`;
+      const filename = `HRCI-ID-Card-${cardNumber}.pdf`;
+
+      await sendTextMessage(
+        from,
+        `🪪 *HRCI ID Card*\n\nHello *${memberName}*! Your ID card is ready.\nCard No: *${cardNumber}*`,
+      ).catch(() => null);
+
+      await sendDocumentMessage(
+        from,
+        pdfUrl,
+        filename,
+        `HRCI Member ID Card — ${cardNumber}`,
+      ).catch(async (err) => {
+        // Fallback: send as link if document send fails
+        console.warn('[WhatsApp] Document send failed, falling back to link:', err?.message);
+        await sendTextMessage(
+          from,
+          `📥 *Download your ID Card PDF:*\n${pdfUrl}`,
+        ).catch(() => null);
+      });
+
+      // Also show the main menu
+      await sendButtonMessage(
+        from,
+        `What would you like to do next?`,
+        [
+          { id: 'btn_news',    title: '📰 Latest News' },
+          { id: 'btn_join',    title: '🤝 Join HRCI' },
+          { id: 'btn_support', title: '📞 Support' },
+        ],
+      ).catch(() => null);
+    } else {
+      await sendButtonMessage(
+        from,
+        `Hello ${name}! 👋 Welcome to *KhabarX*.\nWhat would you like to do?`,
+        [
+          { id: 'btn_news',    title: '📰 Latest News' },
+          { id: 'btn_join',    title: '🤝 Join HRCI' },
+          { id: 'btn_support', title: '📞 Support' },
+        ],
+      );
+    }
     return;
   }
 
@@ -114,7 +189,8 @@ async function handleTextMessage(
     await sendTextMessage(
       from,
       `*KhabarX Bot Commands*\n\n` +
-      `• *hi* — Start menu\n` +
+      `• *hi* — Start menu + your ID card\n` +
+      `• *idcard* — Get your HRCI ID card PDF\n` +
       `• *news* — Latest headlines\n` +
       `• *join* — Join HRCI membership\n` +
       `• *support* — Contact support\n` +
@@ -128,6 +204,33 @@ async function handleTextMessage(
       from,
       `📰 *Today's Top Headlines*\n\nVisit our app for full stories:\nhttps://app.humanrightscouncilforindia.org`,
     );
+    return;
+  }
+
+  if (text === 'idcard' || text === 'id card' || text === 'id') {
+    const idCardInfo = await lookupIdCardByPhone(from);
+    if (idCardInfo) {
+      const { cardNumber, fullName } = idCardInfo;
+      const memberName = fullName || 'Member';
+      const pdfUrl = `${BASE_URL}/api/v1/hrci/idcard/${encodeURIComponent(cardNumber)}/pdf`;
+      const filename = `HRCI-ID-Card-${cardNumber}.pdf`;
+
+      await sendTextMessage(
+        from,
+        `🪪 *HRCI ID Card*\n\nHello *${memberName}*!\nCard No: *${cardNumber}*`,
+      ).catch(() => null);
+
+      await sendDocumentMessage(from, pdfUrl, filename, `HRCI Member ID Card — ${cardNumber}`)
+        .catch(async (err) => {
+          console.warn('[WhatsApp] Document send failed, falling back to link:', err?.message);
+          await sendTextMessage(from, `📥 *Download your ID Card PDF:*\n${pdfUrl}`).catch(() => null);
+        });
+    } else {
+      await sendTextMessage(
+        from,
+        `❌ *No ID card found* for your number.\n\nJoin HRCI at:\nhttps://app.humanrightscouncilforindia.org/join\n\nFor help call: +91 89061 89999`,
+      );
+    }
     return;
   }
 

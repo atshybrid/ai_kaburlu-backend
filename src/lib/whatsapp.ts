@@ -140,3 +140,39 @@ export async function sendAccountSetupMessage(to: string, name: string): Promise
     throw new Error(`WhatsApp sendAccountSetupMessage failed [${res.status}]: ${err}`);
   }
 }
+
+/**
+ * Send a document (PDF, etc.) to a WhatsApp user via a publicly accessible URL.
+ */
+export async function sendDocumentMessage(
+  to: string,
+  link: string,
+  filename: string,
+  caption?: string,
+): Promise<void> {
+  const payload: any = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to,
+    type: 'document',
+    document: {
+      link,
+      filename,
+    },
+  };
+  if (caption) payload.document.caption = caption;
+
+  const res = await fetch(BASE_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${ACCESS_TOKEN}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`WhatsApp sendDocumentMessage failed [${res.status}]: ${err}`);
+  }
+}
