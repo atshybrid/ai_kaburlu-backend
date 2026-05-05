@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import prisma from '../../lib/prisma';
-import { createRazorpayOrder, getRazorpayKeyId, razorpayEnabled, verifyRazorpaySignature, createRazorpayPaymentLink, getRazorpayPaymentLink, getRazorpayOrderPayments, listRazorpayPaymentLinks, updateRazorpayPaymentLink, notifyRazorpayPaymentLink } from '../../lib/razorpay';
+import { createRazorpayOrder, getRazorpayKeyId, razorpayEnabled, verifyRazorpaySignature, createRazorpayPaymentLink, getRazorpayPaymentLink, getRazorpayOrderPayments, listRazorpayPaymentLinks, updateRazorpayPaymentLink, notifyRazorpayPaymentLink, createRazorpayPlan, createRazorpaySubscription, getRazorpaySubscription, cancelRazorpaySubscription } from '../../lib/razorpay';
 import { generateDonationReceiptPdf, buildDonationReceiptHtml } from '../../lib/pdf/generateDonationReceipt';
 import { requireAuth, requireHrcAdmin } from '../middlewares/authz';
 import { randomUUID } from 'crypto';
@@ -2744,5 +2744,173 @@ async function ensureDefaultEvent(): Promise<string> {
   const created = await (prisma as any).donationEvent.create({ data: { title: 'General Donation', status: 'ACTIVE', allowCustom: true, presets: [100, 500, 1000] } });
   return created.id;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Recurring Donation — Razorpay Subscriptions
+───────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * POST /donations/subscribe
+ * Create a recurring donation subscription via Razorpay.
+ * Body: { amount (INR), period?, totalCount?, donorName?, donorEmail?, donorMobile?, donorPan?, eventId? }
+ */
+router.post('/subscribe', async (req: any, res: any) => {
+  try {
+    if (!razorpayEnabled()) return res.status(503).json({ success: false, error: 'RAZORPAY_DISABLED' });
+
+    const { amount, period = 'monthly', totalCount = 12, donorName, donorEmail, donorMobile, donorPan, eventId } = req.body;
+
+    if (!amount || amount < 1) return res.status(400).json({ success: false, error: 'INVALID_AMOUNT', message: 'amount must be >= 1 INR' });
+
+    const periodMap: Record<string, string> = { monthly: 'monthly', quarterly: 'monthly', yearly: 'yearly', weekly: 'weekly', daily: 'daily' };
+    const rzpPeriod = periodMap[period] || 'monthly';
+    const intervalMap: Record<string, number> = { monthly: 1, quarterly: 3, yearly: 1, weekly: 1, daily: 1 };
+    const interval = intervalMap[period] || 1;
+
+    // Create Razorpay Plan (price template)
+    const planName = `HRCI Donation - ₹${amount}/${period}`;
+    const plan = await createRazorpayPlan({
+      period: rzpPeriod as any,
+      interval,
+      name: planName,
+      amountPaise: amount * 100,
+      currency: 'INR',
+      notes: { donorName: donorName || '', donorMobile: donorMobile || '' },
+    });
+
+    // Create Razorpay Subscription
+    const sub = await createRazorpaySubscription({
+      planId: plan.id,
+      totalCount: totalCount || 12,
+      customer: { name: donorName, email: donorEmail, contact: donorMobile },
+      notes: { donorName: donorName || '', donorMobile: donorMobile || '', donorPan: donorPan || '' },
+    });
+
+    // Save to DB
+    const record = await (prisma as any).donationSubscription.create({
+      data: {
+        donorName:      donorName    || null,
+        donorMobile:    donorMobile  || null,
+        donorEmail:     donorEmail   || null,
+        donorPan:       donorPan     || null,
+        amount,
+        currency:       'INR',
+        period,
+        totalCount:     totalCount  || 12,
+        status:         'PENDING',
+        providerPlanId: plan.id,
+        providerSubId:  sub.id,
+        providerSubUrl: sub.short_url,
+        eventId:        eventId || null,
+      },
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        subscriptionId: sub.id,
+        shortUrl:       sub.short_url,
+        amount,
+        period,
+        totalCount:     totalCount || 12,
+        dbId:           record.id,
+        keyId:          getRazorpayKeyId(),
+      },
+    });
+  } catch (e: any) {
+    console.error('[Donations] Subscribe error:', e?.message);
+    return res.status(500).json({ success: false, error: 'SUBSCRIBE_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * GET /donations/subscribe/:id
+ * Check subscription status by DB ID or Razorpay subscription ID.
+ */
+router.get('/subscribe/:id', async (req: any, res: any) => {
+  try {
+    const { id } = req.params;
+
+    // Try DB first
+    const record = await (prisma as any).donationSubscription.findFirst({
+      where: { OR: [{ id }, { providerSubId: id }] },
+    });
+    if (!record) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+
+    // Fetch live status from Razorpay if we have a subscription ID
+    let liveStatus: any = null;
+    if (record.providerSubId && razorpayEnabled()) {
+      try {
+        liveStatus = await getRazorpaySubscription(record.providerSubId);
+        // Sync status back to DB
+        if (liveStatus?.status && liveStatus.status !== record.status.toLowerCase()) {
+          const statusMap: Record<string, string> = {
+            created: 'PENDING', authenticated: 'ACTIVE', active: 'ACTIVE',
+            pending: 'PENDING', halted: 'HALTED', cancelled: 'CANCELLED', completed: 'COMPLETED',
+          };
+          const newStatus = statusMap[liveStatus.status] || record.status;
+          await (prisma as any).donationSubscription.update({
+            where: { id: record.id },
+            data: { status: newStatus, paidCount: liveStatus.paid_count ?? record.paidCount },
+          }).catch(() => null);
+        }
+      } catch { /* live check optional */ }
+    }
+
+    return res.json({ success: true, data: { ...record, liveStatus } });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'SUBSCRIBE_STATUS_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * POST /donations/subscribe/:id/cancel
+ * Cancel a subscription.
+ */
+router.post('/subscribe/:id/cancel', requireAuth, async (req: any, res: any) => {
+  try {
+    const { id } = req.params;
+    const { cancelAtCycleEnd = true } = req.body;
+
+    const record = await (prisma as any).donationSubscription.findFirst({
+      where: { OR: [{ id }, { providerSubId: id }] },
+    });
+    if (!record) return res.status(404).json({ success: false, error: 'NOT_FOUND' });
+
+    if (record.providerSubId && razorpayEnabled()) {
+      await cancelRazorpaySubscription(record.providerSubId, cancelAtCycleEnd);
+    }
+
+    const updated = await (prisma as any).donationSubscription.update({
+      where: { id: record.id },
+      data: { status: 'CANCELLED' },
+    });
+
+    return res.json({ success: true, data: updated });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'CANCEL_FAILED', message: e?.message });
+  }
+});
+
+/**
+ * GET /donations/admin/subscriptions
+ * Admin: list all recurring subscriptions.
+ */
+router.get('/admin/subscriptions', requireAuth, requireHrcAdmin, async (req: any, res: any) => {
+  try {
+    const status = req.query.status as string | undefined;
+    const skip   = parseInt(String(req.query.skip || '0'), 10);
+    const take   = Math.min(parseInt(String(req.query.take || '50'), 10), 200);
+    const where: any = {};
+    if (status) where.status = status;
+    const [data, total] = await Promise.all([
+      (prisma as any).donationSubscription.findMany({ where, orderBy: { createdAt: 'desc' }, skip, take }),
+      (prisma as any).donationSubscription.count({ where }),
+    ]);
+    return res.json({ success: true, total, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: 'SUBSCRIPTIONS_LIST_FAILED', message: e?.message });
+  }
+});
 
 export default router;

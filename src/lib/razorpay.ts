@@ -112,3 +112,97 @@ export function verifyRazorpayWebhookSignature(payload: string, signature: strin
   const digest = hmac.digest('hex');
   return digest === signature;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Razorpay Subscriptions (Recurring Donations)
+   Docs: https://razorpay.com/docs/payments/subscriptions/
+───────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Create a Razorpay Plan (price template for recurring billing).
+ * period: daily | weekly | monthly | yearly
+ * interval: e.g. 1 (every 1 month)
+ */
+export async function createRazorpayPlan(args: {
+  period: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  interval: number;
+  name: string;
+  amountPaise: number;
+  currency?: string;
+  notes?: Record<string, any>;
+}) {
+  const res = await axios.post('https://api.razorpay.com/v1/plans', {
+    period: args.period,
+    interval: args.interval,
+    item: {
+      name: args.name,
+      amount: args.amountPaise,
+      currency: args.currency || 'INR',
+    },
+    notes: args.notes || {},
+  }, {
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+  });
+  return res.data as { id: string; interval: number; period: string; item: any };
+}
+
+/**
+ * Create a Razorpay Subscription for a given plan.
+ * Returns subscription object including short_url for the user to complete first payment.
+ */
+export async function createRazorpaySubscription(args: {
+  planId: string;
+  totalCount: number;       // 0 for indefinite
+  quantity?: number;
+  startAt?: number;         // unix timestamp
+  notify?: { sms?: boolean; email?: boolean };
+  customer?: { name?: string; contact?: string; email?: string };
+  notes?: Record<string, any>;
+}) {
+  const payload: any = {
+    plan_id: args.planId,
+    total_count: args.totalCount || 12,
+    quantity: args.quantity || 1,
+    notify_info: {
+      notify_phone: args.notify?.sms !== false ? (args.customer?.contact || undefined) : undefined,
+      notify_email: args.notify?.email !== false ? (args.customer?.email || undefined) : undefined,
+    },
+    notes: args.notes || {},
+  };
+  if (args.startAt) payload.start_at = args.startAt;
+  if (args.customer?.name) payload.customer_notify = 1;
+
+  const res = await axios.post('https://api.razorpay.com/v1/subscriptions', payload, {
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+  });
+  return res.data as {
+    id: string;
+    plan_id: string;
+    status: string;
+    total_count: number;
+    paid_count: number;
+    short_url: string;
+  };
+}
+
+/**
+ * Fetch a Razorpay Subscription by ID.
+ */
+export async function getRazorpaySubscription(subId: string) {
+  const res = await axios.get(`https://api.razorpay.com/v1/subscriptions/${subId}`, {
+    headers: { ...authHeader() },
+  });
+  return res.data as { id: string; status: string; paid_count: number; short_url: string };
+}
+
+/**
+ * Cancel a Razorpay Subscription (at cycle end or immediately).
+ */
+export async function cancelRazorpaySubscription(subId: string, cancelAtCycleEnd = true) {
+  const res = await axios.post(
+    `https://api.razorpay.com/v1/subscriptions/${subId}/cancel`,
+    { cancel_at_cycle_end: cancelAtCycleEnd ? 1 : 0 },
+    { headers: { 'Content-Type': 'application/json', ...authHeader() } },
+  );
+  return res.data as any;
+}

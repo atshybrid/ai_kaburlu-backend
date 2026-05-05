@@ -1363,3 +1363,46 @@ model Policy {
 
   @@index([type, isPublished])
 }
+
+/// WhatsApp Bot Lead — non-member who expressed interest in HRCI membership
+model WaBotLead {
+  id              String   @id @default(cuid())
+  phone           String   // E.164 without +, e.g. 919502337775
+  fullName        String?
+  area            String?  // district/mandal/area free-text
+  postInterested  String?  // designation name they selected
+  seatsAvailable  Int?     // snapshot of available seats at inquiry time
+  status          String   @default("NEW") // NEW | CONTACTED | CONVERTED | CLOSED
+  notifiedAdmin   Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([phone])
+  @@index([status, createdAt])
+}
+
+/// Razorpay Recurring Donation Subscription
+model DonationSubscription {
+  id              String   @id @default(cuid())
+  donorName       String?
+  donorMobile     String?
+  donorEmail      String?
+  donorPan        String?
+  amount          Int      // per-period amount in INR
+  currency        String   @default("INR")
+  period          String   @default("monthly") // monthly | quarterly | yearly
+  totalCount      Int      @default(12) // number of billing cycles (0 = infinite)
+  paidCount       Int      @default(0)
+  status          String   @default("PENDING") // PENDING | ACTIVE | HALTED | CANCELLED | COMPLETED
+  providerPlanId  String?  // Razorpay plan_id
+  providerSubId   String?  @unique // Razorpay subscription_id
+  providerSubUrl  String?  // short_url for user to complete first payment
+  eventId         String?  // optional donation event linkage
+  referrerUserId  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([donorMobile])
+  @@index([providerSubId])
+}
