@@ -194,7 +194,7 @@ const T = {
     kn: { idcard: '🪪 ID ಕಾರ್ಡ್',   donate: '💝 ದೇಣಿಗೆ',   third: '🌐 English',  thirdId: 'btn_lang_en' },
     ta: { idcard: '🪪 ID அட்டை',    donate: '💝 நன்கொடை',  third: '🌐 English',  thirdId: 'btn_lang_en' },
     ml: { idcard: '🪪 ID കാർഡ്',    donate: '💝 സംഭാവന',   third: '🌐 English',  thirdId: 'btn_lang_en' },
-    en: { idcard: '🪪 ID Card',      donate: '💝 Donate',    third: '🤝 Join HRCI', thirdId: 'btn_hi_join' },
+    en: { idcard: '🪪 ID Card',      donate: '💝 Donate',    third: '📞 Support',   thirdId: 'btn_support' },
   } as Record<Lang, { idcard: string; donate: string; third: string; thirdId: string }>,
 
   help: {
