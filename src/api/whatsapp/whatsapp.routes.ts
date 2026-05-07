@@ -121,6 +121,108 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 /* ─────────────────────────────────────────────────────────────────────────────
+   Language detection & preferences
+───────────────────────────────────────────────────────────────────────────── */
+type Lang = 'te' | 'kn' | 'ta' | 'ml' | 'en';
+
+const STATE_LANG_MAP: Record<string, Lang> = {
+  'telangana': 'te',
+  'andhra pradesh': 'te',
+  'karnataka': 'kn',
+  'tamil nadu': 'ta',
+  'kerala': 'ml',
+};
+
+const langPrefs = new Map<string, { lang: Lang; setAt: number }>();
+const LANG_TTL_MS = 24 * 60 * 60 * 1000;
+
+function getLangPref(phone: string): Lang | undefined {
+  const p = langPrefs.get(phone);
+  if (!p) return undefined;
+  if (Date.now() - p.setAt > LANG_TTL_MS) { langPrefs.delete(phone); return undefined; }
+  return p.lang;
+}
+
+function setLangPref(phone: string, lang: Lang) {
+  langPrefs.set(phone, { lang, setAt: Date.now() });
+}
+
+async function getUserLang(phone: string): Promise<Lang> {
+  const pref = getLangPref(phone);
+  if (pref) return pref;
+  try {
+    const norm = normalizeMobileNumber(phone);
+    if (!norm) return 'en';
+    const user = await (prisma as any).user.findFirst({
+      where: { OR: [{ mobileNumber: norm }, { mobileNumber: { endsWith: norm } }] },
+      select: { id: true },
+    });
+    if (!user) return 'en';
+    const membership = await (prisma as any).membership.findFirst({
+      where: { userId: user.id },
+      select: { hrcStateId: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (!membership?.hrcStateId) return 'en';
+    const state = await (prisma as any).hrcState.findUnique({
+      where: { id: membership.hrcStateId },
+      select: { name: true },
+    });
+    const lang: Lang = STATE_LANG_MAP[(state?.name ?? '').toLowerCase()] ?? 'en';
+    setLangPref(phone, lang);
+    return lang;
+  } catch { return 'en'; }
+}
+
+/* Bot message translations */
+const T = {
+  greeting: {
+    te: (name: string) =>
+      `నమస్కారం ${name}! 🙏\n\n*Human Rights Council of India* కి స్వాగతం.\n\nమీరు ఏమి చేయాలనుకుంటున్నారు?`,
+    kn: (name: string) =>
+      `ನಮಸ್ಕಾರ ${name}! 🙏\n\n*Human Rights Council of India* ಗೆ ಸ್ವಾಗತ.\n\nನೀವು ಏನು ಮಾಡಲು ಬಯಸುತ್ತೀರಿ?`,
+    ta: (name: string) =>
+      `வணக்கம் ${name}! 🙏\n\n*Human Rights Council of India* க்கு வரவேற்கிறோம்.\n\nநீங்கள் என்ன செய்ய விரும்புகிறீர்கள்?`,
+    ml: (name: string) =>
+      `നമസ്കാരം ${name}! 🙏\n\n*Human Rights Council of India* ലേക്ക് സ്വാഗതം.\n\nനിങ്ങൾ എന്ത് ചെയ്യണം?`,
+    en: (name: string) =>
+      `Hello ${name}! 🙏\n\nWelcome to *Human Rights Council of India*.\n\nHow can we help you today?`,
+  } as Record<Lang, (name: string) => string>,
+
+  menuBtns: {
+    te: { idcard: '🪪 ID కార్డ్',    donate: '💝 విరాళం',   third: '🌐 English',  thirdId: 'btn_lang_en' },
+    kn: { idcard: '🪪 ID ಕಾರ್ಡ್',   donate: '💝 ದೇಣಿಗೆ',   third: '🌐 English',  thirdId: 'btn_lang_en' },
+    ta: { idcard: '🪪 ID அட்டை',    donate: '💝 நன்கொடை',  third: '🌐 English',  thirdId: 'btn_lang_en' },
+    ml: { idcard: '🪪 ID കാർഡ്',    donate: '💝 സംഭാവന',   third: '🌐 English',  thirdId: 'btn_lang_en' },
+    en: { idcard: '🪪 ID Card',      donate: '💝 Donate',    third: '🤝 Join HRCI', thirdId: 'btn_hi_join' },
+  } as Record<Lang, { idcard: string; donate: string; third: string; thirdId: string }>,
+
+  help: {
+    te: `*HRCI WhatsApp Bot - సహాయం*\n\n• *hi* — స్వాగత మెను\n• *idcard* — HRCI ID కార్డ్\n• *join* — HRCI లో చేరండి\n• *donate* — విరాళం ఇవ్వండి\n• *news* — తాజా వార్తలు\n• *support* — సపోర్ట్\n• *english* — Switch to English`,
+    kn: `*HRCI WhatsApp Bot - ಸಹಾಯ*\n\n• *hi* — ಸ್ವಾಗತ ಮೆನು\n• *idcard* — HRCI ID ಕಾರ್ಡ್\n• *join* — HRCI ಸೇರಿ\n• *donate* — ದೇಣಿಗೆ ನೀಡಿ\n• *news* — ತಾಜಾ ಸುದ್ದಿ\n• *support* — ಬೆಂಬಲ\n• *english* — Switch to English`,
+    ta: `*HRCI WhatsApp Bot - உதவி*\n\n• *hi* — வரவேற்பு மெனு\n• *idcard* — HRCI ID அட்டை\n• *join* — HRCI இணைக\n• *donate* — நன்கொடை\n• *news* — செய்திகள்\n• *support* — ஆதரவு\n• *english* — Switch to English`,
+    ml: `*HRCI WhatsApp Bot - സഹായം*\n\n• *hi* — സ്വാഗത മെനു\n• *idcard* — HRCI ID കാർഡ്\n• *join* — HRCI ചേരൂ\n• *donate* — സംഭാവന\n• *news* — വാർത്തകൾ\n• *support* — സഹായം\n• *english* — Switch to English`,
+    en: `*Human Rights Council of India Bot*\n\n• *hi* — Welcome menu\n• *idcard* — Get your HRCI ID card PDF\n• *join* — Join HRCI membership\n• *donate* — Donate to HRCI\n• *news* — Latest headlines\n• *support* — Contact support\n• *help* — Show this menu\n• *telugu / kannada / tamil / malayalam* — Change language`,
+  } as Record<Lang, string>,
+
+  noMember: {
+    te: `❌ *మీ నంబర్‌కు ID కార్డ్ కనుగొనబడలేదు.*\n\nHRCI లో చేరడానికి:\nhttps://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`,
+    kn: `❌ *ನಿಮ್ಮ ನಂಬರ್‌ಗೆ ID ಕಾರ್ಡ್ ಕಂಡುಬಂದಿಲ್ಲ.*\n\nHRCI ಸೇರಲು:\nhttps://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`,
+    ta: `❌ *உங்கள் எண்ணுக்கு ID அட்டை கிடைக்கவில்லை.*\n\nHRCI இணைய:\nhttps://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`,
+    ml: `❌ *നിങ്ങളുടെ നംബറിന് ID കാർഡ് കണ്ടെത്തിയില്ല.*\n\nHRCI ചേരാൻ:\nhttps://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`,
+    en: `❌ *ID Card not found* for your number.\n\nTo join *Human Rights Council of India*:\nhttps://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`,
+  } as Record<Lang, string>,
+
+  langSwitched: {
+    te: `✅ తెలుగులోకి మార్చబడింది. కొనసాగించడానికి *hi* అని టైప్ చేయండి.`,
+    kn: `✅ ಕನ್ನಡಕ್ಕೆ ಬದಲಾಯಿಸಲಾಗಿದೆ. ಮುಂದುವರಿಯಲು *hi* ಎಂದು ಟೈಪ್ ಮಾಡಿ.`,
+    ta: `✅ தமிழிலுக்கு மாற்றப்பட்டது. தொடர *hi* என்று தட்டச்சு செய்யுங்கள்.`,
+    ml: `✅ മലയാളത്തിലേക്ക് മാറ്റി. തുടരാൻ *hi* ടൈപ്പ് ചെയ്യുക.`,
+    en: `✅ Switched to English. Type *hi* to continue.`,
+  } as Record<Lang, string>,
+};
+
+/* ─────────────────────────────────────────────────────────────────────────────
    DB helpers
 ───────────────────────────────────────────────────────────────────────────── */
 async function lookupIdCardByPhone(waPhone: string): Promise<{ cardNumber: string; fullName: string | null } | null> {
@@ -513,22 +615,34 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
   const session = getSession(from);
   if (session) { await handleSessionStep(from, text, session); return; }
 
-  if (['hi', 'hello', 'నమస్కారం', 'khabarx', 'hrci', 'helo', 'hey'].includes(text)) {
-    const idCardInfo = await lookupIdCardByPhone(from);
-    if (idCardInfo) {
-      await sendIdCard(from, idCardInfo.cardNumber, idCardInfo.fullName || waName);
-    } else {
-      await startLeadCapture(from);
-    }
+  // Language switch commands
+  if (text === 'english') { setLangPref(from, 'en'); await sendTextMessage(from, T.langSwitched.en); return; }
+  if (text === 'telugu')   { setLangPref(from, 'te'); await sendTextMessage(from, T.langSwitched.te); return; }
+  if (text === 'kannada')  { setLangPref(from, 'kn'); await sendTextMessage(from, T.langSwitched.kn); return; }
+  if (text === 'tamil')    { setLangPref(from, 'ta'); await sendTextMessage(from, T.langSwitched.ta); return; }
+  if (text === 'malayalam') { setLangPref(from, 'ml'); await sendTextMessage(from, T.langSwitched.ml); return; }
+
+  if (['hi', 'hello', 'నమస్కారం', 'khabarx', 'hrci', 'helo', 'hey', 'start'].includes(text)) {
+    const lang = await getUserLang(from);
+    const btns = T.menuBtns[lang];
+    await sendButtonMessage(from,
+      T.greeting[lang](waName),
+      [
+        { id: 'btn_hi_idcard', title: btns.idcard },
+        { id: 'btn_hi_donate', title: btns.donate },
+        { id: btns.thirdId,   title: btns.third  },
+      ],
+    );
     return;
   }
 
   if (text === 'idcard' || text === 'id card' || text === 'id') {
+    const lang = await getUserLang(from);
     const idCardInfo = await lookupIdCardByPhone(from);
     if (idCardInfo) {
       await sendIdCard(from, idCardInfo.cardNumber, idCardInfo.fullName || waName);
     } else {
-      await sendTextMessage(from, `❌ *ID Card not found* for your number.\n\nTo join *Human Rights Council of India*:\nhttps://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`);
+      await sendTextMessage(from, T.noMember[lang]);
     }
     return;
   }
@@ -551,20 +665,22 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
   }
 
   if (text === 'help') {
-    await sendTextMessage(from,
-      `*Human Rights Council of India Bot*\n\n` +
-      `• *hi* — Welcome menu\n` +
-      `• *idcard* — Get your HRCI ID card PDF\n` +
-      `• *join* — Join HRCI membership\n` +
-      `• *donate* — Donate to HRCI\n` +
-      `• *news* — Latest headlines\n` +
-      `• *support* — Contact support\n` +
-      `• *help* — Show this menu`,
-    );
+    const lang = await getUserLang(from);
+    await sendTextMessage(from, T.help[lang]);
     return;
   }
 
-  await sendTextMessage(from, `I didn't understand that 😊\n\nType *hi* to start or *help* for all commands.\n\n— *Human Rights Council of India*`);
+  const lang = await getUserLang(from);
+  const unknown = lang === 'te'
+    ? `అర్థం కాలేదు 😊\n\nప్రారంభించడానికి *hi* లేదా అన్ని ఆదేశాల కోసం *help* అని టైప్ చేయండి.`
+    : lang === 'kn'
+    ? `ಅರ್ಥವಾಗಲಿಲ್ಲ 😊\n\nಪ್ರಾರಂಭಿಸಲು *hi* ಅಥವಾ ಎಲ್ಲ ಆಜ್ಞೆಗಳಿಗೆ *help* ಎಂದು ಟೈಪ್ ಮಾಡಿ.`
+    : lang === 'ta'
+    ? `புரியவில்லை 😊\n\nதொடங்க *hi* அல்லது அனைத்து கட்டளைகளுக்கும் *help* என்று தட்டச்சு செய்யுங்கள்.`
+    : lang === 'ml'
+    ? `മനസ്സിലായില്ല 😊\n\nആരംഭിക്കാൻ *hi* അല്ലെങ്കിൽ എല്ലാ കമാൻഡുകൾക്കും *help* ടൈപ്പ് ചെയ്യുക.`
+    : `I didn't understand that 😊\n\nType *hi* to start or *help* for all commands.\n\n— *Human Rights Council of India*`;
+  await sendTextMessage(from, unknown);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -718,6 +834,22 @@ async function handleButtonOrList(from: string, replyId: string, contacts: any[]
   }
 
   switch (replyId) {
+    case 'btn_hi_idcard': {
+      const lang = await getUserLang(from);
+      const idCardInfo = await lookupIdCardByPhone(from);
+      if (idCardInfo) {
+        await sendIdCard(from, idCardInfo.cardNumber, contacts[0]?.profile?.name || 'Member');
+      } else {
+        await sendTextMessage(from, T.noMember[lang]);
+      }
+      break;
+    }
+    case 'btn_hi_donate': await sendDonationMenu(from); break;
+    case 'btn_hi_join':   await startLeadCapture(from); break;
+    case 'btn_lang_en':
+      setLangPref(from, 'en');
+      await sendTextMessage(from, T.langSwitched.en);
+      break;
     case 'btn_member_yes': {
       const idCardInfo = await lookupIdCardByPhone(from);
       if (idCardInfo) {
