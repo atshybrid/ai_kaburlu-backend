@@ -240,13 +240,16 @@ async function createDonationPaymentLink(args: {
   });
 
   // Create Razorpay payment link
+  const safeTitle = args.eventTitle.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 60);
   const pl = await createRazorpayPaymentLink({
     amountPaise: args.amountPaise,
-    description: `Donate – ${args.eventTitle}`,
+    description: `Donation - ${safeTitle}`,
     reference_id: donation.id,
-    customer: { contact: `+${args.phone}` },
     notify: { sms: false, email: false },
     notes: { type: 'DONATION', donationId: donation.id, waPhone: args.phone, source: 'whatsapp_bot' },
+  }).catch((err: any) => {
+    const detail = err?.response?.data ? JSON.stringify(err.response.data) : err?.message;
+    throw new Error(`Razorpay 400: ${detail}`);
   });
 
   await (prisma as any).donation.update({ where: { id: donation.id }, data: { providerOrderId: pl.id } });
@@ -757,7 +760,7 @@ async function handleDonationPayment(
       // Show verify button after payment link
       await sendButtonMessage(from,
         `📩 After completing payment, tap the button below to receive your *80G tax receipt* here on WhatsApp.`,
-        [{ id: `don_verify_${donationId}`, title: '✅ I\'ve Paid — Get Receipt' }],
+        [{ id: `don_verify_${donationId}`, title: '✅ Get Receipt' }],
       );
     }
     console.log(`[WhatsApp Bot] Donation link created for ${from}: ₹${amount} ${type} | event=${eventId}`);
