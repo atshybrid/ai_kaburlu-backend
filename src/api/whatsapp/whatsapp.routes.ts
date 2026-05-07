@@ -11,10 +11,21 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { sendTextMessage, sendButtonMessage, sendDocumentMessage, markAsRead } from '../../lib/whatsapp';
+import {
+  sendTextMessage, sendButtonMessage, sendDocumentMessage,
+  sendImageMessage, sendListMessage, markAsRead,
+} from '../../lib/whatsapp';
 import prisma from '../../lib/prisma';
 import { normalizeMobileNumber } from '../../lib/mobileNumber';
 import { requireAuth, requireHrcAdmin } from '../middlewares/authz';
+import { r2Client, R2_BUCKET, getPublicUrl } from '../../lib/r2';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  createRazorpayPaymentLink, createRazorpayPlan, createRazorpaySubscription,
+  getRazorpayPaymentLink, razorpayEnabled,
+} from '../../lib/razorpay';
+import { generateDonationReceiptPdf } from '../../lib/pdf/generateDonationReceipt';
+import QRCode from 'qrcode';
 
 const BASE_URL    = (process.env.PROD_BASE_URL || 'https://app.humanrightscouncilforindia.org/api/v1').replace('/api/v1', '');
 const ADMIN_PHONE = process.env.WHATSAPP_SUPPORT_MOBILE || '918906189999';
@@ -22,13 +33,20 @@ const ADMIN_PHONE = process.env.WHATSAPP_SUPPORT_MOBILE || '918906189999';
 /* ─────────────────────────────────────────────────────────────────────────────
    In-memory bot session store (10-min TTL per phone)
 ───────────────────────────────────────────────────────────────────────────── */
-type BotStep = 'ASK_NAME' | 'ASK_AREA' | 'ASK_POST';
+type BotStep =
+  | 'ASK_NAME' | 'ASK_AREA' | 'ASK_POST'    // lead capture
+  | 'DONATE_CUSTOM_AMOUNT';                   // donation: entering custom amount
 
 interface BotSession {
   step: BotStep;
   fullName?: string;
   area?: string;
   lastActivity: number;
+  // donation context
+  donationEventId?: string;
+  donationEventTitle?: string;
+  donationPresets?: number[];
+  donationCustomType?: 'once' | 'recurring';
 }
 
 const sessions = new Map<string, BotSession>();
@@ -119,6 +137,268 @@ async function saveWaBotLead(args: {
   });
 }
 
+/** Fetch up to 5 active donation events with their presets */
+async function getActiveDonationEvents(): Promise<Array<{
+  id: string; title: string; description: string | null; coverImageUrl: string | null; presets: number[];
+}>> {
+  try {
+    const now = new Date();
+    const rows = await (prisma as any).donationEvent.findMany({
+      where: {
+        status: 'ACTIVE',
+        OR: [{ startAt: null }, { startAt: { lte: now } }],
+        AND: [{ OR: [{ endAt: null }, { endAt: { gte: now } }] }],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: { id: true, title: true, description: true, coverImageUrl: true, presets: true },
+    });
+    return rows;
+  } catch { return []; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   ID Card PDF helper — generate via internal endpoint, upload to R2, return URL
+───────────────────────────────────────────────────────────────────────────── */
+async function generateAndCacheIdCardPdf(cardNumber: string): Promise<string> {
+  const safeNum  = cardNumber.replace(/[^a-zA-Z0-9\-_]/g, '_');
+  const r2Key    = `idcards/pdf/${safeNum}.pdf`;
+  const pdfApiUrl = `${BASE_URL}/api/v1/hrci/idcard/${encodeURIComponent(cardNumber)}/pdf`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 90_000);
+  try {
+    const pdfResp = await fetch(pdfApiUrl, { signal: controller.signal });
+    if (!pdfResp.ok) throw new Error(`PDF gen returned ${pdfResp.status}`);
+    const pdfBuffer = Buffer.from(await pdfResp.arrayBuffer());
+
+    await r2Client.send(new PutObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: r2Key,
+      Body: pdfBuffer,
+      ContentType: 'application/pdf',
+      CacheControl: 'public, max-age=604800',
+    }));
+
+    return getPublicUrl(r2Key);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Ensure a default donation event exists (General Donation)
+───────────────────────────────────────────────────────────────────────────── */
+async function ensureDefaultDonationEvent(): Promise<{ id: string; title: string; presets: number[] }> {
+  const existing = await (prisma as any).donationEvent.findFirst({
+    where: { status: 'ACTIVE', title: 'General Donation' },
+    select: { id: true, title: true, presets: true },
+  }).catch(() => null);
+  if (existing) return existing;
+  const created = await (prisma as any).donationEvent.create({
+    data: { title: 'General Donation', status: 'ACTIVE', allowCustom: true, presets: [100, 500, 1000] },
+    select: { id: true, title: true, presets: true },
+  });
+  return created;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Razorpay helpers for donation — creates actual DB records
+───────────────────────────────────────────────────────────────────────────── */
+async function createDonationPaymentLink(args: {
+  amountPaise: number;
+  eventTitle: string;
+  eventId: string;
+  phone: string;
+}): Promise<{ url: string; donationId: string }> {
+  const amount = Math.round(args.amountPaise / 100);
+
+  // Create PaymentIntent
+  const intent = await (prisma as any).paymentIntent.create({
+    data: {
+      amount,
+      currency: 'INR',
+      status: 'PENDING',
+      intentType: 'DONATION',
+      cellCodeOrName: args.eventTitle,
+      designationCode: 'DONATION',
+      level: 'NATIONAL',
+      meta: { source: 'whatsapp_bot', waPhone: args.phone, eventId: args.eventId },
+    },
+  });
+
+  // Create Donation record
+  const donation = await (prisma as any).donation.create({
+    data: {
+      eventId: args.eventId,
+      amount,
+      donorMobile: `+${args.phone}`,
+      isAnonymous: false,
+      status: 'PENDING',
+      paymentIntentId: intent.id,
+    },
+  });
+
+  // Create Razorpay payment link
+  const pl = await createRazorpayPaymentLink({
+    amountPaise: args.amountPaise,
+    description: `Donate – ${args.eventTitle}`,
+    reference_id: donation.id,
+    customer: { contact: `+${args.phone}` },
+    notify: { sms: false, email: false },
+    notes: { type: 'DONATION', donationId: donation.id, waPhone: args.phone, source: 'whatsapp_bot' },
+  });
+
+  await (prisma as any).donation.update({ where: { id: donation.id }, data: { providerOrderId: pl.id } });
+  await (prisma as any).paymentIntent.update({ where: { id: intent.id }, data: { meta: { source: 'whatsapp_bot', waPhone: args.phone, eventId: args.eventId, payment_link_id: pl.id } } });
+
+  return { url: pl.short_url, donationId: donation.id };
+}
+
+async function createDonationSubscriptionLink(args: {
+  amountPaise: number;
+  eventTitle: string;
+  eventId: string;
+  phone: string;
+}): Promise<{ url: string; donationId: string }> {
+  const amount = Math.round(args.amountPaise / 100);
+
+  const plan = await createRazorpayPlan({
+    period: 'monthly',
+    interval: 1,
+    name: `Monthly Donation – ${args.eventTitle}`,
+    amountPaise: args.amountPaise,
+    notes: { source: 'whatsapp_bot', eventId: args.eventId },
+  });
+  const sub = await createRazorpaySubscription({
+    planId: plan.id,
+    totalCount: 12,
+    customer: { contact: `+${args.phone}` },
+    notes: { type: 'DONATION', waPhone: args.phone, source: 'whatsapp_bot', eventId: args.eventId },
+  });
+
+  // Create a donation record so we can send receipt when subscription is charged
+  const intent = await (prisma as any).paymentIntent.create({
+    data: {
+      amount,
+      currency: 'INR',
+      status: 'PENDING',
+      intentType: 'DONATION',
+      cellCodeOrName: args.eventTitle,
+      designationCode: 'DONATION',
+      level: 'NATIONAL',
+      meta: { source: 'whatsapp_bot', waPhone: args.phone, eventId: args.eventId, subscriptionId: sub.id },
+    },
+  });
+  const donation = await (prisma as any).donation.create({
+    data: {
+      eventId: args.eventId,
+      amount,
+      donorMobile: `+${args.phone}`,
+      isAnonymous: false,
+      status: 'PENDING',
+      paymentIntentId: intent.id,
+      providerOrderId: sub.id,
+    },
+  });
+
+  return { url: sub.short_url, donationId: donation.id };
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Generate 80G receipt PDF and send via WhatsApp
+───────────────────────────────────────────────────────────────────────────── */
+async function generateAndSendDonationReceipt(donationId: string, waPhone: string): Promise<void> {
+  const donation = await (prisma as any).donation.findUnique({ where: { id: donationId } });
+  if (!donation) return;
+
+  // If receipt already generated, just re-send it
+  if (donation.receiptPdfUrl) {
+    const filename = `HRCI-80G-Receipt-${donationId.slice(-8).toUpperCase()}.pdf`;
+    await sendDocumentMessage(waPhone, donation.receiptPdfUrl, filename, `Your 80G Donation Receipt`);
+    return;
+  }
+
+  const org = await (prisma as any).orgSetting.findFirst({ orderBy: { updatedAt: 'desc' } }).catch(() => null);
+  if (!org) {
+    // No org settings yet, just send a text confirmation
+    await sendTextMessage(waPhone,
+      `✅ *Donation Confirmed!*\n\n` +
+      `Amount: ₹${(donation.amount || 0).toLocaleString('en-IN')}\n` +
+      `Receipt No: DN-${donationId.slice(-8).toUpperCase()}\n\n` +
+      `Your 80G receipt will be sent shortly.\n— *Human Rights Council of India*`,
+    );
+    return;
+  }
+
+  const appOrigin = BASE_URL; // https://app.humanrightscouncilforindia.org
+  const receiptNo   = `DN-${donationId.slice(-8).toUpperCase()}`;
+  const receiptDate = new Date(donation.createdAt).toLocaleDateString('en-IN');
+  const donorName   = donation.donorName || 'HRCI Donor';
+  const amountFmt   = (donation.amount || 0).toLocaleString('en-IN');
+  const htmlUrl     = `${appOrigin}/donations/receipt/${donationId}/html`;
+
+  const qrDataUrl = await QRCode.toDataURL(htmlUrl).catch(() => undefined);
+
+  const pdfBuffer = await generateDonationReceiptPdf({
+    orgName: org.orgName,
+    addressLine1: org.addressLine1,
+    addressLine2: org.addressLine2,
+    city: org.city,
+    state: org.state,
+    pincode: org.pincode,
+    country: org.country,
+    pan: org.pan,
+    eightyGNumber: org.eightyGNumber,
+    eightyGValidFrom: org.eightyGValidFrom,
+    eightyGValidTo: org.eightyGValidTo,
+    authorizedSignatoryName: org.authorizedSignatoryName,
+    authorizedSignatoryTitle: org.authorizedSignatoryTitle,
+    hrciLogoUrl: `${appOrigin}/api/v1/org/settings/logo`,
+    stampRoundUrl: `${appOrigin}/api/v1/org/settings/stamp`,
+  }, {
+    receiptNo,
+    receiptDate,
+    donorName,
+    donorAddress: donation.donorAddress || '',
+    donorPan: donation.donorPan || undefined,
+    amount: amountFmt,
+    mode: donation.providerPaymentId ? 'UPI/Card/Net Banking' : 'Online',
+    purpose: 'Donation',
+    qrDataUrl,
+  });
+
+  // Upload PDF to R2
+  const r2Key = `donations/receipts/${donationId}.pdf`;
+  await r2Client.send(new PutObjectCommand({
+    Bucket: R2_BUCKET,
+    Key: r2Key,
+    Body: pdfBuffer,
+    ContentType: 'application/pdf',
+    CacheControl: 'public, max-age=31536000',
+  }));
+  const pdfUrl = getPublicUrl(r2Key);
+
+  // Persist receipt URL
+  await (prisma as any).donation.update({
+    where: { id: donationId },
+    data: { receiptPdfUrl: pdfUrl, receiptHtmlUrl: htmlUrl, receiptGeneratedAt: new Date() },
+  }).catch(() => null);
+
+  // Send via WhatsApp
+  const filename = `HRCI-80G-Receipt-${receiptNo}.pdf`;
+  await sendTextMessage(waPhone,
+    `✅ *Donation Confirmed! Thank you!*\n\n` +
+    `📋 *Receipt No:* ${receiptNo}\n` +
+    `💰 *Amount:* ₹${amountFmt}\n` +
+    `📅 *Date:* ${receiptDate}\n\n` +
+    `Your *80G tax exemption receipt* is attached below.\n` +
+    `_This receipt is valid for tax deduction under Section 80G of the Income Tax Act._\n\n` +
+    `— *Human Rights Council of India*`,
+  );
+  await sendDocumentMessage(waPhone, pdfUrl, filename, `80G Donation Receipt – ${receiptNo}`);
+}
+
 /* ─────────────────────────────────────────────────────────────────────────────
    Router
 ───────────────────────────────────────────────────────────────────────────── */
@@ -186,10 +466,8 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
   if (['hi', 'hello', 'నమస్కారం', 'khabarx', 'hrci', 'helo', 'hey'].includes(text)) {
     const idCardInfo = await lookupIdCardByPhone(from);
     if (idCardInfo) {
-      // Member → directly send ID card, no extra prompts
       await sendIdCard(from, idCardInfo.cardNumber, idCardInfo.fullName || waName);
     } else {
-      // Not a member → directly start lead capture (ask for name)
       await startLeadCapture(from);
     }
     return;
@@ -213,11 +491,7 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
   }
 
   if (text === 'donate' || text === 'donation') {
-    await sendButtonMessage(from, `💝 *Donate to HRCI*\n\nChoose donation type:`, [
-      { id: 'btn_donate_once',      title: '💳 One-time Donation' },
-      { id: 'btn_donate_recurring', title: '🔄 Monthly Recurring' },
-      { id: 'btn_support',          title: '📞 Contact Us' },
-    ]);
+    await sendDonationMenu(from);
     return;
   }
 
@@ -244,6 +518,88 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
+   Donation menu — show active events with images & quick selection
+───────────────────────────────────────────────────────────────────────────── */
+async function sendDonationMenu(from: string): Promise<void> {
+  const events = await getActiveDonationEvents();
+
+  if (!events.length) {
+    // No active events → use/create a default General Donation event
+    const defEv = await ensureDefaultDonationEvent();
+    events.push({ id: defEv.id, title: defEv.title, description: null, coverImageUrl: null, presets: defEv.presets });
+  }
+
+  // Send cover image of first event
+  const featured = events[0];
+  if (featured.coverImageUrl) {
+    await sendImageMessage(from, featured.coverImageUrl,
+      `💝 *${featured.title}*\n${featured.description ? featured.description.slice(0, 120) : 'Support HRCI\'s mission'}`,
+    ).catch(() => null);
+  }
+
+  if (events.length === 1) {
+    // Only 1 event — go straight to amount selection
+    await sendDonationAmounts(from, featured.id, featured.title, featured.presets ?? []);
+    return;
+  }
+
+  // Multiple events — show list selection
+  await sendListMessage(
+    from,
+    '💝 Donate to HRCI',
+    'Choose a cause you want to support:',
+    'Choose Cause',
+    [{
+      title: 'Active Campaigns',
+      rows: events.map(ev => ({
+        id: `don_evt_${ev.id}`,
+        title: ev.title.slice(0, 24),
+        description: ev.description ? ev.description.slice(0, 72) : undefined,
+      })),
+    }],
+    'Secure payments via Razorpay',
+  );
+}
+
+/** Show amount buttons for a specific donation event */
+async function sendDonationAmounts(
+  from: string,
+  eventId: string,
+  eventTitle: string,
+  presets: number[],
+): Promise<void> {
+  // Pick up to 3 preset amounts (use event presets or fall back to defaults)
+  const amounts = (presets && presets.length > 0)
+    ? presets.slice(0, 3)
+    : [500, 1000, 2000];
+
+  const fmtAmt = (n: number) => n >= 1000 ? `₹${n / 1000}K` : `₹${n}`;
+
+  await sendButtonMessage(
+    from,
+    `💳 *One-time Donation*\n📌 ${eventTitle}\n\nSelect amount (one-time):`,
+    amounts.map(amt => ({
+      id: `don_amt_${amt}_once_${eventId}`,
+      title: `${fmtAmt(amt)} Once`,
+    })),
+  );
+
+  // Second message: recurring + custom options
+  const recurringAmounts = amounts.slice(0, 2);
+  await sendButtonMessage(
+    from,
+    `🔄 *Monthly Recurring Donation*\n📌 ${eventTitle}\n\nOr set up auto-monthly:`,
+    [
+      ...recurringAmounts.map(amt => ({
+        id: `don_amt_${amt}_rec_${eventId}`,
+        title: `${fmtAmt(amt)}/month`,
+      })),
+      { id: `don_custom_once_${eventId}`, title: '✏️ Custom Amount' },
+    ],
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
    Button / list reply handler
 ───────────────────────────────────────────────────────────────────────────── */
 async function handleButtonOrList(from: string, replyId: string, contacts: any[]): Promise<void> {
@@ -251,6 +607,65 @@ async function handleButtonOrList(from: string, replyId: string, contacts: any[]
 
   // If in ASK_POST step, the button ID is the designation name
   if (session?.step === 'ASK_POST') { await finishLeadCapture(from, session, replyId); return; }
+
+  // ── Donation event selection ─────────────────────────────────────────────
+  if (replyId.startsWith('don_evt_')) {
+    const eventId = replyId.replace('don_evt_', '');
+    const ev = await (prisma as any).donationEvent.findUnique({
+      where: { id: eventId },
+      select: { id: true, title: true, description: true, coverImageUrl: true, presets: true },
+    }).catch(() => null);
+    if (!ev) { await sendTextMessage(from, `Sorry, this campaign is no longer available. Type *donate* to see current campaigns.`); return; }
+    if (ev.coverImageUrl) {
+      await sendImageMessage(from, ev.coverImageUrl, `📌 *${ev.title}*`).catch(() => null);
+    }
+    await sendDonationAmounts(from, ev.id, ev.title, ev.presets ?? []);
+    return;
+  }
+
+  // ── Donation amount selected (once or recurring) ─────────────────────────
+  // Format: don_amt_{amount}_{once|rec}_{eventId}
+  if (replyId.startsWith('don_amt_')) {
+    const parts = replyId.replace('don_amt_', '').split('_');
+    // parts: [amount, type, ...eventIdParts]
+    const amount  = parseInt(parts[0], 10);
+    const type    = parts[1] === 'rec' ? 'recurring' : 'once';
+    const eventId = parts.slice(2).join('_');
+    await handleDonationPayment(from, eventId, amount, type as 'once' | 'recurring');
+    return;
+  }
+
+  // ── Payment verify: user taps after paying ─────────────────────────────
+  // Format: don_verify_{donationId}
+  if (replyId.startsWith('don_verify_')) {
+    const donationId = replyId.replace('don_verify_', '');
+    await handleDonationVerify(from, donationId);
+    return;
+  }
+
+  // ── Custom donation amount ───────────────────────────────────────────────
+  // Format: don_custom_{once|rec}_{eventId}
+  if (replyId.startsWith('don_custom_')) {
+    const parts = replyId.replace('don_custom_', '').split('_');
+    const type    = parts[0] === 'rec' ? 'recurring' : 'once';
+    const eventId = parts.slice(1).join('_');
+    // Fetch event title
+    const ev = await (prisma as any).donationEvent.findUnique({
+      where: { id: eventId }, select: { id: true, title: true, presets: true },
+    }).catch(() => null);
+    setSession(from, 'DONATE_CUSTOM_AMOUNT', {
+      donationEventId: eventId,
+      donationEventTitle: ev?.title || 'Donation',
+      donationPresets: ev?.presets ?? [],
+      donationCustomType: type as 'once' | 'recurring',
+    });
+    await sendTextMessage(from,
+      `✏️ *Custom ${type === 'recurring' ? 'Monthly' : 'One-time'} Donation*\n` +
+      `📌 ${ev?.title || 'HRCI Campaign'}\n\n` +
+      `Please enter the amount in ₹ (numbers only):\n_Example: 300 or 1500_`,
+    );
+    return;
+  }
 
   switch (replyId) {
     case 'btn_member_yes': {
@@ -271,21 +686,164 @@ async function handleButtonOrList(from: string, replyId: string, contacts: any[]
       break;
     case 'btn_donate':
     case 'btn_donate_info':
-      await sendButtonMessage(from, `💝 *Donate to HRCI*\n\nChoose donation type:`, [
-        { id: 'btn_donate_once',      title: '💳 One-time Donation' },
-        { id: 'btn_donate_recurring', title: '🔄 Monthly Recurring' },
-        { id: 'btn_support',          title: '📞 Contact Us' },
-      ]);
+      await sendDonationMenu(from);
       break;
-    case 'btn_donate_once':
-      await sendTextMessage(from, `💳 *One-time Donation*\n\nDonate here:\nhttps://app.humanrightscouncilforindia.org/donate\n\nFor help: +91 89061 89999`);
+    case 'btn_donate_once': {
+      // Ask for a custom amount directly (one-time)
+      const defEv2 = await ensureDefaultDonationEvent();
+      await sendDonationAmounts(from, defEv2.id, defEv2.title, defEv2.presets);
       break;
-    case 'btn_donate_recurring':
-      await sendTextMessage(from, `🔄 *Monthly Recurring Donation*\n\nSet up auto-debit:\nhttps://app.humanrightscouncilforindia.org/donate?type=recurring\n\nFor help: +91 89061 89999`);
+    }
+    case 'btn_donate_recurring': {
+      const defEv3 = await ensureDefaultDonationEvent();
+      await sendDonationAmounts(from, defEv3.id, defEv3.title, defEv3.presets);
       break;
+    }
     default:
       await sendTextMessage(from, `Type *help* for available commands.`);
   }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Donation payment: create Razorpay link and send to user
+───────────────────────────────────────────────────────────────────────────── */
+async function handleDonationPayment(
+  from: string,
+  eventId: string,
+  amount: number,
+  type: 'once' | 'recurring',
+): Promise<void> {
+  const ev = await (prisma as any).donationEvent.findUnique({
+    where: { id: eventId }, select: { id: true, title: true },
+  }).catch(() => null);
+  const eventTitle = ev?.title || 'HRCI Donation';
+
+  await sendTextMessage(from,
+    `⏳ *Processing payment request...*\n📌 ${eventTitle}\n💰 ₹${amount.toLocaleString('en-IN')} (${type === 'recurring' ? 'Monthly' : 'One-time'})\n\nPlease wait a moment...`,
+  ).catch(() => null);
+
+  try {
+    if (type === 'recurring') {
+      const { url: paymentUrl, donationId } = await createDonationSubscriptionLink({
+        amountPaise: amount * 100,
+        eventTitle,
+        eventId,
+        phone: from,
+      });
+      await sendTextMessage(from,
+        `✅ *Monthly Donation Set Up*\n\n` +
+        `📌 *Campaign:* ${eventTitle}\n` +
+        `💰 *Amount:* ₹${amount.toLocaleString('en-IN')}/month\n\n` +
+        `🔗 *Click to complete your monthly donation:*\n${paymentUrl}\n\n` +
+        `After payment, auto-debit will be set up for every month.\n` +
+        `You can cancel anytime by contacting us.\n\n` +
+        `_Powered by Razorpay · UPI / Card / Net Banking · 100% Secure_\n\n` +
+        `📩 Your *80G tax receipt* will be sent here automatically once payment is confirmed.`,
+      );
+    } else {
+      const { url: paymentUrl, donationId } = await createDonationPaymentLink({
+        amountPaise: amount * 100,
+        eventTitle,
+        eventId,
+        phone: from,
+      });
+      await sendTextMessage(from,
+        `💳 *Donation Payment Link Ready*\n\n` +
+        `📌 *Campaign:* ${eventTitle}\n` +
+        `💰 *Amount:* ₹${amount.toLocaleString('en-IN')}\n\n` +
+        `👇 *Tap the link below to pay securely:*\n${paymentUrl}\n\n` +
+        `_Powered by Razorpay · UPI / Card / Net Banking · 100% Secure_`,
+      );
+      // Show verify button after payment link
+      await sendButtonMessage(from,
+        `📩 After completing payment, tap the button below to receive your *80G tax receipt* here on WhatsApp.`,
+        [{ id: `don_verify_${donationId}`, title: '✅ I\'ve Paid — Get Receipt' }],
+      );
+    }
+    console.log(`[WhatsApp Bot] Donation link created for ${from}: ₹${amount} ${type} | event=${eventId}`);
+  } catch (err: any) {
+    console.error('[WhatsApp Bot] Razorpay link creation failed:', err?.message);
+    await sendTextMessage(from,
+      `⚠️ *Could not create payment link right now.*\n\n` +
+      `📌 *${eventTitle}*\n💰 ₹${amount.toLocaleString('en-IN')}\n\n` +
+      `Please donate at:\nhttps://app.humanrightscouncilforindia.org/donate\n\n` +
+      `Or call: +91 89061 89999`,
+    );
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Verify payment and send 80G receipt (user-triggered fallback)
+───────────────────────────────────────────────────────────────────────────── */
+async function handleDonationVerify(from: string, donationId: string): Promise<void> {
+  await sendTextMessage(from, `🔍 *Checking your payment status...*\nPlease wait a moment.`).catch(() => null);
+
+  const donation = await (prisma as any).donation.findUnique({
+    where: { id: donationId },
+    select: { id: true, status: true, providerOrderId: true, amount: true, donorName: true, donorPan: true, donorAddress: true, providerPaymentId: true, receiptPdfUrl: true, createdAt: true },
+  }).catch(() => null);
+
+  if (!donation) {
+    await sendTextMessage(from, `❌ Could not find your donation record. Please contact support: +91 89061 89999`);
+    return;
+  }
+
+  // Already paid
+  if (donation.status === 'SUCCESS') {
+    if (donation.receiptPdfUrl) {
+      await sendTextMessage(from, `✅ *Payment already confirmed!*\n\nSending your 80G receipt now...`);
+      const filename = `HRCI-80G-Receipt-DN-${donationId.slice(-8).toUpperCase()}.pdf`;
+      await sendDocumentMessage(from, donation.receiptPdfUrl, filename, `80G Donation Receipt`).catch(() =>
+        sendTextMessage(from, `📥 Download your receipt: ${donation.receiptPdfUrl}`)
+      );
+    } else {
+      // Generate receipt now
+      await sendTextMessage(from, `✅ *Payment confirmed! Generating your 80G receipt...*`);
+      await generateAndSendDonationReceipt(donationId, from).catch((e) => {
+        console.error('[WhatsApp] Receipt gen failed:', e?.message);
+        sendTextMessage(from, `⚠️ Receipt generation failed. Please contact +91 89061 89999 with Receipt No: DN-${donationId.slice(-8).toUpperCase()}`);
+      });
+    }
+    return;
+  }
+
+  // Check Razorpay if we have a payment link ID
+  if (donation.providerOrderId && razorpayEnabled()) {
+    try {
+      const pl: any = await getRazorpayPaymentLink(donation.providerOrderId);
+      if (String(pl?.status).toLowerCase() === 'paid') {
+        // Mark SUCCESS in DB
+        await (prisma as any).donation.update({
+          where: { id: donationId },
+          data: { status: 'SUCCESS', providerPaymentId: pl?.payments?.[0]?.payment_id || null },
+        }).catch(() => null);
+        // Increment event collected amount
+        if (donation.amount) {
+          const d = await (prisma as any).donation.findUnique({ where: { id: donationId }, select: { eventId: true } });
+          if (d?.eventId) {
+            await (prisma as any).donationEvent.update({ where: { id: d.eventId }, data: { collectedAmount: { increment: donation.amount } } }).catch(() => null);
+          }
+        }
+        await sendTextMessage(from, `✅ *Payment confirmed! Generating your 80G receipt...*`);
+        await generateAndSendDonationReceipt(donationId, from).catch((e) => {
+          console.error('[WhatsApp] Receipt gen failed:', e?.message);
+          sendTextMessage(from, `⚠️ Receipt generation failed. Please contact +91 89061 89999 with Receipt No: DN-${donationId.slice(-8).toUpperCase()}`);
+        });
+        return;
+      }
+    } catch (e: any) {
+      console.warn('[WhatsApp] Razorpay status check failed:', e?.message);
+    }
+  }
+
+  // Payment not yet confirmed
+  await sendButtonMessage(from,
+    `⏳ *Payment not confirmed yet.*\n\nIf you've completed the payment, please wait a few minutes and try again.\n\nAmount: ₹${(donation.amount || 0).toLocaleString('en-IN')}`,
+    [
+      { id: `don_verify_${donationId}`, title: '🔄 Check Again' },
+      { id: 'btn_support', title: '📞 Contact Support' },
+    ],
+  );
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -303,6 +861,25 @@ async function handleSessionStep(from: string, text: string, session: BotSession
     return;
   }
 
+  // ── Custom donation amount entry ─────────────────────────────────────────
+  if (session.step === 'DONATE_CUSTOM_AMOUNT') {
+    const raw    = text.replace(/[^0-9]/g, '');
+    const amount = parseInt(raw, 10);
+    if (!amount || amount < 10 || amount > 1_000_000) {
+      await sendTextMessage(from, `Please enter a valid amount between ₹10 and ₹10,00,000 (numbers only):`);
+      return;
+    }
+    clearSession(from);
+    await handleDonationPayment(
+      from,
+      session.donationEventId || '',
+      amount,
+      session.donationCustomType || 'once',
+    );
+    return;
+  }
+
+  // ── Lead capture steps ───────────────────────────────────────────────────
   if (session.step === 'ASK_NAME') {
     const fullName = text.trim();
     if (fullName.length < 2) { await sendTextMessage(from, `Please enter your full name (at least 2 characters):`); return; }
@@ -336,7 +913,6 @@ async function finishLeadCapture(from: string, session: BotSession, postName: st
 
   try {
     const lead = await saveWaBotLead({ phone: from, fullName, area, postInterested: postName, seatsAvailable: seats });
-    // Notify admin
     sendTextMessage(ADMIN_PHONE,
       `🔔 *New HRCI Lead*\n\nName: *${fullName}*\nPhone: *+${from}*\nArea: *${area}*\nPost: *${postName}*\nSeats: ${seats === -1 ? 'N/A' : seats}\nLeadID: ${lead?.id || '-'}`,
     ).catch(err => console.warn('[WhatsApp] Admin notify failed:', err?.message));
@@ -355,11 +931,24 @@ async function finishLeadCapture(from: string, session: BotSession, postName: st
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Shared: send ID card PDF helper
+   Generates PDF → uploads to R2 for stable CDN URL → sends via WhatsApp
 ───────────────────────────────────────────────────────────────────────────── */
 async function sendIdCard(from: string, cardNumber: string, memberName: string): Promise<void> {
-  const pdfUrl   = `${BASE_URL}/api/v1/hrci/idcard/${encodeURIComponent(cardNumber)}/pdf`;
+  await sendTextMessage(
+    from,
+    `🪪 *Human Rights Council of India*\n\nHello *${memberName}*!\nYour ID Card No: *${cardNumber}*\n\n⏳ Generating your ID card PDF, please wait...`,
+  ).catch(() => null);
+
   const filename = `HRCI-ID-Card-${cardNumber}.pdf`;
-  await sendTextMessage(from, `🪪 *Human Rights Council of India*\n\nHello *${memberName}*!\nYour ID Card No: *${cardNumber}*`).catch(() => null);
+  let pdfUrl = `${BASE_URL}/api/v1/hrci/idcard/${encodeURIComponent(cardNumber)}/pdf`;
+
+  try {
+    pdfUrl = await generateAndCacheIdCardPdf(cardNumber);
+    console.log(`[WhatsApp Bot] ID card PDF cached at: ${pdfUrl}`);
+  } catch (err: any) {
+    console.warn('[WhatsApp Bot] PDF upload to R2 failed, using direct URL:', err?.message);
+  }
+
   await sendDocumentMessage(from, pdfUrl, filename, `HRCI Member ID Card — ${cardNumber}`)
     .catch(async (err) => {
       console.warn('[WhatsApp] Document send failed, falling back to link:', err?.message);
