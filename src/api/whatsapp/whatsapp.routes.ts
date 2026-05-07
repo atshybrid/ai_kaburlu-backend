@@ -571,24 +571,24 @@ async function sendDonationAmounts(
   eventTitle: string,
   presets: number[],
 ): Promise<void> {
-  // Pick up to 3 preset amounts (use event presets or fall back to defaults)
-  const amounts = (presets && presets.length > 0)
-    ? presets.slice(0, 3)
-    : [500, 1000, 2000];
+  // Pick up to 3 preset amounts (use event presets or fall back to defaults), filter out 0s
+  const rawPresets = (presets && presets.length > 0) ? presets : [500, 1000, 2000];
+  const amounts = rawPresets.filter(n => n > 0).slice(0, 3);
+  const safeAmounts = amounts.length > 0 ? amounts : [500, 1000, 2000];
 
   const fmtAmt = (n: number) => n >= 1000 ? `₹${n / 1000}K` : `₹${n}`;
 
   await sendButtonMessage(
     from,
     `💳 *One-time Donation*\n📌 ${eventTitle}\n\nSelect amount (one-time):`,
-    amounts.map(amt => ({
+    safeAmounts.map(amt => ({
       id: `don_amt_${amt}_once_${eventId}`,
       title: `${fmtAmt(amt)} Once`,
     })),
   );
 
   // Second message: recurring + custom options
-  const recurringAmounts = amounts.slice(0, 2);
+  const recurringAmounts = safeAmounts.slice(0, 2);
   await sendButtonMessage(
     from,
     `🔄 *Monthly Recurring Donation*\n📌 ${eventTitle}\n\nOr set up auto-monthly:`,
@@ -597,7 +597,7 @@ async function sendDonationAmounts(
         id: `don_amt_${amt}_rec_${eventId}`,
         title: `${fmtAmt(amt)}/month`,
       })),
-      { id: `don_custom_once_${eventId}`, title: '✏️ Custom Amount' },
+      { id: `don_custom_rec_${eventId}`, title: '✏️ Custom Amount' },
     ],
   );
 }
