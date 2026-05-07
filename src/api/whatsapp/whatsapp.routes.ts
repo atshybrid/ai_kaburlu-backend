@@ -29,6 +29,53 @@ import QRCode from 'qrcode';
 
 const BASE_URL    = (process.env.PROD_BASE_URL || 'https://app.humanrightscouncilforindia.org/api/v1').replace('/api/v1', '');
 const ADMIN_PHONE = process.env.WHATSAPP_SUPPORT_MOBILE || '918906189999';
+const WEB_DONATE_URL = 'https://humanrightscouncilforindia.org/donations';
+
+/* In-memory tracker to avoid duplicate background payment polls */
+const activeDonationPolls = new Map<string, ReturnType<typeof setTimeout>>();
+
+async function startDonationPoll(donationId: string, waPhone: string, attempt = 0): Promise<void> {
+  const MAX_ATTEMPTS = 20; // 20 × 30s = 10 minutes
+  if (attempt >= MAX_ATTEMPTS) { activeDonationPolls.delete(donationId); return; }
+  // Already being polled — skip duplicate
+  if (attempt === 0 && activeDonationPolls.has(donationId)) return;
+  const timer = setTimeout(async () => {
+    activeDonationPolls.delete(donationId);
+    try {
+      const donation = await (prisma as any).donation.findUnique({
+        where: { id: donationId },
+        select: { id: true, status: true, providerOrderId: true, amount: true, eventId: true },
+      });
+      if (!donation || donation.status === 'SUCCESS') return; // already handled elsewhere
+      if (donation.providerOrderId && razorpayEnabled()) {
+        const pl: any = await getRazorpayPaymentLink(donation.providerOrderId).catch(() => null);
+        if (pl && String(pl?.status).toLowerCase() === 'paid') {
+          await (prisma as any).donation.update({
+            where: { id: donationId },
+            data: { status: 'SUCCESS', providerPaymentId: pl?.payments?.[0]?.payment_id || null },
+          }).catch(() => null);
+          if (donation.amount && donation.eventId) {
+            await (prisma as any).donationEvent.update({
+              where: { id: donation.eventId },
+              data: { collectedAmount: { increment: donation.amount } },
+            }).catch(() => null);
+          }
+          await sendTextMessage(waPhone, `✅ *Payment confirmed! Generating your 80G receipt...*`).catch(() => null);
+          await generateAndSendDonationReceipt(donationId, waPhone).catch((e: any) =>
+            console.error('[DonationPoll] Receipt gen failed:', e?.message)
+          );
+          return; // Done
+        }
+      }
+      // Not paid yet — schedule next check
+      startDonationPoll(donationId, waPhone, attempt + 1);
+    } catch (e: any) {
+      console.warn(`[DonationPoll] attempt ${attempt + 1} error:`, e?.message);
+      startDonationPoll(donationId, waPhone, attempt + 1);
+    }
+  }, 30_000);
+  activeDonationPolls.set(donationId, timer);
+}
 
 /* ─────────────────────────────────────────────────────────────────────────────
    In-memory bot session store (10-min TTL per phone)
@@ -755,13 +802,15 @@ async function handleDonationPayment(
         `📌 *Campaign:* ${eventTitle}\n` +
         `💰 *Amount:* ₹${amount.toLocaleString('en-IN')}\n\n` +
         `👇 *Tap the link below to pay securely:*\n${paymentUrl}\n\n` +
-        `_Powered by Razorpay · UPI / Card / Net Banking · 100% Secure_`,
+        `_Powered by Razorpay · UPI / Card / Net Banking · 100% Secure_\n\n` +
+        `📩 Your *80G receipt* will be sent here automatically once payment is detected.`,
       );
-      // Show verify button after payment link
       await sendButtonMessage(from,
-        `📩 After completing payment, tap the button below to receive your *80G tax receipt* here on WhatsApp.`,
+        `If payment doesn't arrive within 10 minutes, tap below to check manually:`,
         [{ id: `don_verify_${donationId}`, title: '✅ Get Receipt' }],
       );
+      // Start background auto-check (every 30s, up to 10 min)
+      startDonationPoll(donationId, from);
     }
     console.log(`[WhatsApp Bot] Donation link created for ${from}: ₹${amount} ${type} | event=${eventId}`);
   } catch (err: any) {
@@ -769,7 +818,7 @@ async function handleDonationPayment(
     await sendTextMessage(from,
       `⚠️ *Could not create payment link right now.*\n\n` +
       `📌 *${eventTitle}*\n💰 ₹${amount.toLocaleString('en-IN')}\n\n` +
-      `Please donate at:\nhttps://app.humanrightscouncilforindia.org/donate\n\n` +
+      `Please donate at:\n${WEB_DONATE_URL}\n\n` +
       `Or call: +91 89061 89999`,
     );
   }
@@ -779,6 +828,10 @@ async function handleDonationPayment(
    Verify payment and send 80G receipt (user-triggered fallback)
 ───────────────────────────────────────────────────────────────────────────── */
 async function handleDonationVerify(from: string, donationId: string): Promise<void> {
+  // Cancel background poll if user is manually checking
+  const pendingPoll = activeDonationPolls.get(donationId);
+  if (pendingPoll) { clearTimeout(pendingPoll); activeDonationPolls.delete(donationId); }
+
   await sendTextMessage(from, `🔍 *Checking your payment status...*\nPlease wait a moment.`).catch(() => null);
 
   const donation = await (prisma as any).donation.findUnique({
