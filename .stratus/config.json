@@ -1,0 +1,10 @@
+{
+  "version": "1.0",
+  "profiles": {},
+  "global": {
+    "autoSync": true,
+    "showNotifications": true,
+    "logLevel": "info",
+    "maxConcurrentUploads": 3
+  }
+}

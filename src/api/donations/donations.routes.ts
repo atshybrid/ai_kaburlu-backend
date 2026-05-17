@@ -1462,8 +1462,8 @@ router.post('/admin/events/:id/gallery/upload', requireAuth, requireHrcAdmin, up
       const url = getPublicUrl(key);
       const itemId = randomUUID();
       const rows = await prisma.$queryRaw<any[]>`
-        INSERT INTO "DonationEventImage" (id, "eventId", url, caption, "order", "isActive")
-        VALUES (${itemId}, ${id}, ${url}, ${caption || null}, ${orderBase + i}, ${isActive})
+        INSERT INTO "DonationEventImage" (id, "eventId", url, caption, "order", "isActive", "createdAt", "updatedAt")
+        VALUES (${itemId}, ${id}, ${url}, ${caption || null}, ${orderBase + i}, ${isActive}, NOW(), NOW())
         RETURNING id, "eventId", url, caption, "order", "isActive", "createdAt", "updatedAt"
       `;
       createdItems.push(rows[0]);
