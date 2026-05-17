@@ -16,7 +16,8 @@ import {
   sendImageMessage, sendListMessage, markAsRead,
 } from '../../lib/whatsapp';
 import prisma from '../../lib/prisma';
-import { normalizeMobileNumber } from '../../lib/mobileNumber';
+import { buildUserMobileLookupWhere, normalizeMobileNumber } from '../../lib/mobileNumber';
+import { generateNextIdCardNumber } from '../../lib/idCardNumber';
 import { requireAuth, requireHrcAdmin } from '../middlewares/authz';
 import { r2Client, R2_BUCKET, getPublicUrl } from '../../lib/r2';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
@@ -178,15 +179,15 @@ async function getUserLang(phone: string): Promise<Lang> {
 const T = {
   greeting: {
     te: (name: string) =>
-      `నమస్కారం ${name}! 🙏\n\n*Human Rights Council of India* కి స్వాగతం.\n\nమీరు ఏమి చేయాలనుకుంటున్నారు?`,
+      `నమస్కారం ${name}! 🙏\n\n*Human Rights Council for India* కి స్వాగతం.\n\nమీరు ఏమి చేయాలనుకుంటున్నారు?`,
     kn: (name: string) =>
-      `ನಮಸ್ಕಾರ ${name}! 🙏\n\n*Human Rights Council of India* ಗೆ ಸ್ವಾಗತ.\n\nನೀವು ಏನು ಮಾಡಲು ಬಯಸುತ್ತೀರಿ?`,
+      `ನಮಸ್ಕಾರ ${name}! 🙏\n\n*Human Rights Council for India* ಗೆ ಸ್ವಾಗತ.\n\nನೀವು ಏನು ಮಾಡಲು ಬಯಸುತ್ತೀರಿ?`,
     ta: (name: string) =>
-      `வணக்கம் ${name}! 🙏\n\n*Human Rights Council of India* க்கு வரவேற்கிறோம்.\n\nநீங்கள் என்ன செய்ய விரும்புகிறீர்கள்?`,
+      `வணக்கம் ${name}! 🙏\n\n*Human Rights Council for India* க்கு வரவேற்கிறோம்.\n\nநீங்கள் என்ன செய்ய விரும்புகிறீர்கள்?`,
     ml: (name: string) =>
-      `നമസ്കാരം ${name}! 🙏\n\n*Human Rights Council of India* ലേക്ക് സ്വാഗതം.\n\nനിങ്ങൾ എന്ത് ചെയ്യണം?`,
+      `നമസ്കാരം ${name}! 🙏\n\n*Human Rights Council for India* ലേക്ക് സ്വാഗതം.\n\nനിങ്ങൾ എന്ത് ചെയ്യണം?`,
     en: (name: string) =>
-      `Hello ${name}! 🙏\n\nWelcome to *Human Rights Council of India*.\n\nHow can we help you today?`,
+      `Hello ${name}! 🙏\n\nWelcome to *Human Rights Council for India*.\n\nHow can we help you today?`,
   } as Record<Lang, (name: string) => string>,
 
   menuBtns: {
@@ -202,7 +203,7 @@ const T = {
     kn: `*HRCI WhatsApp Bot - ಸಹಾಯ*\n\n• *hi* — ಸ್ವಾಗತ ಮೆನು\n• *idcard* — HRCI ID ಕಾರ್ಡ್\n• *join* — HRCI ಸೇರಿ\n• *donate* — ದೇಣಿಗೆ ನೀಡಿ\n• *news* — ತಾಜಾ ಸುದ್ದಿ\n• *support* — ಬೆಂಬಲ\n• *english* — Switch to English`,
     ta: `*HRCI WhatsApp Bot - உதவி*\n\n• *hi* — வரவேற்பு மெனு\n• *idcard* — HRCI ID அட்டை\n• *join* — HRCI இணைக\n• *donate* — நன்கொடை\n• *news* — செய்திகள்\n• *support* — ஆதரவு\n• *english* — Switch to English`,
     ml: `*HRCI WhatsApp Bot - സഹായം*\n\n• *hi* — സ്വാഗത മെനു\n• *idcard* — HRCI ID കാർഡ്\n• *join* — HRCI ചേരൂ\n• *donate* — സംഭാവന\n• *news* — വാർത്തകൾ\n• *support* — സഹായം\n• *english* — Switch to English`,
-    en: `*Human Rights Council of India Bot*\n\n• *hi* — Welcome menu\n• *idcard* — Get your HRCI ID card PDF\n• *join* — Join HRCI membership\n• *donate* — Donate to HRCI\n• *news* — Latest headlines\n• *support* — Contact support\n• *help* — Show this menu\n• *telugu / kannada / tamil / malayalam* — Change language`,
+    en: `*Human Rights Council for India Bot*\n\n• *hi* — Welcome menu\n• *idcard* — Get your HRCI ID card PDF\n• *join* — Join HRCI membership\n• *donate* — Donate to HRCI\n• *news* — Latest headlines\n• *support* — Contact support\n• *help* — Show this menu\n• *telugu / kannada / tamil / malayalam* — Change language`,
   } as Record<Lang, string>,
 
   noMember: {
@@ -210,7 +211,7 @@ const T = {
     kn: `❌ *ನಿಮ್ಮ ನಂಬರ್‌ಗೆ ID ಕಾರ್ಡ್ ಕಂಡುಬಂದಿಲ್ಲ.*\n\nHRCI ಸೇರಲು:\nhttps://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`,
     ta: `❌ *உங்கள் எண்ணுக்கு ID அட்டை கிடைக்கவில்லை.*\n\nHRCI இணைய:\nhttps://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`,
     ml: `❌ *നിങ്ങളുടെ നംബറിന് ID കാർഡ് കണ്ടെത്തിയില്ല.*\n\nHRCI ചേരാൻ:\nhttps://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`,
-    en: `❌ *ID Card not found* for your number.\n\nTo join *Human Rights Council of India*:\nhttps://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`,
+    en: `❌ *ID Card not found* for your number.\n\nTo join *Human Rights Council for India*:\nhttps://app.humanrightscouncilforindia.org/join\nCall: +91 89061 89999`,
   } as Record<Lang, string>,
 
   langSwitched: {
@@ -227,21 +228,46 @@ const T = {
 ───────────────────────────────────────────────────────────────────────────── */
 async function lookupIdCardByPhone(waPhone: string): Promise<{ cardNumber: string; fullName: string | null } | null> {
   try {
-    const norm = normalizeMobileNumber(waPhone);
-    if (!norm) return null;
     const user = await (prisma as any).user.findFirst({
-      where: { OR: [{ mobileNumber: norm }, { mobileNumber: { endsWith: norm } }] },
-      select: { id: true },
+      where: buildUserMobileLookupWhere(waPhone) as any,
+      select: { id: true, mobileNumber: true },
     });
     if (!user) return null;
+
     const membership = await (prisma as any).membership.findFirst({
-      where: { userId: user.id, status: 'ACTIVE' },
-      include: { idCard: true },
+      where: { userId: user.id },
+      include: { idCard: true, designation: true, cell: true },
       orderBy: { updatedAt: 'desc' },
     });
-    if (!membership?.idCard) return null;
-    return { cardNumber: membership.idCard.cardNumber, fullName: membership.idCard.fullName || null };
-  } catch { return null; }
+    if (membership?.idCard) {
+      return { cardNumber: membership.idCard.cardNumber, fullName: membership.idCard.fullName || null };
+    }
+
+    if (!membership || membership.status !== 'ACTIVE') return null;
+
+    const profile = await prisma.userProfile.findUnique({ where: { userId: user.id } });
+    const hasPhoto = !!(profile?.profilePhotoUrl || profile?.profilePhotoMediaId);
+    if (!hasPhoto) return null;
+
+    const cardNumber = await generateNextIdCardNumber(prisma as any);
+    const expiresAt = membership.expiresAt || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    const card = await prisma.iDCard.create({
+      data: {
+        membershipId: membership.id,
+        cardNumber,
+        expiresAt,
+        status: 'GENERATED' as any,
+        fullName: profile.fullName || undefined,
+        mobileNumber: user.mobileNumber || undefined,
+        designationName: membership.designation?.name || undefined,
+        cellName: membership.cell?.name || undefined,
+      } as any,
+    });
+    await prisma.membership.update({ where: { id: membership.id }, data: { idCardStatus: 'GENERATED' as any } }).catch(() => null);
+    return { cardNumber: card.cardNumber, fullName: card.fullName || null };
+  } catch {
+    return null;
+  }
 }
 
 async function checkSeatAvailability(designationName: string): Promise<number> {
@@ -478,7 +504,7 @@ async function generateAndSendDonationReceipt(donationId: string, waPhone: strin
       `✅ *Donation Confirmed!*\n\n` +
       `Amount: ₹${(donation.amount || 0).toLocaleString('en-IN')}\n` +
       `Receipt No: DN-${donationId.slice(-8).toUpperCase()}\n\n` +
-      `Your 80G receipt will be sent shortly.\n— *Human Rights Council of India*`,
+      `Your 80G receipt will be sent shortly.\n— *Human Rights Council for India*`,
     );
     return;
   }
@@ -546,7 +572,7 @@ async function generateAndSendDonationReceipt(donationId: string, waPhone: strin
     `📅 *Date:* ${receiptDate}\n\n` +
     `Your *80G tax exemption receipt* is attached below.\n` +
     `_This receipt is valid for tax deduction under Section 80G of the Income Tax Act._\n\n` +
-    `— *Human Rights Council of India*`,
+    `— *Human Rights Council for India*`,
   );
   await sendDocumentMessage(waPhone, pdfUrl, filename, `80G Donation Receipt – ${receiptNo}`);
 }
@@ -650,7 +676,7 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
   if (text === 'join' || text === 'join hrci') { await startLeadCapture(from); return; }
 
   if (text === 'news') {
-    await sendTextMessage(from, `📰 *Today's Top Headlines*\n\nVisit: https://app.humanrightscouncilforindia.org\n\n— *Human Rights Council of India*`);
+    await sendTextMessage(from, `📰 *Today's Top Headlines*\n\nVisit: https://app.humanrightscouncilforindia.org\n\n— *Human Rights Council for India*`);
     return;
   }
 
@@ -660,7 +686,7 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
   }
 
   if (text === 'support') {
-    await sendTextMessage(from, `📞 *Human Rights Council of India*\n\nWhatsApp: +91 89061 89999\nEmail: support@humanrightscouncilforindia.org\nWebsite: https://app.humanrightscouncilforindia.org`);
+    await sendTextMessage(from, `📞 *Human Rights Council for India*\n\nWhatsApp: +91 89061 89999\nEmail: support@humanrightscouncilforindia.org\nWebsite: https://app.humanrightscouncilforindia.org`);
     return;
   }
 
@@ -679,7 +705,7 @@ async function handleMessage(from: string, text: string, contacts: any[]): Promi
     ? `புரியவில்லை 😊\n\nதொடங்க *hi* அல்லது அனைத்து கட்டளைகளுக்கும் *help* என்று தட்டச்சு செய்யுங்கள்.`
     : lang === 'ml'
     ? `മനസ്സിലായില്ല 😊\n\nആരംഭിക്കാൻ *hi* അല്ലെങ്കിൽ എല്ലാ കമാൻഡുകൾക്കും *help* ടൈപ്പ് ചെയ്യുക.`
-    : `I didn't understand that 😊\n\nType *hi* to start or *help* for all commands.\n\n— *Human Rights Council of India*`;
+    : `I didn't understand that 😊\n\nType *hi* to start or *help* for all commands.\n\n— *Human Rights Council for India*`;
   await sendTextMessage(from, unknown);
 }
 
@@ -855,16 +881,16 @@ async function handleButtonOrList(from: string, replyId: string, contacts: any[]
       if (idCardInfo) {
         await sendIdCard(from, idCardInfo.cardNumber, contacts[0]?.profile?.name || 'Member');
       } else {
-        await sendTextMessage(from, `We couldn't find your membership in *Human Rights Council of India*.\n\nRegister at:\nhttps://app.humanrightscouncilforindia.org/join\n\nOr call: +91 89061 89999`);
+        await sendTextMessage(from, `We couldn't find your membership in *Human Rights Council for India*.\n\nRegister at:\nhttps://app.humanrightscouncilforindia.org/join\n\nOr call: +91 89061 89999`);
       }
       break;
     }
     case 'btn_member_join': await startLeadCapture(from); break;
     case 'btn_news':
-      await sendTextMessage(from, `📰 *Today's Top Headlines*\n\nVisit: https://app.humanrightscouncilforindia.org\n\n— *Human Rights Council of India*`);
+      await sendTextMessage(from, `📰 *Today's Top Headlines*\n\nVisit: https://app.humanrightscouncilforindia.org\n\n— *Human Rights Council for India*`);
       break;
     case 'btn_support':
-      await sendTextMessage(from, `📞 *Human Rights Council of India*\n\nWhatsApp: +91 89061 89999\nEmail: support@humanrightscouncilforindia.org\nWebsite: https://app.humanrightscouncilforindia.org`);
+      await sendTextMessage(from, `📞 *Human Rights Council for India*\n\nWhatsApp: +91 89061 89999\nEmail: support@humanrightscouncilforindia.org\nWebsite: https://app.humanrightscouncilforindia.org`);
       break;
     case 'btn_donate':
     case 'btn_donate_info':
@@ -1039,7 +1065,7 @@ async function handleDonationVerify(from: string, donationId: string): Promise<v
 ───────────────────────────────────────────────────────────────────────────── */
 async function startLeadCapture(from: string): Promise<void> {
   setSession(from, 'ASK_NAME');
-  await sendTextMessage(from, `🤝 *Join Human Rights Council of India*\n\nGreat! We'd love to have you as a member.\n\nPlease share your *full name*:`);
+  await sendTextMessage(from, `🤝 *Join Human Rights Council for India*\n\nGreat! We'd love to have you as a member.\n\nPlease share your *full name*:`);
 }
 
 async function handleSessionStep(from: string, text: string, session: BotSession): Promise<void> {
@@ -1111,7 +1137,7 @@ async function finishLeadCapture(from: string, session: BotSession, postName: st
 
   await sendTextMessage(from,
     `✅ *Thank you, ${fullName}!*\n\n` +
-    `Your interest in the *${postName}* post from *${area}* has been registered with *Human Rights Council of India*.${seatsMsg}\n\n` +
+    `Your interest in the *${postName}* post from *${area}* has been registered with *Human Rights Council for India*.${seatsMsg}\n\n` +
     `📞 Our team will contact you soon on your number.\n\n` +
     `🌐 www.humanrightscouncilforindia.org`,
   );
@@ -1124,7 +1150,7 @@ async function finishLeadCapture(from: string, session: BotSession, postName: st
 async function sendIdCard(from: string, cardNumber: string, memberName: string): Promise<void> {
   await sendTextMessage(
     from,
-    `🪪 *Human Rights Council of India*\n\nHello *${memberName}*!\nYour ID Card No: *${cardNumber}*\n\n⏳ Generating your ID card PDF, please wait...`,
+    `🪪 *Human Rights Council for India*\n\nHello *${memberName}*!\nYour ID Card No: *${cardNumber}*\n\n⏳ Generating your ID card PDF, please wait...`,
   ).catch(() => null);
 
   const filename = `HRCI-ID-Card-${cardNumber}.pdf`;

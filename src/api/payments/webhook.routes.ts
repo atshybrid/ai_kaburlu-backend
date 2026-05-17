@@ -28,7 +28,7 @@ async function sendWhatsAppDonationReceipt(donationId: string, waPhone: string):
       `💰 *Amount:* ₹${(donation.amount || 0).toLocaleString('en-IN')}\n\n` +
       `Your *80G tax exemption receipt* is attached below.\n` +
       `_Valid for tax deduction under Section 80G, Income Tax Act._\n\n` +
-      `— *Human Rights Council of India*`,
+      `— *Human Rights Council for India*`,
     ).catch(() => null);
     await sendDocumentMessage(waPhone, donation.receiptPdfUrl, filename, `80G Donation Receipt`).catch(() => null);
     return;
@@ -84,7 +84,7 @@ async function sendWhatsAppDonationReceipt(donationId: string, waPhone: string):
     `📅 *Date:* ${receiptDate}\n\n` +
     `Your *80G tax exemption receipt* is attached below.\n` +
     `_Valid for tax deduction under Section 80G, Income Tax Act._\n\n` +
-    `— *Human Rights Council of India*`,
+    `— *Human Rights Council for India*`,
   ).catch(() => null);
   await sendDocumentMessage(waPhone, pdfUrl, filename, `80G Donation Receipt – ${receiptNo}`).catch(() => null);
 }
