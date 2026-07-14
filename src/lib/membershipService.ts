@@ -68,7 +68,7 @@ export async function getAvailability(q: AvailabilityQuery) {
     ...activeSeatFilter(),
   };
   if (q.level === 'ZONE') where.zone = q.zone;
-  if (q.level === 'NATIONAL') where.hrcCountryId = q.hrcCountryId; // optional
+  if (q.level === 'NATIONAL' && q.hrcCountryId !== undefined) where.hrcCountryId = q.hrcCountryId;
   if (q.level === 'STATE') where.hrcStateId = q.hrcStateId;
   if (q.level === 'DISTRICT') where.hrcDistrictId = q.hrcDistrictId;
   if (q.level === 'MANDAL') where.hrcMandalId = q.hrcMandalId;
@@ -84,7 +84,7 @@ export async function getAvailability(q: AvailabilityQuery) {
     ...activeSeatFilter(),
   };
   if (q.level === 'ZONE') seatBucketWhere.zone = q.zone;
-  if (q.level === 'NATIONAL') seatBucketWhere.hrcCountryId = q.hrcCountryId;
+  if (q.level === 'NATIONAL' && q.hrcCountryId !== undefined) seatBucketWhere.hrcCountryId = q.hrcCountryId;
   if (q.level === 'STATE') seatBucketWhere.hrcStateId = q.hrcStateId;
   if (q.level === 'DISTRICT') seatBucketWhere.hrcDistrictId = q.hrcDistrictId;
   if (q.level === 'MANDAL') seatBucketWhere.hrcMandalId = q.hrcMandalId;
@@ -104,7 +104,7 @@ export async function getAvailability(q: AvailabilityQuery) {
   if (levelCap) {
     const aggregateWhere: any = { cellId: cell.id, level: q.level, ...activeSeatFilter() };
     if (q.level === 'ZONE') aggregateWhere.zone = q.zone;
-    if (q.level === 'NATIONAL') aggregateWhere.hrcCountryId = q.hrcCountryId;
+    if (q.level === 'NATIONAL' && q.hrcCountryId !== undefined) aggregateWhere.hrcCountryId = q.hrcCountryId;
     if (q.level === 'STATE') aggregateWhere.hrcStateId = q.hrcStateId;
     if (q.level === 'DISTRICT') aggregateWhere.hrcDistrictId = q.hrcDistrictId;
     if (q.level === 'MANDAL') aggregateWhere.hrcMandalId = q.hrcMandalId;
@@ -172,11 +172,11 @@ export async function joinSeat(req: JoinRequest) {
       level: req.level,
       ...activeSeatFilter(),
     };
-  if (req.level === 'ZONE') where.zone = req.zone;
-  if (req.level === 'NATIONAL') where.hrcCountryId = req.hrcCountryId;
-  if (req.level === 'STATE') where.hrcStateId = req.hrcStateId;
-  if (req.level === 'DISTRICT') where.hrcDistrictId = req.hrcDistrictId;
-  if (req.level === 'MANDAL') where.hrcMandalId = req.hrcMandalId;
+    if (req.level === 'ZONE') where.zone = req.zone;
+    if (req.level === 'NATIONAL' && req.hrcCountryId !== undefined) where.hrcCountryId = req.hrcCountryId;
+    if (req.level === 'STATE') where.hrcStateId = req.hrcStateId;
+    if (req.level === 'DISTRICT') where.hrcDistrictId = req.hrcDistrictId;
+    if (req.level === 'MANDAL') where.hrcMandalId = req.hrcMandalId;
 
     const count = await tx.membership.count({ where });
     if (count >= designation.defaultCapacity) {
@@ -191,7 +191,7 @@ export async function joinSeat(req: JoinRequest) {
       ...activeSeatFilter(),
     };
     if (req.level === 'ZONE') seatBucketWhere.zone = req.zone;
-    if (req.level === 'NATIONAL') seatBucketWhere.hrcCountryId = req.hrcCountryId;
+    if (req.level === 'NATIONAL' && req.hrcCountryId !== undefined) seatBucketWhere.hrcCountryId = req.hrcCountryId;
     if (req.level === 'STATE') seatBucketWhere.hrcStateId = req.hrcStateId;
     if (req.level === 'DISTRICT') seatBucketWhere.hrcDistrictId = req.hrcDistrictId;
     if (req.level === 'MANDAL') seatBucketWhere.hrcMandalId = req.hrcMandalId;
@@ -222,7 +222,7 @@ export async function joinSeat(req: JoinRequest) {
     if (levelCap) {
       const aggregateWhere: any = { cellId: cell.id, level: req.level, ...activeSeatFilter() };
       if (req.level === 'ZONE') aggregateWhere.zone = req.zone;
-      if (req.level === 'NATIONAL') aggregateWhere.hrcCountryId = req.hrcCountryId;
+      if (req.level === 'NATIONAL' && req.hrcCountryId !== undefined) aggregateWhere.hrcCountryId = req.hrcCountryId;
       if (req.level === 'STATE') aggregateWhere.hrcStateId = req.hrcStateId;
       if (req.level === 'DISTRICT') aggregateWhere.hrcDistrictId = req.hrcDistrictId;
       if (req.level === 'MANDAL') aggregateWhere.hrcMandalId = req.hrcMandalId;
